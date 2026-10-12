@@ -23,12 +23,15 @@ $null = $reg.AppendLine("Windows Registry Editor Version 5.00`n")
 
 # ----------------- 模式分支：服务配置 -----------------
 $normalServices = @(
-    "SysMain", "DiagTrack", "dmwappushservice", "WerSvc", "PcaSvc", "WSearch",
+    "SysMain", "DiagTrack", "dmwappushservice", "WerSvc", "PcaSvc",
     "MapsBroker", "SensorService", "SensrSvc", "lfsvc", "RetailDemo",
     "wisvc", "WalletService", "SharedRealitySvc", "XblAuthManager", "XblGameSave",
     "XboxNetApiSvc", "XboxGipSvc", "AllJoynRouter", "SecurityHealthService"
 )
 $defenderFullStack = @("WinDefend", "WdNisSvc", "Sense", "WdFilter", "WdNisDrv", "WdBoot")
+
+# 关键：由于 Search 实体已被 100% 物理粉碎，两模式均彻底物理抹杀 WSearch 服务，防后台死循环拉起
+$null = $reg.AppendLine("[-HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\WSearch]")
 
 if ($trimMode -eq "2") {
     Write-Host "   >>> [极限模式] 构建 Defender 物理抹杀与服务清除指令..." -ForegroundColor DarkYellow
@@ -76,14 +79,18 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}]
 "System.IsPinnedToNameSpaceTree"=dword:00000000
 
+; 彻底关闭 Windows 搜索策略
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Windows Search]
 "AllowCortana"=dword:00000000
 "DisableWebSearch"=dword:00000001
 "ConnectedSearchUseWeb"=dword:00000000
 
+; 清理 Edge 相关废弃关联与协议
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgeHTM]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgePDF]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\msedge.exe]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\AppID\{1F8766B3-3F96-48DA-B6A8-A013FFC2A5BE}]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\AppID\Microsoft.MicrosoftEdge_8wekyb3d8bbwe]
 
 ; 关闭 SmartScreen 拦截策略 (防 smartscreen.exe 物理删除后调用挂死)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\System]
@@ -97,9 +104,28 @@ $null = $reg.AppendLine(@"
 "NoInternetOpenWith"=dword:00000001
 "@)
 
-# ----------------- 核心修复：文本文档关联、幽灵清理与应用池垫片 -----------------
+# ----------------- 核心修复：固化 Shell 接口、激活记事本与注入应用池垫片 -----------------
 $null = $reg.AppendLine(@"
-; 1. 扩展名关联与 ShellNew 唤醒
+; 1. 固化写入丢失的 IEnumAssocHandlers 与 IAssocHandler 核心接口 (防 E_NOINTERFACE 报错)
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{973810AE-9599-4B88-9E4D-6EE98C0C8AC3}]
+@="IEnumAssocHandlers"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{973810AE-9599-4B88-9E4D-6EE98C0C8AC3}\ProxyStubClsid32]
+@="{A4A1A128-768F-41E0-BF75-E4FDDD701CBA}"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{973810AE-9599-4B88-9E4D-6EE98C0C8AC3}\NumMethods]
+@="7"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{F04061AC-1659-4A42-9F4E-E150522B1037}]
+@="IAssocHandler"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{F04061AC-1659-4A42-9F4E-E150522B1037}\ProxyStubClsid32]
+@="{A4A1A128-768F-41E0-BF75-E4FDDD701CBA}"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{F04061AC-1659-4A42-9F4E-E150522B1037}\NumMethods]
+@="10"
+
+; 2. 扩展名关联与 ShellNew 唤醒
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
 @="txtfile"
 "Content Type"="text/plain"
@@ -114,7 +140,7 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
 "txtfile"=hex(0):
 
-; 2. txtfile ProgID 实体定义
+; 3. txtfile ProgID 实体定义
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
 @="文本文档"
 "FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
@@ -128,7 +154,7 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
 @=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 3. XML 文档关联
+; 4. XML 文档关联
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.xml]
 @="xmlfile"
 "Content Type"="text/xml"
@@ -140,7 +166,7 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\xmlfile\shell\open\command]
 @=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 4. 彻底去除记事本劫持与注册全局应用实体 (防应用池为 0 导致折叠)
+; 5. 彻底去除记事本劫持并注册全局应用实体
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe]
 "UseFilter"=dword:00000000
 "Debugger"=-
@@ -156,14 +182,14 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe\shell\open\command]
 @=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 5. 注册系统已有的资源管理器作为应用枚举池垫片 (0 字节占用，彻底打破 DirectUI 0 高度折叠 BUG)
+; 6. 注册原生资源管理器到应用枚举池 (0 字节垫片，防止应用数为 0 触发 DirectUI 折叠 BUG)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\explorer.exe]
 "FriendlyAppName"="Windows 资源管理器"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\explorer.exe\shell\open\command]
 @=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,65,00,78,00,70,00,6c,00,6f,00,72,00,65,00,72,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 6. 抹除 Default 用户中 UWP 留下的损坏关联
+; 7. 抹除 Default 用户中 UWP 留下的损坏关联
 [-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
 [HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
 "txtfile"=hex(0):
