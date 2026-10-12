@@ -79,18 +79,25 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}]
 "System.IsPinnedToNameSpaceTree"=dword:00000000
 
-; 彻底关闭 Windows 搜索策略
+; 彻底关闭 Windows 搜索策略 (借鉴 nano11 规范)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Windows Search]
 "AllowCortana"=dword:00000000
 "DisableWebSearch"=dword:00000001
 "ConnectedSearchUseWeb"=dword:00000000
 
-; 清理 Edge 相关废弃关联与协议
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
+"DisableSearchBoxSuggestions"=dword:00000001
+"NoInternetOpenWith"=dword:00000001
+
+; 清理 Edge 遗留卸载项与幽灵 DCOM 契约 (斩断 Event 10001 死锁源)
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgeHTM]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgePDF]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\msedge.exe]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\AppID\{1F8766B3-3F96-48DA-B6A8-A013FFC2A5BE}]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\AppID\Microsoft.MicrosoftEdge_8wekyb3d8bbwe]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Extensions\ContractId\Windows.File\PackageId\Microsoft.MicrosoftEdge_44.22000.120.0_neutral__8wekyb3d8bbwe]
 
 ; 关闭 SmartScreen 拦截策略 (防 smartscreen.exe 物理删除后调用挂死)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\System]
@@ -98,10 +105,6 @@ $null = $reg.AppendLine(@"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer]
 "SmartScreenEnabled"="Off"
-
-; 仅保留关闭互联网打开方式搜索，严禁注入 NoUseStoreOpenWith 以免触发 DirectUI 零高度崩溃
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
-"NoInternetOpenWith"=dword:00000001
 "@)
 
 # ----------------- 核心修复：固化 Shell 接口、激活记事本与注入应用池垫片 -----------------
@@ -248,4 +251,4 @@ Write-Host "   正在安全卸载配置单元 (防句柄残留)..." -ForegroundC
 Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
-Write-Host "[完成] 离线注册表优化全部完毕。" -ForegroundColor Green
+Write-Host "[完成] 离线注册表优化全部完毕 (WSearch 服务彻底物理抹杀，Shell 核心接口永久固化)。" -ForegroundColor Green
