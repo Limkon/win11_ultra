@@ -1,5 +1,5 @@
 # ==============================================================================
-#  win11 Builder - [模块 7/11] 离线注册表原子深度优化 (src/06-RegistryTweaks.ps1)
+#  win11 Builder - [模块 7/11] 离线注册表原生 Unicode 导入引擎 (src/06-RegistryTweaks.ps1)
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统参数..." -ForegroundColor Cyan
@@ -17,7 +17,11 @@ attrib.exe -R -S -H "$ntuserPath" 2>$null
 & reg.exe load HKLM\zSYSTEM "$systemPath" 2>$null | Out-Null
 & reg.exe load HKLM\zNTUSER "$ntuserPath" 2>$null | Out-Null
 
-# 2. 定义需停用/抹杀的服务清单
+# 2. 准备原生 .reg 注册表内容 (UTF-16 LE 原生支持中文，无转义 BUG)
+$reg = New-Object System.Text.StringBuilder
+$null = $reg.AppendLine("Windows Registry Editor Version 5.00`n")
+
+# ----------------- 模式分支：服务配置 -----------------
 $normalServices = @(
     "SysMain", "DiagTrack", "dmwappushservice", "WerSvc", "PcaSvc", "WSearch",
     "MapsBroker", "SensorService", "SensrSvc", "lfsvc", "RetailDemo",
@@ -26,103 +30,171 @@ $normalServices = @(
 )
 $defenderFullStack = @("WinDefend", "WdNisSvc", "Sense", "WdFilter", "WdNisDrv", "WdBoot")
 
-# 3. 构造原子批处理执行指令流
-$batLines = New-Object System.Collections.Generic.List[string]
-$batLines.Add("@echo off")
-$batLines.Add("chcp 65001 >nul")
-
-# ----------------- 模式分支：服务配置 -----------------
 if ($trimMode -eq "2") {
-    $batLines.Add('echo >>> [极限模式] 执行 Defender 终极物理抹杀与服务清除...')
-    # 解除 Windows 内核 ELAM 强制校验，杜绝 0x7B 蓝屏
-    $batLines.Add('reg add "HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch" /v "DriverLoadPolicy" /t REG_DWORD /d 8 /f >nul 2>nul')
+    Write-Host "   >>> [极限模式] 构建 Defender 物理抹杀与服务清除指令..." -ForegroundColor DarkYellow
+    $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Control\EarlyLaunch]")
+    $null = $reg.AppendLine('"DriverLoadPolicy"=dword:00000008' + "`n")
+    
     $extremeDeleteServices = $normalServices + $defenderFullStack + @("Spooler", "PrintNotify", "Fax", "RemoteRegistry", "diagsvc")
     foreach ($svc in $extremeDeleteServices) {
-        $batLines.Add("reg delete `"HKLM\zSYSTEM\ControlSet001\Services\$svc`" /f >nul 2>nul")
+        $null = $reg.AppendLine("[-HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\$svc]")
     }
 } else {
-    $batLines.Add('echo >>> [普通模式] 安全停用后台服务 (Start = 4)...')
+    Write-Host "   >>> [普通模式] 构建服务安全停用指令 (Start = 4)..." -ForegroundColor Cyan
     $allServicesToDisable = $normalServices + $defenderFullStack
     foreach ($svc in $allServicesToDisable) {
-        $batLines.Add("reg add `"HKLM\zSYSTEM\ControlSet001\Services\$svc`" /v `"Start`" /t REG_DWORD /d 4 /f >nul 2>nul")
+        $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\$svc]")
+        $null = $reg.AppendLine('"Start"=dword:00000004' + "`n")
     }
 }
 
-# ----------------- 通用优化配置 (两模式均执行) -----------------
-# 基础优化、遥测与透明度
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v "AllowTelemetry" /t REG_DWORD /d 0 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v "MaxTelemetryAllowed" /t REG_DWORD /d 0 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting" /v "Disabled" /t REG_DWORD /d 1 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 0 /f >nul 2>nul')
+# ----------------- 基础优化与遥测 -----------------
+$null = $reg.AppendLine(@"
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\DataCollection]
+"AllowTelemetry"=dword:00000000
+"MaxTelemetryAllowed"=dword:00000000
 
-# 彻底封锁 OneDrive
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableFileSyncNGSC" /t REG_DWORD /d 1 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableFileSync" /t REG_DWORD /d 1 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableMeteredNetworkFileSync" /t REG_DWORD /d 1 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableLibrariesStylePin" /t REG_DWORD /d 1 /f >nul 2>nul')
-$batLines.Add('reg delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "OneDrive" /f >nul 2>nul')
-$batLines.Add('reg delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "OneDriveSetup" /f >nul 2>nul')
-$batLines.Add('reg delete "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Run" /v "OneDrive" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}" /v "System.IsPinnedToNameSpaceTree" /t REG_DWORD /d 0 /f >nul 2>nul')
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting]
+"Disabled"=dword:00000001
 
-# 搜索禁用
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "AllowCortana" /t REG_DWORD /d 0 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "DisableWebSearch" /t REG_DWORD /d 1 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "ConnectedSearchUseWeb" /t REG_DWORD /d 0 /f >nul 2>nul')
+[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize]
+"EnableTransparency"=dword:00000000
 
-# Edge 幽灵清理与打开方式本地化秒开
-$batLines.Add('reg delete "HKLM\zSOFTWARE\Classes\MSEdgeHTM" /f >nul 2>nul')
-$batLines.Add('reg delete "HKLM\zSOFTWARE\Classes\MSEdgePDF" /f >nul 2>nul')
-$batLines.Add('reg delete "HKLM\zSOFTWARE\Classes\Applications\msedge.exe" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer" /v "NoInternetOpenWith" /t REG_DWORD /d 1 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer" /v "NoUseStoreOpenWith" /t REG_DWORD /d 1 /f >nul 2>nul')
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\OneDrive]
+"DisableFileSyncNGSC"=dword:00000001
+"DisableFileSync"=dword:00000001
+"DisableMeteredNetworkFileSync"=dword:00000001
+"DisableLibrariesStylePin"=dword:00000001
 
-# 经典记事本文件关联秒开修复
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.txt" /ve /t REG_SZ /d "txtfile" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.txt" /v "PerceivedType" /t REG_SZ /d "text" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.txt\OpenWithProgids" /v "txtfile" /t REG_SZ /d "" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.txt\ShellNew" /v "NullFile" /t REG_SZ /d "" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\txtfile" /ve /t REG_SZ /d "文本文档" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\txtfile\DefaultIcon" /ve /t REG_EXPAND_SZ /d "%%SystemRoot%%\system32\imageres.dll,-102" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\txtfile\shell\open\command" /ve /t REG_EXPAND_SZ /d "\"%%SystemRoot%%\System32\notepad.exe\" \"%%1\"" /f >nul 2>nul')
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Run]
+"OneDrive"=-
+"OneDriveSetup"=-
 
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.xml" /ve /t REG_SZ /d "xmlfile" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.xml" /v "PerceivedType" /t REG_SZ /d "text" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.xml\OpenWithProgids" /v "xmlfile" /t REG_SZ /d "" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\xmlfile" /ve /t REG_SZ /d "XML 文档" /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\xmlfile\shell\open\command" /ve /t REG_EXPAND_SZ /d "\"%%SystemRoot%%\System32\notepad.exe\" \"%%1\"" /f >nul 2>nul')
+[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Run]
+"OneDrive"=-
 
-$batLines.Add('reg add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe" /v "UseFilter" /t REG_DWORD /d 0 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe" /ve /t REG_EXPAND_SZ /d "%%SystemRoot%%\system32\notepad.exe" /f >nul 2>nul')
-$batLines.Add('reg delete "HKLM\zSOFTWARE\Classes\Applications\notepad.exe" /v "NoOpenWith" /f >nul 2>nul')
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}]
+"System.IsPinnedToNameSpaceTree"=dword:00000000
 
-# 经典 Windows 照片查看器激活
-$photoExts = @(".jpg", ".jpeg", ".png", ".bmp", ".gif", ".ico", ".tiff", ".tif", ".jfif")
-$batLines.Add('reg add "HKLM\zSOFTWARE\RegisteredApplications" /v "Windows Photo Viewer" /t REG_SZ /d "SOFTWARE\Microsoft\Windows Photo Viewer\Capabilities" /f >nul 2>nul')
-foreach ($ext in $photoExts) {
-    $batLines.Add("reg add `"HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations`" /v `"$ext`" /t REG_SZ /d `"PhotoViewer.FileAssoc.Tiff`" /f >nul 2>nul")
-    $batLines.Add("reg add `"HKLM\zSOFTWARE\Classes\$ext`" /ve /t REG_SZ /d `"PhotoViewer.FileAssoc.Tiff`" /f >nul 2>nul")
-}
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Windows Search]
+"AllowCortana"=dword:00000000
+"DisableWebSearch"=dword:00000001
+"ConnectedSearchUseWeb"=dword:00000000
 
-# 硬件要求绕过、消费者功能关闭与 OOBE 免联网
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgeHTM]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgePDF]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\msedge.exe]
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
+"NoInternetOpenWith"=dword:00000001
+"NoUseStoreOpenWith"=dword:00000001
+"@)
+
+# ----------------- 核心修复：100% 完美激活【右键新建文本文档】 -----------------
+$null = $reg.AppendLine(@"
+; 1. 扩展名关联与 ShellNew 唤醒
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
+@="txtfile"
+"Content Type"="text/plain"
+"PerceivedType"="text"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
+"NullFile"=""
+"ItemName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,37,00,30,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
+"txtfile"=hex(0):
+
+; 2. txtfile ProgID 实体定义
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
+@="文本文档"
+"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\DefaultIcon]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
+@="open"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
+@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
+
+; 3. XML 文档关联
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.xml]
+@="xmlfile"
+"Content Type"="text/xml"
+"PerceivedType"="text"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\xmlfile]
+@="XML 文档"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\xmlfile\shell\open\command]
+@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
+
+; 4. 彻底去除劫持与别名重定向
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe]
+"UseFilter"=dword:00000000
+"Debugger"=-
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,00,00
+
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe\NoOpenWith]
+
+; 5. 抹除 Default 用户中 UWP 留下的损坏关联
+[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
+"txtfile"=hex(0):
+
+[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\UserChoice]
+"@)
+
+# ----------------- 硬件检测绕过与 OOBE -----------------
 $labConfigKeys = @("BypassCPUCheck", "BypassRAMCheck", "BypassSecureBootCheck", "BypassStorageCheck", "BypassTPMCheck", "BypassDiskCheck")
+$null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\Setup\LabConfig]")
 foreach ($k in $labConfigKeys) {
-    $batLines.Add("reg add `"HKLM\zSYSTEM\Setup\LabConfig`" /v `"$k`" /t REG_DWORD /d 1 /f >nul 2>nul")
+    $null = $reg.AppendLine("`"$k`"=dword:00000001")
 }
-$batLines.Add('reg add "HKLM\zSYSTEM\Setup\MoSetup" /v "AllowUpgradesWithUnsupportedTPMOrCPU" /t REG_DWORD /d 1 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v "DisableWindowsConsumerFeatures" /t REG_DWORD /d 1 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v "BypassNRO" /t REG_DWORD /d 1 /f >nul 2>nul')
-$batLines.Add('reg add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v "DisableOnline" /t REG_DWORD /d 1 /f >nul 2>nul')
 
-# 4. 写入并调用原生 cmd 快速执行批处理
-$tempBatFile = Join-Path $env:TEMP "win11_reg_apply.bat"
-[System.IO.File]::WriteAllLines($tempBatFile, $batLines, [System.Text.Encoding]::ASCII)
+$null = $reg.AppendLine(@"
 
-Write-Host "   正在应用原子注册表指令流 (瞬间完成，零阻塞)..." -ForegroundColor Green
-$proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$tempBatFile`"" -NoNewWindow -Wait -PassThru
-Remove-Item -LiteralPath $tempBatFile -Force -ErrorAction SilentlyContinue
+[HKEY_LOCAL_MACHINE\zSYSTEM\Setup\MoSetup]
+"AllowUpgradesWithUnsupportedTPMOrCPU"=dword:00000001
 
-# 5. 安全释放并卸载离线 Hive 单元
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\CloudContent]
+"DisableWindowsConsumerFeatures"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE]
+"BypassNRO"=dword:00000001
+"DisableOnline"=dword:00000001
+"@)
+
+# ----------------- 照片查看器关联 -----------------
+$photoExts = @(".jpg", ".jpeg", ".png", ".bmp", ".gif", ".ico", ".tiff", ".tif", ".jfif")
+$null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSOFTWARE\RegisteredApplications]")
+$null = $reg.AppendLine('"Windows Photo Viewer"="SOFTWARE\\Microsoft\\Windows Photo Viewer\\Capabilities"' + "`n")
+$null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations]")
+foreach ($ext in $photoExts) {
+    $null = $reg.AppendLine("`"$ext`"=`"PhotoViewer.FileAssoc.Tiff`"")
+}
+foreach ($ext in $photoExts) {
+    $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\$ext]")
+    $null = $reg.AppendLine('@="PhotoViewer.FileAssoc.Tiff"' + "`n")
+}
+
+# 3. 写入带 BOM 的 UTF-16 LE 原生 .reg 文件并使用 reg import 原生原子导入
+$tempRegFile = Join-Path $env:TEMP "win11_ultra_tweaks.reg"
+[System.IO.File]::WriteAllText($tempRegFile, $reg.ToString(), [System.Text.Encoding]::Unicode)
+
+Write-Host "   正在通过 Windows 原生注册表引擎导入 Unicode 策略流..." -ForegroundColor Green
+& reg.exe import "$tempRegFile" 2>&1 | Out-Null
+Remove-Item -LiteralPath $tempRegFile -Force -ErrorAction SilentlyContinue
+
+# 4. 彻底物理粉碎 Explorer 僵尸缓存 (必须执行，否则 Win11 拒绝刷新新建菜单)
+Write-Host "   正在粉碎 Explorer 新建菜单僵尸缓存 (强制唤醒文本文档)..." -ForegroundColor DarkGray
+cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
+cmd.exe /c "reg delete `"HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
+
+# 5. 安全卸载配置单元
 Write-Host "   正在安全卸载配置单元 (防句柄残留)..." -ForegroundColor Green
 Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
