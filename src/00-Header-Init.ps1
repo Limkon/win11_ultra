@@ -2,6 +2,11 @@
 #  win11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
 # ==============================================================================
 
+# ----------------- 全局特性静态开关 (后期需要时可直接在此修改) -----------------
+# 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，直接打包 install.wim；改为 $true 则开启转换)
+$enableEsdConversion = $false
+# ------------------------------------------------------------------------------
+
 # 1. 确保正确的执行策略
 if ((Get-ExecutionPolicy) -eq 'Restricted') {
     Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
@@ -94,13 +99,21 @@ if ($trimModeChoice -ne "2") {
     $trimMode = "2"
     Write-Host ">>> 已选择: [2] 极限压榨模式 (物理强删文件 + 物理抹杀服务 + 自适应组件换头)" -ForegroundColor Red
 }
+
+# 输出 ESD 静态开关状态
+if ($enableEsdConversion) {
+    Write-Host ">>> [配置已启用] ESD 高压转换: 开启 (将在打包前转换为 install.esd)" -ForegroundColor Yellow
+} else {
+    Write-Host ">>> [配置默认值] ESD 高压转换: 关闭 (跳过耗时转换，直接使用 install.wim 打包)" -ForegroundColor DarkGray
+}
 Write-Host ""
 
-# 8. 初始化清理
+# 8. 初始化清理 (安全预检并卸载残留，彻底杜绝 NativeCommandError 误报红字)
 Write-Host "[初始化] 清理历史残留挂载点并重置环境..." -ForegroundColor DarkGray
-& reg.exe unload HKLM\zSOFTWARE 2>$null | Out-Null
-& reg.exe unload HKLM\zSYSTEM 2>$null | Out-Null
-& reg.exe unload HKLM\zNTUSER 2>$null | Out-Null
+if (Test-Path "HKLM:\zSOFTWARE") { cmd.exe /c "reg.exe unload HKLM\zSOFTWARE 2>nul" | Out-Null }
+if (Test-Path "HKLM:\zSYSTEM")   { cmd.exe /c "reg.exe unload HKLM\zSYSTEM 2>nul" | Out-Null }
+if (Test-Path "HKLM:\zNTUSER")   { cmd.exe /c "reg.exe unload HKLM\zNTUSER 2>nul" | Out-Null }
+
 & dism.exe /English /Cleanup-Wim 2>$null | Out-Null
 cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
 
