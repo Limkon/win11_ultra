@@ -85,12 +85,19 @@ $null = $reg.AppendLine(@"
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgePDF]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\msedge.exe]
 
+; 关闭 SmartScreen 拦截策略 (防 smartscreen.exe 物理删除后调用挂死)
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\System]
+"EnableSmartScreen"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer]
+"SmartScreenEnabled"="Off"
+
+; 仅保留关闭互联网打开方式搜索，严禁注入 NoUseStoreOpenWith 以免触发 DirectUI 零高度崩溃
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
 "NoInternetOpenWith"=dword:00000001
-"NoUseStoreOpenWith"=dword:00000001
 "@)
 
-# ----------------- 核心修复：100% 完美激活【右键新建文本文档】 -----------------
+# ----------------- 核心修复：文本文档关联、幽灵清理与应用池垫片 -----------------
 $null = $reg.AppendLine(@"
 ; 1. 扩展名关联与 ShellNew 唤醒
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
@@ -102,6 +109,8 @@ $null = $reg.AppendLine(@"
 "NullFile"=""
 "ItemName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,37,00,30,00,00,00
 
+; 彻底清空并重置 OpenWithProgids，抹除原版残留的幽灵 AppX
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
 "txtfile"=hex(0):
 
@@ -131,7 +140,7 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\xmlfile\shell\open\command]
 @=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 4. 彻底去除劫持与别名重定向
+; 4. 彻底去除记事本劫持与注册全局应用实体 (防应用池为 0 导致折叠)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe]
 "UseFilter"=dword:00000000
 "Debugger"=-
@@ -141,7 +150,21 @@ $null = $reg.AppendLine(@"
 
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe\NoOpenWith]
 
-; 5. 抹除 Default 用户中 UWP 留下的损坏关联
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe]
+"FriendlyAppName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe\shell\open\command]
+@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
+
+; 5. 注册系统已有的资源管理器作为应用枚举池垫片 (0 字节占用，彻底打破 DirectUI 0 高度折叠 BUG)
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\explorer.exe]
+"FriendlyAppName"="Windows 资源管理器"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\explorer.exe\shell\open\command]
+@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,65,00,78,00,70,00,6c,00,6f,00,72,00,65,00,72,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
+
+; 6. 抹除 Default 用户中 UWP 留下的损坏关联
+[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
 [HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
 "txtfile"=hex(0):
 
