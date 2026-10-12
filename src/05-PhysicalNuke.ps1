@@ -12,10 +12,13 @@ Write-Host "   -> 正在物理粉碎 WinRE 恢复环境文件..." -ForegroundCol
 Force-NukeFolderOrFile (Join-Path $recoveryDir "winre.wim")
 Force-NukeFolderOrFile (Join-Path $recoveryDir "ReAgent.xml")
 
-# 2. Microsoft Edge 浏览器完整生态 (Chromium 主体 + SystemApps 遗留 UWP 桩程序)
-Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整生态 (Chromium 本体 + UWP 桩程序)..." -ForegroundColor DarkGray
+# 2. Microsoft Edge 浏览器完整生态 (Chromium 本体 + WebView + SystemApps 遗留 UWP 桩程序)
+Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整生态 (Chromium 本体 + WebView + UWP 桩程序)..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\Edge")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\EdgeUpdate")
+
+# 吸纳 nano11 经验：物理粉碎 System32 下的 WebView 实体
+Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\Microsoft-Edge-Webview")
 
 # 彻底粉碎 SystemApps 中的 Edge 幽灵桩程序 (根除 DCOM 10001 死锁源)
 $systemApps = Join-Path $scratchDir "Windows\SystemApps"
@@ -67,7 +70,7 @@ if (Test-Path $systemApps) {
     }
 }
 
-# 物理粉碎 System32 下的真正后台搜索引擎二进制文件 (确保后台绝对无法再启动)
+# 物理粉碎 System32 下的真正后台搜索引擎二进制文件 (彻底杜绝后台重启)
 $sys32Dir = Join-Path $scratchDir "Windows\System32"
 Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchIndexer.exe")
 Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchFilterHost.exe")
