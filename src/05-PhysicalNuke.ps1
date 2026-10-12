@@ -1,9 +1,9 @@
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 大文件实体深度物理粉碎 (src/05-PhysicalNuke.ps1)
-#  [核心逻辑] 无论选择普通模式还是极限模式，本模块内所有大文件实体均执行物理抹杀
+#  [核心逻辑] 无论选择普通模式还是极限模式，本模块内所有目标实体均执行彻底物理粉碎
 # ==============================================================================
 
-Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/OneDrive/Defender/Speech)..." -ForegroundColor Cyan
+Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/Search/Defender/OneDrive/Speech)..." -ForegroundColor Cyan
 Write-Host "   [模式说明] 普通模式与极限模式均完整执行以下实体物理粉碎：" -ForegroundColor DarkCyan
 
 # 1. 恢复环境 (WinRE)
@@ -12,10 +12,20 @@ Write-Host "   -> 正在物理粉碎 WinRE 恢复环境文件..." -ForegroundCol
 Force-NukeFolderOrFile (Join-Path $recoveryDir "winre.wim")
 Force-NukeFolderOrFile (Join-Path $recoveryDir "ReAgent.xml")
 
-# 2. Microsoft Edge 浏览器与更新服务
-Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整实体..." -ForegroundColor DarkGray
+# 2. Microsoft Edge 浏览器完整生态 (Chromium 主体 + SystemApps 遗留 UWP 桩程序)
+Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整生态 (Chromium 本体 + UWP 桩程序)..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\Edge")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\EdgeUpdate")
+
+# 彻底粉碎 SystemApps 中的 Edge 幽灵桩程序 (根除 DCOM 10001 死锁源)
+$systemApps = Join-Path $scratchDir "Windows\SystemApps"
+if (Test-Path $systemApps) {
+    Get-ChildItem -Path $systemApps -Directory | Where-Object { 
+        $_.Name -like "*MicrosoftEdge*" 
+    } | ForEach-Object {
+        Force-NukeFolderOrFile $_.FullName
+    }
+}
 
 # 3. Microsoft OneDrive (全路径与预装源)
 Write-Host "   -> 正在物理粉碎 OneDrive 各层级安装与运行实体..." -ForegroundColor DarkGray
@@ -47,16 +57,21 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\CHT"
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\JPN")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\KOR")
 
-# 6. Cortana 与 Windows Search
-$systemApps = Join-Path $scratchDir "Windows\SystemApps"
+# 6. Cortana 与 Windows Search 全套引擎实体 (前台界面 + 后台索引引擎彻底粉碎)
+Write-Host "   -> 正在物理粉碎 Cortana 与 Windows Search 前后台全套引擎实体..." -ForegroundColor DarkGray
 if (Test-Path $systemApps) {
-    Write-Host "   -> 正在物理粉碎 Cortana 与 Windows Search 实体..." -ForegroundColor DarkGray
     Get-ChildItem -Path $systemApps -Directory | Where-Object { 
         $_.Name -like "*Cortana*" -or $_.Name -like "*Search*" 
     } | ForEach-Object {
         Force-NukeFolderOrFile $_.FullName
     }
 }
+
+# 物理粉碎 System32 下的真正后台搜索引擎二进制文件 (确保后台绝对无法再启动)
+$sys32Dir = Join-Path $scratchDir "Windows\System32"
+Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchIndexer.exe")
+Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchFilterHost.exe")
+Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchProtocolHost.exe")
 
 # 7. 语音引擎与离线帮助文档
 Write-Host "   -> 正在物理粉碎语音引擎与帮助文档..." -ForegroundColor DarkGray
