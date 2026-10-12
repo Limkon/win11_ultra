@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-12 13:25:20 UTC
+#  生成时间: 2026-10-12 16:19:07 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -359,8 +359,8 @@ Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
 #  win11 Builder - [模块 4/11] UWP 应用与可选功能包精简 (src/03-RemovePackages.ps1)
 # ==============================================================================
 
-# ----------------- 1. UWP 卸载 + 物理强删 (两模式均执行) -----------------
-Write-Host "`n[步骤 4/11] 正在清理冗余 UWP 预装应用 (严格保留 OOBE 与系统代理依赖)..." -ForegroundColor Cyan
+# ----------------- 1. UWP 卸载 + 定向物理粉碎 (完全对齐 nano11 精准点杀模型) -----------------
+Write-Host "`n[步骤 4/11] 正在清理冗余 UWP 预装应用 (严格保留 CBS 与核心运行库)..." -ForegroundColor Cyan
 
 # 核心基础白名单（绝不能删除的底层基础框架）
 $preservedPackages = @(
@@ -371,13 +371,13 @@ $preservedPackages = @(
     "*ShellExperience*",
     "*AccountsControl*",
     "*CloudExperienceHost*",
-    "*BioEnrollment*",
-    "*DesktopAppInstaller*"
+    "*BioEnrollment*"
 )
 
 $appxPackages = Get-AppxProvisionedPackage -Path $scratchDir
 $totalAppx = $appxPackages.Count
 $currentAppx = 0
+$deletedAppxList = @()
 
 foreach ($app in $appxPackages) {
     $currentAppx++
@@ -399,48 +399,40 @@ foreach ($app in $appxPackages) {
 
     Write-Host "   [$currentAppx/$totalAppx] [删除应用] $($app.PackageName)" -ForegroundColor Yellow
     & dism.exe /Image:$scratchDir /Remove-ProvisionedAppxPackage "/PackageName:$($app.PackageName)" 2>$null | Out-Null
+    $deletedAppxList += $app.PackageName
 }
 Write-Progress -Activity "正在清理 UWP 预装应用" -Completed
 
-# 物理强删 WindowsApps 目录下的实体文件（严禁篡改父目录根级权限，精准粉碎子目录）
+# 完全对齐 nano11 模式：针对已卸载的包名执行精准定向物理粉碎 (绝不污染父目录 SDDL，压榨 1.5GB+ 空间)
 $winAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
 if (Test-Path $winAppsDir) {
-    Write-Host "   正在安全物理强删 WindowsApps 废弃应用实体 (极限压榨空间，保留核心框架)..." -ForegroundColor DarkGray
+    Write-Host "   正在执行 WindowsApps 废弃应用实体定向物理粉碎 (nano11 经典点杀机制)..." -ForegroundColor DarkGray
 
-    $protectedJunctions = @("Deleted", "Merged", "Mutable", "MutableBackup", "Projected", "Packages")
-
-    Get-ChildItem -Path $winAppsDir -Directory | Where-Object { 
-        $dirName = $_.Name
-        if ($protectedJunctions -contains $dirName) { return $false }
-
-        $isPreserved = $false
-        foreach ($pattern in $preservedPackages) {
-            if ($dirName -like $pattern) {
-                $isPreserved = $true
-                break
-            }
+    foreach ($pkgName in $deletedAppxList) {
+        $targetFolder = Join-Path $winAppsDir $pkgName
+        if (Test-Path $targetFolder) {
+            # 仅对具体被卸载的目标文件夹执行夺权和物理粉碎，不动父目录根安全描述符
+            Force-NukeFolderOrFile $targetFolder
         }
-        -not $isPreserved
-    } | ForEach-Object {
-        # 仅针对具体的废弃子文件夹执行夺权和物理粉碎，不动父目录的根安全描述符
-        Force-NukeFolderOrFile $_.FullName
     }
 
-    # 关键修复：确保父目录具备 ALL APPLICATION PACKAGES 读取权限，防沙箱进程打开方式闪退
+    # 关键加固：确保父目录具备 ALL APPLICATION PACKAGES 只读权限，彻底杜绝沙箱进程闪退
     & icacls.exe "$winAppsDir" /grant "*S-1-15-2-1:(OI)(CI)RX" /C /Q 2>$null | Out-Null
     & icacls.exe "$winAppsDir" /grant "*S-1-5-32-545:(OI)(CI)RX" /C /Q 2>$null | Out-Null
 }
-Write-Host "[完成] UWP 应用清理与实体强删完毕。" -ForegroundColor Green
+Write-Host "[完成] UWP 应用清理与实体定向粉碎完毕。" -ForegroundColor Green
 
-# ----------------- 2. 功能包清理 (保留中文 + 保护 Hans 字体) -----------------
+# ----------------- 2. 功能包清理 (完全对齐 nano11：合法剥离搜索引擎客户端 + 彻底剔除 IE) -----------------
 Write-Host "`n[步骤 5/11] 正在检索系统组件包并执行【仅保留中文】深度剔除..." -ForegroundColor Cyan
 
 $installedPackages = & dism.exe /English /Image:$scratchDir /Get-Packages /Format:Table
 $pkgLines = $installedPackages -split "`n" | Select-Object -Skip 1
 
 # 基础需要剥离的无用功能包列表
+# 完全对齐 nano11：包含 Search-Engine-Client（内核合法灭活搜索）与 InternetExplorer-Optional（极限省空间）
 $basePackagesToRemove = @(
-    "Microsoft-Windows-InternetExplorer-Optional-Package~",
+    "Microsoft-Windows-Search-Engine-Client-Package~",     # 【nano11 标杆】在系统底层合法杀死搜索引擎客户端
+    "Microsoft-Windows-InternetExplorer-Optional-Package~",# 【对齐 nano11】IE 基础包彻底剔除，极限压榨空间
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
@@ -495,7 +487,7 @@ foreach ($pkgId in $targetPkgs) {
     & dism.exe /English /Image:$scratchDir /Remove-Package "/PackageName:$pkgId" /NoRestart 2>$null | Out-Null
 }
 Write-Progress -Activity "正在剔除组件与外语包" -Completed
-Write-Host "[完成] 系统可选功能包精炼完毕。" -ForegroundColor Green
+Write-Host "[完成] 系统可选功能包精炼完毕 (搜索引擎客户端与 IE 已全量剥离)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/03-RemovePackages.ps1
 
@@ -555,10 +547,10 @@ Write-Host "[完成] 老旧特性剥离完毕。" -ForegroundColor Green
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 大文件实体深度物理粉碎 (src/05-PhysicalNuke.ps1)
-#  [核心逻辑] 无论选择普通模式还是极限模式，本模块内所有大文件实体均执行物理抹杀
+#  [核心逻辑] 无论选择普通模式还是极限模式，本模块内所有目标实体均执行彻底物理粉碎
 # ==============================================================================
 
-Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/OneDrive/Defender/Speech)..." -ForegroundColor Cyan
+Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/Search/Defender/OneDrive/Speech)..." -ForegroundColor Cyan
 Write-Host "   [模式说明] 普通模式与极限模式均完整执行以下实体物理粉碎：" -ForegroundColor DarkCyan
 
 # 1. 恢复环境 (WinRE)
@@ -567,10 +559,23 @@ Write-Host "   -> 正在物理粉碎 WinRE 恢复环境文件..." -ForegroundCol
 Force-NukeFolderOrFile (Join-Path $recoveryDir "winre.wim")
 Force-NukeFolderOrFile (Join-Path $recoveryDir "ReAgent.xml")
 
-# 2. Microsoft Edge 浏览器与更新服务
-Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整实体..." -ForegroundColor DarkGray
+# 2. Microsoft Edge 浏览器完整生态 (Chromium 本体 + WebView + SystemApps 遗留 UWP 桩程序)
+Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整生态 (Chromium 本体 + WebView + UWP 桩程序)..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\Edge")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\EdgeUpdate")
+
+# 吸纳 nano11 经验：物理粉碎 System32 下的 WebView 实体
+Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\Microsoft-Edge-Webview")
+
+# 彻底粉碎 SystemApps 中的 Edge 幽灵桩程序 (根除 DCOM 10001 死锁源)
+$systemApps = Join-Path $scratchDir "Windows\SystemApps"
+if (Test-Path $systemApps) {
+    Get-ChildItem -Path $systemApps -Directory | Where-Object { 
+        $_.Name -like "*MicrosoftEdge*" 
+    } | ForEach-Object {
+        Force-NukeFolderOrFile $_.FullName
+    }
+}
 
 # 3. Microsoft OneDrive (全路径与预装源)
 Write-Host "   -> 正在物理粉碎 OneDrive 各层级安装与运行实体..." -ForegroundColor DarkGray
@@ -602,16 +607,21 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\CHT"
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\JPN")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\KOR")
 
-# 6. Cortana 与 Windows Search
-$systemApps = Join-Path $scratchDir "Windows\SystemApps"
+# 6. Cortana 与 Windows Search 全套引擎实体 (前台界面 + 后台索引引擎彻底粉碎)
+Write-Host "   -> 正在物理粉碎 Cortana 与 Windows Search 前后台全套引擎实体..." -ForegroundColor DarkGray
 if (Test-Path $systemApps) {
-    Write-Host "   -> 正在物理粉碎 Cortana 与 Windows Search 实体..." -ForegroundColor DarkGray
     Get-ChildItem -Path $systemApps -Directory | Where-Object { 
         $_.Name -like "*Cortana*" -or $_.Name -like "*Search*" 
     } | ForEach-Object {
         Force-NukeFolderOrFile $_.FullName
     }
 }
+
+# 物理粉碎 System32 下的真正后台搜索引擎二进制文件 (彻底杜绝后台重启)
+$sys32Dir = Join-Path $scratchDir "Windows\System32"
+Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchIndexer.exe")
+Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchFilterHost.exe")
+Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchProtocolHost.exe")
 
 # 7. 语音引擎与离线帮助文档
 Write-Host "   -> 正在物理粉碎语音引擎与帮助文档..." -ForegroundColor DarkGray
@@ -683,12 +693,15 @@ $null = $reg.AppendLine("Windows Registry Editor Version 5.00`n")
 
 # ----------------- 模式分支：服务配置 -----------------
 $normalServices = @(
-    "SysMain", "DiagTrack", "dmwappushservice", "WerSvc", "PcaSvc", "WSearch",
+    "SysMain", "DiagTrack", "dmwappushservice", "WerSvc", "PcaSvc",
     "MapsBroker", "SensorService", "SensrSvc", "lfsvc", "RetailDemo",
     "wisvc", "WalletService", "SharedRealitySvc", "XblAuthManager", "XblGameSave",
     "XboxNetApiSvc", "XboxGipSvc", "AllJoynRouter", "SecurityHealthService"
 )
 $defenderFullStack = @("WinDefend", "WdNisSvc", "Sense", "WdFilter", "WdNisDrv", "WdBoot")
+
+# 关键：由于 Search 实体已被 100% 物理粉碎，两模式均彻底物理抹杀 WSearch 服务，防后台死循环拉起
+$null = $reg.AppendLine("[-HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\WSearch]")
 
 if ($trimMode -eq "2") {
     Write-Host "   >>> [极限模式] 构建 Defender 物理抹杀与服务清除指令..." -ForegroundColor DarkYellow
@@ -736,14 +749,25 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}]
 "System.IsPinnedToNameSpaceTree"=dword:00000000
 
+; 彻底关闭 Windows 搜索策略 (借鉴 nano11 规范)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Windows Search]
 "AllowCortana"=dword:00000000
 "DisableWebSearch"=dword:00000001
 "ConnectedSearchUseWeb"=dword:00000000
 
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
+"DisableSearchBoxSuggestions"=dword:00000001
+"NoInternetOpenWith"=dword:00000001
+
+; 清理 Edge 遗留卸载项与幽灵 DCOM 契约 (斩断 Event 10001 死锁源)
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgeHTM]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgePDF]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\msedge.exe]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\AppID\{1F8766B3-3F96-48DA-B6A8-A013FFC2A5BE}]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\AppID\Microsoft.MicrosoftEdge_8wekyb3d8bbwe]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Extensions\ContractId\Windows.File\PackageId\Microsoft.MicrosoftEdge_44.22000.120.0_neutral__8wekyb3d8bbwe]
 
 ; 关闭 SmartScreen 拦截策略 (防 smartscreen.exe 物理删除后调用挂死)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\System]
@@ -751,15 +775,30 @@ $null = $reg.AppendLine(@"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer]
 "SmartScreenEnabled"="Off"
-
-; 仅保留关闭互联网打开方式搜索，严禁注入 NoUseStoreOpenWith 以免触发 DirectUI 零高度崩溃
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
-"NoInternetOpenWith"=dword:00000001
 "@)
 
-# ----------------- 核心修复：文本文档关联、幽灵清理与应用池垫片 -----------------
+# ----------------- 核心修复：固化 Shell 接口、激活记事本与注入应用池垫片 -----------------
 $null = $reg.AppendLine(@"
-; 1. 扩展名关联与 ShellNew 唤醒
+; 1. 固化写入丢失的 IEnumAssocHandlers 与 IAssocHandler 核心接口 (防 E_NOINTERFACE 报错)
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{973810AE-9599-4B88-9E4D-6EE98C0C8AC3}]
+@="IEnumAssocHandlers"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{973810AE-9599-4B88-9E4D-6EE98C0C8AC3}\ProxyStubClsid32]
+@="{A4A1A128-768F-41E0-BF75-E4FDDD701CBA}"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{973810AE-9599-4B88-9E4D-6EE98C0C8AC3}\NumMethods]
+@="7"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{F04061AC-1659-4A42-9F4E-E150522B1037}]
+@="IAssocHandler"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{F04061AC-1659-4A42-9F4E-E150522B1037}\ProxyStubClsid32]
+@="{A4A1A128-768F-41E0-BF75-E4FDDD701CBA}"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{F04061AC-1659-4A42-9F4E-E150522B1037}\NumMethods]
+@="10"
+
+; 2. 扩展名关联与 ShellNew 唤醒
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
 @="txtfile"
 "Content Type"="text/plain"
@@ -774,7 +813,7 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
 "txtfile"=hex(0):
 
-; 2. txtfile ProgID 实体定义
+; 3. txtfile ProgID 实体定义
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
 @="文本文档"
 "FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
@@ -788,7 +827,7 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
 @=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 3. XML 文档关联
+; 4. XML 文档关联
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.xml]
 @="xmlfile"
 "Content Type"="text/xml"
@@ -800,7 +839,7 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\xmlfile\shell\open\command]
 @=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 4. 彻底去除记事本劫持与注册全局应用实体 (防应用池为 0 导致折叠)
+; 5. 彻底去除记事本劫持并注册全局应用实体
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe]
 "UseFilter"=dword:00000000
 "Debugger"=-
@@ -816,14 +855,14 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe\shell\open\command]
 @=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 5. 注册系统已有的资源管理器作为应用枚举池垫片 (0 字节占用，彻底打破 DirectUI 0 高度折叠 BUG)
+; 6. 注册原生资源管理器到应用枚举池 (0 字节垫片，防止应用数为 0 触发 DirectUI 折叠 BUG)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\explorer.exe]
 "FriendlyAppName"="Windows 资源管理器"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\explorer.exe\shell\open\command]
 @=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,65,00,78,00,70,00,6c,00,6f,00,72,00,65,00,72,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 6. 抹除 Default 用户中 UWP 留下的损坏关联
+; 7. 抹除 Default 用户中 UWP 留下的损坏关联
 [-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
 [HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
 "txtfile"=hex(0):
@@ -882,7 +921,7 @@ Write-Host "   正在安全卸载配置单元 (防句柄残留)..." -ForegroundC
 Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
-Write-Host "[完成] 离线注册表优化全部完毕。" -ForegroundColor Green
+Write-Host "[完成] 离线注册表优化全部完毕 (WSearch 服务彻底物理抹杀，Shell 核心接口永久固化)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/06-RegistryTweaks.ps1
 
@@ -911,12 +950,22 @@ if ($userResult.TimedOut) {
 }
 $inputPassEscaped = [System.Security.SecurityElement]::Escape($inputPass)
 
-# 3. 100% 完整无损原版 XML 应答模板 (内嵌全部运维自愈与自毁脚本)
+# 3. 100% 完整无损原版 XML 应答模板 (补齐语言/地区/键盘全自动声明)
 $unattendTemplate = @'
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
 	<settings pass="offlineServicing"></settings>
 	<settings pass="windowsPE">
+		<!-- 1. WinPE 安装环境国际化 (跳过安装初始语言/键盘选择) -->
+		<component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+			<SetupUILanguage>
+				<UILanguage>zh-CN</UILanguage>
+			</SetupUILanguage>
+			<InputLocale>zh-CN</InputLocale>
+			<SystemLocale>zh-CN</SystemLocale>
+			<UILanguage>zh-CN</UILanguage>
+			<UserLocale>zh-CN</UserLocale>
+		</component>
 		<component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<UserData>
 				<AcceptEula>true</AcceptEula>
@@ -979,6 +1028,13 @@ $unattendTemplate = @'
 	<settings pass="auditSystem"></settings>
 	<settings pass="auditUser"></settings>
 	<settings pass="oobeSystem">
+		<!-- 2. OOBE 阶段国际化全自动闭环 (彻底跳过“选择中国”、“键盘布局”与“第二键盘提示”) -->
+		<component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+			<InputLocale>zh-CN</InputLocale>
+			<SystemLocale>zh-CN</SystemLocale>
+			<UILanguage>zh-CN</UILanguage>
+			<UserLocale>zh-CN</UserLocale>
+		</component>
 		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<UserAccounts>
 				<LocalAccounts>
@@ -1234,7 +1290,7 @@ $autoUnattendXml | Out-File -FilePath (Join-Path $sysprepDir "autounattend.xml")
 $autoUnattendXml | Out-File -FilePath (Join-Path $pantherDir "unattend.xml") -Encoding utf8 -Force
 $autoUnattendXml | Out-File -FilePath (Join-Path $workDir "autounattend.xml") -Encoding utf8 -Force
 
-Write-Host "[完成] 高级无人值守应答文件三通道注入完毕。" -ForegroundColor Green
+Write-Host "[完成] 高级无人值守应答文件三通道注入完毕 (已实现区域与键盘完全免交互)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/07-UnattendInject.ps1
 
@@ -1360,7 +1416,7 @@ if ($enableEsdConversion) {
     }
 } else {
     Write-Host ">>> [开关生效: 默认关闭] 跳过 ESD 高耗时压缩，直接使用 install.wim 进行极速打包！" -ForegroundColor Green
-    if (Test-Path -LiteralPath $destWim) {
+    if (Test-Path $destWim) {
         Write-Host "[就绪] 核心安装映像锁定: $destWim" -ForegroundColor DarkGray
     }
 }
