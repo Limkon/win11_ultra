@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-12 08:49:28 UTC
+#  生成时间: 2026-10-12 13:25:20 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -10,6 +10,11 @@
 # ==============================================================================
 #  win11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
 # ==============================================================================
+
+# ----------------- 全局特性静态开关 (后期需要时可直接在此修改) -----------------
+# 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，直接打包 install.wim；改为 $true 则开启转换)
+$enableEsdConversion = $false
+# ------------------------------------------------------------------------------
 
 # 1. 确保正确的执行策略
 if ((Get-ExecutionPolicy) -eq 'Restricted') {
@@ -103,13 +108,21 @@ if ($trimModeChoice -ne "2") {
     $trimMode = "2"
     Write-Host ">>> 已选择: [2] 极限压榨模式 (物理强删文件 + 物理抹杀服务 + 自适应组件换头)" -ForegroundColor Red
 }
+
+# 输出 ESD 静态开关状态
+if ($enableEsdConversion) {
+    Write-Host ">>> [配置已启用] ESD 高压转换: 开启 (将在打包前转换为 install.esd)" -ForegroundColor Yellow
+} else {
+    Write-Host ">>> [配置默认值] ESD 高压转换: 关闭 (跳过耗时转换，直接使用 install.wim 打包)" -ForegroundColor DarkGray
+}
 Write-Host ""
 
-# 8. 初始化清理
+# 8. 初始化清理 (安全预检并卸载残留，彻底杜绝 NativeCommandError 误报红字)
 Write-Host "[初始化] 清理历史残留挂载点并重置环境..." -ForegroundColor DarkGray
-& reg.exe unload HKLM\zSOFTWARE 2>$null | Out-Null
-& reg.exe unload HKLM\zSYSTEM 2>$null | Out-Null
-& reg.exe unload HKLM\zNTUSER 2>$null | Out-Null
+if (Test-Path "HKLM:\zSOFTWARE") { cmd.exe /c "reg.exe unload HKLM\zSOFTWARE 2>nul" | Out-Null }
+if (Test-Path "HKLM:\zSYSTEM")   { cmd.exe /c "reg.exe unload HKLM\zSYSTEM 2>nul" | Out-Null }
+if (Test-Path "HKLM:\zNTUSER")   { cmd.exe /c "reg.exe unload HKLM\zNTUSER 2>nul" | Out-Null }
+
 & dism.exe /English /Cleanup-Wim 2>$null | Out-Null
 cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
 
@@ -389,13 +402,11 @@ foreach ($app in $appxPackages) {
 }
 Write-Progress -Activity "正在清理 UWP 预装应用" -Completed
 
-# 物理强删 WindowsApps 目录下的实体文件（严格避开符号链接与重解析点）
+# 物理强删 WindowsApps 目录下的实体文件（严禁篡改父目录根级权限，精准粉碎子目录）
 $winAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
 if (Test-Path $winAppsDir) {
-    Write-Host "   正在安全物理强删 WindowsApps 废弃应用实体 (绝对保护系统底层重解析点)..." -ForegroundColor DarkGray
-    & takeown.exe /F "$winAppsDir" /A 2>$null | Out-Null
-    & icacls.exe "$winAppsDir" /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
-    
+    Write-Host "   正在安全物理强删 WindowsApps 废弃应用实体 (极限压榨空间，保留核心框架)..." -ForegroundColor DarkGray
+
     $protectedJunctions = @("Deleted", "Merged", "Mutable", "MutableBackup", "Projected", "Packages")
 
     Get-ChildItem -Path $winAppsDir -Directory | Where-Object { 
@@ -411,8 +422,13 @@ if (Test-Path $winAppsDir) {
         }
         -not $isPreserved
     } | ForEach-Object {
+        # 仅针对具体的废弃子文件夹执行夺权和物理粉碎，不动父目录的根安全描述符
         Force-NukeFolderOrFile $_.FullName
     }
+
+    # 关键修复：确保父目录具备 ALL APPLICATION PACKAGES 读取权限，防沙箱进程打开方式闪退
+    & icacls.exe "$winAppsDir" /grant "*S-1-15-2-1:(OI)(CI)RX" /C /Q 2>$null | Out-Null
+    & icacls.exe "$winAppsDir" /grant "*S-1-5-32-545:(OI)(CI)RX" /C /Q 2>$null | Out-Null
 }
 Write-Host "[完成] UWP 应用清理与实体强删完毕。" -ForegroundColor Green
 
@@ -729,12 +745,19 @@ $null = $reg.AppendLine(@"
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgePDF]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\msedge.exe]
 
+; 关闭 SmartScreen 拦截策略 (防 smartscreen.exe 物理删除后调用挂死)
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\System]
+"EnableSmartScreen"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer]
+"SmartScreenEnabled"="Off"
+
+; 仅保留关闭互联网打开方式搜索，严禁注入 NoUseStoreOpenWith 以免触发 DirectUI 零高度崩溃
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
 "NoInternetOpenWith"=dword:00000001
-"NoUseStoreOpenWith"=dword:00000001
 "@)
 
-# ----------------- 核心修复：100% 完美激活【右键新建文本文档】 -----------------
+# ----------------- 核心修复：文本文档关联、幽灵清理与应用池垫片 -----------------
 $null = $reg.AppendLine(@"
 ; 1. 扩展名关联与 ShellNew 唤醒
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
@@ -746,6 +769,8 @@ $null = $reg.AppendLine(@"
 "NullFile"=""
 "ItemName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,37,00,30,00,00,00
 
+; 彻底清空并重置 OpenWithProgids，抹除原版残留的幽灵 AppX
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
 "txtfile"=hex(0):
 
@@ -775,7 +800,7 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\xmlfile\shell\open\command]
 @=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 4. 彻底去除劫持与别名重定向
+; 4. 彻底去除记事本劫持与注册全局应用实体 (防应用池为 0 导致折叠)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe]
 "UseFilter"=dword:00000000
 "Debugger"=-
@@ -785,7 +810,21 @@ $null = $reg.AppendLine(@"
 
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe\NoOpenWith]
 
-; 5. 抹除 Default 用户中 UWP 留下的损坏关联
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe]
+"FriendlyAppName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe\shell\open\command]
+@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
+
+; 5. 注册系统已有的资源管理器作为应用枚举池垫片 (0 字节占用，彻底打破 DirectUI 0 高度折叠 BUG)
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\explorer.exe]
+"FriendlyAppName"="Windows 资源管理器"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\explorer.exe\shell\open\command]
+@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,65,00,78,00,70,00,6c,00,6f,00,72,00,65,00,72,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
+
+; 6. 抹除 Default 用户中 UWP 留下的损坏关联
+[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
 [HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
 "txtfile"=hex(0):
 
@@ -1299,24 +1338,34 @@ Write-Host "[完成] 主映像已成功保存并提交更改。" -ForegroundColo
 # >>> [分块代码引入] 文件来源: src/09-ExportAndPE.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 10/11] ESD 高压导出与 WinPE 免硬件检测修补 (src/09-ExportAndPE.ps1)
+#  win11 Builder - [模块 10/11] 映像格式分支处理与 WinPE 免硬件检测修补 (src/09-ExportAndPE.ps1)
 # ==============================================================================
 
-# ----------------- 1. 导出为高压缩率 ESD (展示原生百分比进度条) -----------------
-Write-Host "`n[步骤 11/11] 正在导出为高压缩率 install.esd..." -ForegroundColor Cyan
-Write-Host "提示: 压缩 ESD 需高度消耗 CPU 与磁盘算力，下方将实时输出官方百分比进度条：" -ForegroundColor Yellow
+# ----------------- 1. 映像格式条件分支处理 (受控于全局开关 $enableEsdConversion) -----------------
+Write-Host "`n[步骤 11/11] 正在处理安装映像输出格式..." -ForegroundColor Cyan
 
 $esdFile = Join-Path $sourcesDir "install.esd"
-& dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:1" "/DestinationImageFile:$esdFile" /Compress:recovery /CheckIntegrity
 
-if (Test-Path -LiteralPath $esdFile) {
-    Write-Host "[成功] install.esd 构建完成，已移除临时 install.wim。" -ForegroundColor Green
-    Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+if ($enableEsdConversion) {
+    Write-Host ">>> [开关生效: 开启] 正在导出为高压缩率 install.esd..." -ForegroundColor Yellow
+    Write-Host "提示: 压缩 ESD 需高度消耗 CPU 与磁盘算力，下方将实时输出官方百分比进度条：" -ForegroundColor DarkGray
+
+    & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:1" "/DestinationImageFile:$esdFile" /Compress:recovery /CheckIntegrity
+
+    if (Test-Path -LiteralPath $esdFile) {
+        Write-Host "[成功] install.esd 构建完成，已移除临时 install.wim。" -ForegroundColor Green
+        Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "[警告] ESD 转换异常，保留 install.wim 继续推进后续流程。" -ForegroundColor Yellow
+    }
 } else {
-    Write-Host "[警告] ESD 转换异常，保留 install.wim 继续流程。" -ForegroundColor Yellow
+    Write-Host ">>> [开关生效: 默认关闭] 跳过 ESD 高耗时压缩，直接使用 install.wim 进行极速打包！" -ForegroundColor Green
+    if (Test-Path -LiteralPath $destWim) {
+        Write-Host "[就绪] 核心安装映像锁定: $destWim" -ForegroundColor DarkGray
+    }
 }
 
-# ----------------- 2. 修补 WinPE (boot.wim) -----------------
+# ----------------- 2. 修补 WinPE (boot.wim) 免硬件检测策略 -----------------
 Write-Host "`n正在为 WinPE (boot.wim) 写入免硬件检测策略..." -ForegroundColor Cyan
 $bootWimPath = Join-Path $sourcesDir "boot.wim"
 attrib.exe -R -S -H "$bootWimPath" 2>$null
@@ -1329,7 +1378,7 @@ if ($bootInfo -notmatch "Index : 2") { $bootIndex = "1" }
 Write-Host "正在挂载 boot.wim 分卷 $bootIndex..." -ForegroundColor DarkGray
 & dism.exe /English /Mount-Image "/ImageFile:$bootWimPath" "/Index:$bootIndex" "/MountDir:$scratchDir"
 
-# 挂载 WinPE 的 SYSTEM 单元并注入 LabConfig
+# 挂载 WinPE 的 SYSTEM 单元并注入 LabConfig 绕过策略
 $bootSystemPath = Join-Path $scratchDir "Windows\System32\config\SYSTEM"
 attrib.exe -R -S -H "$bootSystemPath" 2>$null
 & reg.exe load HKLM\zSYSTEM "$bootSystemPath" 2>$null | Out-Null
@@ -1339,7 +1388,7 @@ foreach ($k in $labConfigKeys) {
     & reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $k /t REG_DWORD /d 1 /f 2>$null | Out-Null
 }
 
-# 稳健卸载并提交 WinPE 映像
+# 稳健卸载注册表并提交 WinPE 映像更改
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 Write-Host "正在提交并保存 boot.wim..." -ForegroundColor DarkGray
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
