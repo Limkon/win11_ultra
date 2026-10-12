@@ -45,13 +45,11 @@ foreach ($app in $appxPackages) {
 }
 Write-Progress -Activity "正在清理 UWP 预装应用" -Completed
 
-# 物理强删 WindowsApps 目录下的实体文件（严格避开符号链接与重解析点）
+# 物理强删 WindowsApps 目录下的实体文件（严禁篡改父目录根级权限，精准粉碎子目录）
 $winAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
 if (Test-Path $winAppsDir) {
-    Write-Host "   正在安全物理强删 WindowsApps 废弃应用实体 (绝对保护系统底层重解析点)..." -ForegroundColor DarkGray
-    & takeown.exe /F "$winAppsDir" /A 2>$null | Out-Null
-    & icacls.exe "$winAppsDir" /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
-    
+    Write-Host "   正在安全物理强删 WindowsApps 废弃应用实体 (极限压榨空间，保留核心框架)..." -ForegroundColor DarkGray
+
     $protectedJunctions = @("Deleted", "Merged", "Mutable", "MutableBackup", "Projected", "Packages")
 
     Get-ChildItem -Path $winAppsDir -Directory | Where-Object { 
@@ -67,8 +65,13 @@ if (Test-Path $winAppsDir) {
         }
         -not $isPreserved
     } | ForEach-Object {
+        # 仅针对具体的废弃子文件夹执行夺权和物理粉碎，不动父目录的根安全描述符
         Force-NukeFolderOrFile $_.FullName
     }
+
+    # 关键修复：确保父目录具备 ALL APPLICATION PACKAGES 读取权限，防沙箱进程打开方式闪退
+    & icacls.exe "$winAppsDir" /grant "*S-1-15-2-1:(OI)(CI)RX" /C /Q 2>$null | Out-Null
+    & icacls.exe "$winAppsDir" /grant "*S-1-5-32-545:(OI)(CI)RX" /C /Q 2>$null | Out-Null
 }
 Write-Host "[完成] UWP 应用清理与实体强删完毕。" -ForegroundColor Green
 
