@@ -15,7 +15,6 @@ $preservedPackages = @(
     "*AccountsControl*",
     "*CloudExperienceHost*",
     "*BioEnrollment*",
-    "*DesktopAppInstaller*"
 )
 
 $appxPackages = Get-AppxProvisionedPackage -Path $scratchDir
