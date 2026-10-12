@@ -20,12 +20,22 @@ if ($userResult.TimedOut) {
 }
 $inputPassEscaped = [System.Security.SecurityElement]::Escape($inputPass)
 
-# 3. 100% 完整无损原版 XML 应答模板 (内嵌全部运维自愈与自毁脚本)
+# 3. 100% 完整无损原版 XML 应答模板 (补齐语言/地区/键盘全自动声明)
 $unattendTemplate = @'
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
 	<settings pass="offlineServicing"></settings>
 	<settings pass="windowsPE">
+		<!-- 1. WinPE 安装环境国际化 (跳过安装初始语言/键盘选择) -->
+		<component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+			<SetupUILanguage>
+				<UILanguage>zh-CN</UILanguage>
+			</SetupUILanguage>
+			<InputLocale>zh-CN</InputLocale>
+			<SystemLocale>zh-CN</SystemLocale>
+			<UILanguage>zh-CN</UILanguage>
+			<UserLocale>zh-CN</UserLocale>
+		</component>
 		<component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<UserData>
 				<AcceptEula>true</AcceptEula>
@@ -88,6 +98,13 @@ $unattendTemplate = @'
 	<settings pass="auditSystem"></settings>
 	<settings pass="auditUser"></settings>
 	<settings pass="oobeSystem">
+		<!-- 2. OOBE 阶段国际化全自动闭环 (彻底跳过“选择中国”、“键盘布局”与“第二键盘提示”) -->
+		<component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+			<InputLocale>zh-CN</InputLocale>
+			<SystemLocale>zh-CN</SystemLocale>
+			<UILanguage>zh-CN</UILanguage>
+			<UserLocale>zh-CN</UserLocale>
+		</component>
 		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<UserAccounts>
 				<LocalAccounts>
@@ -343,4 +360,4 @@ $autoUnattendXml | Out-File -FilePath (Join-Path $sysprepDir "autounattend.xml")
 $autoUnattendXml | Out-File -FilePath (Join-Path $pantherDir "unattend.xml") -Encoding utf8 -Force
 $autoUnattendXml | Out-File -FilePath (Join-Path $workDir "autounattend.xml") -Encoding utf8 -Force
 
-Write-Host "[完成] 高级无人值守应答文件三通道注入完毕。" -ForegroundColor Green
+Write-Host "[完成] 高级无人值守应答文件三通道注入完毕 (已实现区域与键盘完全免交互)。" -ForegroundColor Green
