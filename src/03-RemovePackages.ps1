@@ -14,7 +14,7 @@ $preservedPackages = @(
     "*ShellExperience*",
     "*AccountsControl*",
     "*CloudExperienceHost*",
-    "*BioEnrollment*",
+    "*BioEnrollment*"
 )
 
 $appxPackages = Get-AppxProvisionedPackage -Path $scratchDir
@@ -44,7 +44,7 @@ foreach ($app in $appxPackages) {
 }
 Write-Progress -Activity "正在清理 UWP 预装应用" -Completed
 
-# 物理强删 WindowsApps 目录下的实体文件（严禁篡改父目录根级权限，精准粉碎子目录）
+# 物理强删 WindowsApps 目录下的实体文件（严禁破坏父目录 SDDL，精准粉碎子目录）
 $winAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
 if (Test-Path $winAppsDir) {
     Write-Host "   正在安全物理强删 WindowsApps 废弃应用实体 (极限压榨空间，保留核心框架)..." -ForegroundColor DarkGray
@@ -68,7 +68,7 @@ if (Test-Path $winAppsDir) {
         Force-NukeFolderOrFile $_.FullName
     }
 
-    # 关键修复：确保父目录具备 ALL APPLICATION PACKAGES 读取权限，防沙箱进程打开方式闪退
+    # 关键安全修复：向父目录恢复通用应用包只读权限，防止沙箱进程读取 CBS/XAML 框架时报拒绝访问
     & icacls.exe "$winAppsDir" /grant "*S-1-15-2-1:(OI)(CI)RX" /C /Q 2>$null | Out-Null
     & icacls.exe "$winAppsDir" /grant "*S-1-5-32-545:(OI)(CI)RX" /C /Q 2>$null | Out-Null
 }
@@ -80,9 +80,8 @@ Write-Host "`n[步骤 5/11] 正在检索系统组件包并执行【仅保留中�
 $installedPackages = & dism.exe /English /Image:$scratchDir /Get-Packages /Format:Table
 $pkgLines = $installedPackages -split "`n" | Select-Object -Skip 1
 
-# 基础需要剥离的无用功能包列表
+# 基础需要剥离的无用功能包列表 (严格排除 IE 可选包，防止 DISM 连坐注销 Shell COM 接口)
 $basePackagesToRemove = @(
-    "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
