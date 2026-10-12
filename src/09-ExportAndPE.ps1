@@ -21,7 +21,7 @@ if ($enableEsdConversion) {
     }
 } else {
     Write-Host ">>> [开关生效: 默认关闭] 跳过 ESD 高耗时压缩，直接使用 install.wim 进行极速打包！" -ForegroundColor Green
-    if (Test-Path -LiteralPath $destWim) {
+    if (Test-Path $destWim) {
         Write-Host "[就绪] 核心安装映像锁定: $destWim" -ForegroundColor DarkGray
     }
 }
