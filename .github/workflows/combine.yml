@@ -1,0 +1,99 @@
+name: 手动组合构建完整脚本
+
+# 严格限制：仅允许在 GitHub Actions 页面手动点击触发
+on:
+  workflow_dispatch:
+    inputs:
+      target_filename:
+        description: '生成到仓库根目录的目标文件名'
+        required: true
+        default: 'win11_ultra_builder.ps1'
+
+# 授予工作流向仓库提交代码的写权限
+permissions:
+  contents: write
+
+jobs:
+  combine-scripts:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 检出仓库代码
+      - name: 检出当前仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. 执行跨平台 PowerShell 组合并注入注释
+      - name: 组装各分块模块并写入注释
+        shell: pwsh
+        run: |
+          $outputFile = "${{ github.event.inputs.target_filename }}"
+          
+          # 定义必须按先后严格顺序拼接的 11 个模块
+          $modules = @(
+              "src/00-Header-Init.ps1",
+              "src/01-Helpers.ps1",
+              "src/02-MountImage.ps1",
+              "src/03-RemovePackages.ps1",
+              "src/04-DriversFeatures.ps1",
+              "src/05-PhysicalNuke.ps1",
+              "src/06-RegistryTweaks.ps1",
+              "src/07-UnattendInject.ps1",
+              "src/08-WinSxSOptimize.ps1",
+              "src/09-ExportAndPE.ps1",
+              "src/10-PackageAndClean.ps1"
+          )
+
+          Write-Host ">>> 准备构建组合脚本，目标文件: $outputFile" -ForegroundColor Cyan
+          
+          $sb = New-Object System.Text.StringBuilder
+          $null = $sb.AppendLine("# ==============================================================================")
+          $null = $sb.AppendLine("#  win11 Builder - 自动化全功能完整版 (工业级编译发布版)")
+          $null = $sb.AppendLine("#  生成时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')")
+          $null = $sb.AppendLine("#  构建流水线: GitHub Actions (workflow_dispatch)")
+          $null = $sb.AppendLine("# ==============================================================================`n")
+
+          foreach ($module in $modules) {
+              if (-not (Test-Path -LiteralPath $module)) {
+                  Write-Error "缺少模块文件: $module，流程阻断！"
+                  exit 1
+              }
+
+              Write-Host "正在合并模块: $module" -ForegroundColor Green
+              
+              # 模块起始分割线与来源注释
+              $null = $sb.AppendLine("# ==============================================================================")
+              $null = $sb.AppendLine("# >>> [分块代码引入] 文件来源: $module")
+              $null = $sb.AppendLine("# ==============================================================================")
+              
+              # 读取该分块文本 (保留原有 UTF-8 编码与换行)
+              $content = Get-Content -LiteralPath $module -Raw -Encoding utf8
+              $null = $sb.AppendLine($content.TrimEnd())
+              
+              # 模块结束分割线与来源注释
+              $null = $sb.AppendLine("`n# <<< [分块结束] 文件来源: $module`n")
+          }
+
+          # 写入根目录目标文件 (带 BOM 的 UTF-8 确保 Windows PowerShell 原生兼容)
+          $utf8WithBom = New-Object System.Text.UTF8Encoding($true)
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location) $outputFile), $sb.ToString(), $utf8WithBom)
+          
+          Write-Host "[成功] 完整单文件脚本已成功合并至根目录: $outputFile" -ForegroundColor Green
+
+      # 3. 将根目录生成的文件提交并推送到仓库
+      - name: 提交并推送到 GitHub 仓库
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add "${{ github.event.inputs.target_filename }}"
+          
+          # 检查是否有内容变更，仅当文件产生变化时才提交
+          if git diff --staged --quiet; then
+            echo "文件内容无变动，无需重复提交。"
+          else
+            git commit -m "chore: 自动化组合构建 ${{ github.event.inputs.target_filename }} [skip ci]"
+            git push origin ${{ github.ref_name }}
+            echo "已成功推送最新组合文件到根目录！"
+          fi
