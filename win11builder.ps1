@@ -1,18 +1,18 @@
 # ==============================================================================
-#  win11 Builder - ÖÕ¼«Ñ¹Õ¥ÍêÃÀÍêÕû°æ v7.8 (×ÔÓúÖØÖÃ¡¤¹¤Òµ¼¶ÎÈ¶¨°æ)
-#  - [×ÔÓú»úÖÆ] Æô¶¯Ê±×Ô¶¯Ç¿Á¦°şÀë²ĞÁôÀëÏß×¢²á±íÓë¹ÒËÀ½ø³Ì£¬·ÀÖ¹Ó³ÏñÎŞĞ§±¨´í
-#  - [ÊäÈëÓ²»¯] ²¹Æë reg add ±ØĞëµÄ /d "" ²ÎÊı£¬¸ù³ıºóÌ¨µÈ´ı STDIN ¼ÙËÀ
-#  - [ËÀËøÏû³ı] ÌŞ³ı PSDrive ·ÃÎÊ£¬¸ÄÓÃÍâ²¿ reg query£¬¸ù³ı unload ¾ä±úËÀËø
-#  - [Ë«Í¨µÀÓ¦´ğ] ¹âÇı¸ùÄ¿Â¼ + ÀëÏß Panther Ä¿Â¼Ë«×¢Èë£¬Í¨É± Setup Óë PE ÊÍ·Å
-#  - [È«Ä£¼æÈİ] WinSxS ×ÔÊÊÓ¦¶¯Ì¬Ì½²é£¬Ô­ÉúÖ§³Ö Win11 21H2~24H2 È«Ïµ¼Ü¹¹
+#  win11 Builder - ç»ˆæå‹æ¦¨å®Œç¾å®Œæ•´ç‰ˆ (v7.1 åŸç”Ÿéé˜»å¡Â·åŸå­æ‰¹å¤„ç†Â·å·¥ä¸šçº§ç»ˆæç‰ˆ)
+#  - [å½»åº•é˜²å‡æ­»] æ³¨å†Œè¡¨æ”¹ç”¨åŸå­æ‰¹å¤„ç†æ‰§è¡Œå¼•æ“ï¼Œå½»åº•è§£å†³ç®¡é“ç¼“å†²åŒºä¸æ€è½¯æ‹¦æˆªæ­»é”
+#  - [å†…æ ¸çº§å…ç–«] Win32 åŸç”Ÿå…³é—­æ§åˆ¶å° QuickEdit æ¨¡å¼ï¼Œæœç»é¼ æ ‡ç‚¹å‡»æ§åˆ¶å°æŒ‚æ­»
+#  - [ç¨³å¥å¸è½½] æ³¨å†Œè¡¨ Hive å¸è½½å¼•å…¥ GC å¼ºåˆ¶é‡Šæ”¾ä¸ 5 æ¬¡é‡è¯•å®¹é”™æœºåˆ¶
+#  - [è¯­æ³•å®‰å…¨] ä¿®æ­£å€’è®¡æ—¶å‡½æ•°çš„å…‰æ ‡ä½ç½®å¼‚å¸¸æ•è·ä¸å˜é‡è§£æ
+#  - [åŒé€šé“åº”ç­”] å…‰é©±æ ¹ç›®å½• + ç¦»çº¿ Panther/Sysprep ç›®å½•å…¨è‡ªåŠ¨åŒ–æ³¨å…¥
 # ==============================================================================
 
-# 1. È·±£ÕıÈ·µÄÖ´ĞĞ²ßÂÔ
+# 1. ç¡®ä¿æ­£ç¡®çš„æ‰§è¡Œç­–ç•¥
 if ((Get-ExecutionPolicy) -eq 'Restricted') {
     Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
 }
 
-# 2. Ëø¶¨ÕæÊµ½Å±¾Ä¿Â¼
+# 2. é”å®šçœŸå®è„šæœ¬ç›®å½•
 if ($PSScriptRoot) {
     $scriptDir = $PSScriptRoot
 } else {
@@ -20,7 +20,7 @@ if ($PSScriptRoot) {
 }
 Set-Location $scriptDir
 
-# 3. ¼ì²é²¢Ç¿ÖÆÒÔ¹ÜÀíÔ±Éí·İÔËĞĞ
+# 3. æ£€æŸ¥å¹¶å¼ºåˆ¶ä»¥ç®¡ç†å‘˜èº«ä»½è¿è¡Œ
 $adminSID = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
 $adminGroup = $adminSID.Translate([System.Security.Principal.NTAccount])
 $myWindowsID = [System.Security.Principal.WindowsIdentity]::GetCurrent()
@@ -28,7 +28,7 @@ $myWindowsPrincipal = New-Object System.Security.Principal.WindowsPrincipal($myW
 $adminRole = [System.Security.Principal.WindowsBuiltInRole]::Administrator
 
 if (-not $myWindowsPrincipal.IsInRole($adminRole)) {
-    Write-Host "ÕıÔÚÌáÉı¹ÜÀíÔ±È¨ÏŞ..." -ForegroundColor Yellow
+    Write-Host "æ­£åœ¨æå‡ç®¡ç†å‘˜æƒé™..." -ForegroundColor Yellow
     $newProcess = New-Object System.Diagnostics.ProcessStartInfo "PowerShell"
     $newProcess.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Definition)`""
     $newProcess.Verb = "runas"
@@ -37,23 +37,45 @@ if (-not $myWindowsPrincipal.IsInRole($adminRole)) {
     exit
 }
 
-# 4. ¿ªÆôÈ«³ÌË«ÖØÈÕÖ¾
+# 4. å†…æ ¸çº§å…³é—­æ§åˆ¶å°å¿«é€Ÿç¼–è¾‘æ¨¡å¼ (å½»åº•è§£å†³é¼ æ ‡è¯¯ç‚¹å‡»é»‘æ¡†å¯¼è‡´çš„çº¿ç¨‹æŒ‚èµ·)
+try {
+    $consoleHelper = Add-Type -MemberDefinition @"
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+"@ -Name "Win32ConsoleHelper" -Namespace "Win32Utils" -PassThru -ErrorAction SilentlyContinue
+
+    $stdInHandle = $consoleHelper::GetStdHandle(-10) # STD_INPUT_HANDLE
+    $consoleMode = 0
+    if ($consoleHelper::GetConsoleMode($stdInHandle, [ref]$consoleMode)) {
+        # ç§»é™¤ ENABLE_QUICK_EDIT_MODE (0x0040), å¯ç”¨ ENABLE_EXTENDED_FLAGS (0x0080)
+        $newMode = ($consoleMode -band -bnot 0x0040) -bor 0x0080
+        $null = $consoleHelper::SetConsoleMode($stdInHandle, $newMode)
+    }
+} catch {
+    # å¿½ç•¥éæ ‡å‡†æ§åˆ¶å°å®¿ä¸»ä¸­çš„åŠ è½½å¼‚å¸¸
+}
+
+# 5. å¼€å¯å…¨ç¨‹åŒé‡æ—¥å¿—
 $logFile = Join-Path -Path $scriptDir -ChildPath "win11_ultra_build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 try {
     Start-Transcript -Path $logFile -Append -Force
 } catch {
-    Write-Host "ÈÕÖ¾³õÊ¼»¯Ê§°Ü: $_" -ForegroundColor Red
+    Write-Host "æ—¥å¿—åˆå§‹åŒ–å¤±è´¥: $_" -ForegroundColor Red
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " win11 Builder (È«°æ±¾Í¨ÓÃ + Éî¶È×ÔÓúÖØÖÃ°æ v7.8) " -ForegroundColor Cyan
-Write-Host " ÈÕÖ¾ÎÄ¼ş: $logFile" -ForegroundColor Cyan
+Write-Host " win11 Builder (å…¨ç‰ˆæœ¬é€šç”¨ + v7.1 åŸå­æ‰¹å¤„ç†å›å½’ç‰ˆ) " -ForegroundColor Cyan
+Write-Host " æ—¥å¿—æ–‡ä»¶: $logFile" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-# 5. ¹¤×÷Ä¿Â¼ÅäÖÃ (Ä¬ÈÏ¶¨Ïòµ½ D ÅÌ)
+# 6. å·¥ä½œç›®å½•é…ç½® (é»˜è®¤å®šå‘åˆ° D ç›˜)
 $targetDisk = "D:\"
 if (-not (Test-Path $targetDisk)) {
-    Write-Host "[ÌáÊ¾] Î´¼ì²âµ½ D ÅÌ£¬¹¤×÷Ä¿Â¼×Ô¶¯»ØÍËµ½ÏµÍ³ÅÌ $($env:SystemDrive)..." -ForegroundColor Yellow
+    Write-Host "[æç¤º] æœªæ£€æµ‹åˆ° D ç›˜ï¼Œå·¥ä½œç›®å½•è‡ªåŠ¨å›é€€åˆ°ç³»ç»Ÿç›˜ $($env:SystemDrive)..." -ForegroundColor Yellow
     $targetDisk = "$($env:SystemDrive)\"
 }
 
@@ -61,53 +83,47 @@ $scratchDir  = Join-Path $targetDisk "scratchdir"
 $workDir     = Join-Path $targetDisk "win11"
 $sourcesDir  = Join-Path $workDir "sources"
 
-Write-Host "¹¤×÷Ä¿Â¼Ëø¶¨ÔÚ: $workDir" -ForegroundColor Green
-Write-Host "Ó³Ïñ¹ÒÔØµãËø¶¨ÔÚ: $scratchDir" -ForegroundColor Green
+Write-Host "å·¥ä½œç›®å½•é”å®šåœ¨: $workDir" -ForegroundColor Green
+Write-Host "æ˜ åƒæŒ‚è½½ç‚¹é”å®šåœ¨: $scratchDir" -ForegroundColor Green
 
-# 6. ÓÃ»§Ä£Ê½Ñ¡Ôñ½»»¥
+# 7. ç”¨æˆ·æ¨¡å¼é€‰æ‹©äº¤äº’
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " ÇëÑ¡Ôñ¾«¼òÖÆ×÷Ä£Ê½ (Trim Mode):" -ForegroundColor Magenta
-Write-Host " [1] ÆÕÍ¨¾«¼ò (ÍÆ¼ö: ¼«ËÙÁ÷³©¡¢ÎÈ¶¨Æ½ºâ¡¢±£Áô×é¼ş·şÎñ¼Ü¹¹)" -ForegroundColor Green
-Write-Host " [2] ¼«ÏŞÑ¹Õ¥ (È«°æ±¾×ÔÊÊÓ¦ WinSxS ÊİÉí + ×¢²á±íÎïÀíÄ¨É±·şÎñ)" -ForegroundColor Red
+Write-Host " è¯·é€‰æ‹©ç²¾ç®€åˆ¶ä½œæ¨¡å¼ (Trim Mode):" -ForegroundColor Magenta
+Write-Host " [1] æ™®é€šç²¾ç®€ (æ¨è: æé€Ÿæµç•…ã€ç¨³å®šå¹³è¡¡ã€ä¿ç•™ç»„ä»¶æœåŠ¡æ¶æ„)" -ForegroundColor Green
+Write-Host " [2] æé™å‹æ¦¨ (å…¨ç‰ˆæœ¬è‡ªé€‚åº” WinSxS ç˜¦èº« + æ³¨å†Œè¡¨ç‰©ç†æŠ¹æ€æœåŠ¡)" -ForegroundColor Red
 Write-Host "==========================================================" -ForegroundColor Magenta
-$trimModeChoice = Read-Host "ÇëÊäÈë¶ÔÓ¦Êı×Ö [1 »ò 2] (Ö±½Ó»Ø³µÄ¬ÈÏ 1)"
+$trimModeChoice = Read-Host "è¯·è¾“å…¥å¯¹åº”æ•°å­— [1 æˆ– 2] (ç›´æ¥å›è½¦é»˜è®¤ 1)"
 if ($trimModeChoice -ne "2") {
     $trimMode = "1"
-    Write-Host ">>> ÒÑÑ¡Ôñ: [1] ÆÕÍ¨¾«¼òÄ£Ê½" -ForegroundColor Green
+    Write-Host ">>> å·²é€‰æ‹©: [1] æ™®é€šç²¾ç®€æ¨¡å¼" -ForegroundColor Green
 } else {
     $trimMode = "2"
-    Write-Host ">>> ÒÑÑ¡Ôñ: [2] ¼«ÏŞÑ¹Õ¥Ä£Ê½ (Í¨ÓÃ×ÔÊÊÓ¦»»Í· + ÎïÀíÄ¨É±·şÎñ)" -ForegroundColor Red
+    Write-Host ">>> å·²é€‰æ‹©: [2] æé™å‹æ¦¨æ¨¡å¼ (é€šç”¨è‡ªé€‚åº”æ¢å¤´ + ç‰©ç†æŠ¹æ€æœåŠ¡)" -ForegroundColor Red
 }
 Write-Host ""
 
-# ----------------- ¡¾ºËĞÄ×ÔÓú¡¿¿ª»úÇåÀí²ĞÁô×¢²á±í¾ä±úÓëÔà¹ÒÔØ -----------------
-Write-Host "ÕıÔÚÖ´ĞĞ»·¾³×ÔÓú¼ì²é²¢ÇåÀí²ĞÁô¹ÒÔØµã..." -ForegroundColor DarkGray
+Write-Host "æ¸…ç†æ®‹ç•™æŒ‚è½½ç‚¹å¹¶é‡ç½®ç¯å¢ƒ..." -ForegroundColor DarkGray
 & reg.exe unload HKLM\zSOFTWARE 2>$null | Out-Null
 & reg.exe unload HKLM\zSYSTEM 2>$null | Out-Null
 & reg.exe unload HKLM\zNTUSER 2>$null | Out-Null
-
-Stop-Process -Name "DismHost" -Force -ErrorAction SilentlyContinue
-& dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>$null | Out-Null
 & dism.exe /English /Cleanup-Wim 2>$null | Out-Null
+cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
 
-if (Test-Path $scratchDir) { Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue }
-if (Test-Path $workDir)    { Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue }
-
+if (Test-Path $workDir) { Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Force -Path $sourcesDir | Out-Null
-New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
 
-$DriveLetter = Read-Host "ÇëÊäÈë Windows 11 ISO ĞéÄâ¹âÇıÅÌ·û (ÀıÈç E)"
+$DriveLetter = Read-Host "è¯·è¾“å…¥ Windows 11 ISO è™šæ‹Ÿå…‰é©±ç›˜ç¬¦ (ä¾‹å¦‚ E)"
 $DriveLetter = ($DriveLetter.TrimEnd('\').TrimEnd(':').Trim()) + ":"
 
 if (-not (Test-Path "$DriveLetter\sources\boot.wim") -or (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$DriveLetter\sources\install.esd"))) {
-    Write-Host "[´íÎó] ÔÚ $DriveLetter ÖĞÎ´ÕÒµ½ÓĞĞ§µÄ Windows °²×°¾µÏñÔ´£¡" -ForegroundColor Red
+    Write-Host "[é”™è¯¯] åœ¨ $DriveLetter ä¸­æœªæ‰¾åˆ°æœ‰æ•ˆçš„ Windows å®‰è£…é•œåƒæºï¼" -ForegroundColor Red
     Stop-Transcript
     pause
     exit
 }
 
-Write-Host "ÕıÔÚ¸´ÖÆ Windows ISO ºËĞÄ½á¹¹µ½¹¤×÷Çø..." -ForegroundColor Green
+Write-Host "æ­£åœ¨å¤åˆ¶ Windows ISO æ ¸å¿ƒç»“æ„åˆ°å·¥ä½œåŒº..." -ForegroundColor Green
 & robocopy.exe "$DriveLetter\\" "$workDir" /E /XF "install.wim" "install.esd" /NDL /NFL /NJH /NJS | Out-Null
 
 $srcWim = "$DriveLetter\sources\install.wim"
@@ -115,21 +131,21 @@ $srcEsd = "$DriveLetter\sources\install.esd"
 $destWim = "$sourcesDir\install.wim"
 
 if (Test-Path $srcWim) {
-    Write-Host "¼ì²âµ½ install.wim£¬»ñÈ¡Ó³Ïñ·Ö¾íÁĞ±í..." -ForegroundColor Green
+    Write-Host "æ£€æµ‹åˆ° install.wimï¼Œè·å–æ˜ åƒåˆ†å·åˆ—è¡¨..." -ForegroundColor Green
     & dism.exe /English /Get-WimInfo "/WimFile:$srcWim"
-    $index = Read-Host "ÇëÊäÈëÒª¾«¼òµÄÄ¿±ê°æ±¾ Index ĞòºÅ"
-    Write-Host "ÕıÔÚµ¼³öÄ¿±ê·Ö¾íµ½¹¤×÷Çø..." -ForegroundColor Green
+    $index = Read-Host "è¯·è¾“å…¥è¦ç²¾ç®€çš„ç›®æ ‡ç‰ˆæœ¬ Index åºå·"
+    Write-Host "æ­£åœ¨å¯¼å‡ºç›®æ ‡åˆ†å·åˆ°å·¥ä½œåŒº..." -ForegroundColor Green
     & dism.exe /English /Export-Image "/SourceImageFile:$srcWim" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
 } else {
-    Write-Host "¼ì²âµ½ install.esd£¬»ñÈ¡Ó³Ïñ·Ö¾íÁĞ±í..." -ForegroundColor Yellow
+    Write-Host "æ£€æµ‹åˆ° install.esdï¼Œè·å–æ˜ åƒåˆ†å·åˆ—è¡¨..." -ForegroundColor Yellow
     & dism.exe /English /Get-WimInfo "/WimFile:$srcEsd"
-    $index = Read-Host "ÇëÊäÈëÒª¾«¼òµÄÄ¿±ê°æ±¾ Index ĞòºÅ"
-    Write-Host "ÕıÔÚ½«Ä¿±ê·Ö¾í´Ó ESD ×ª»»µ¼³öÎª install.wim..." -ForegroundColor Green
+    $index = Read-Host "è¯·è¾“å…¥è¦ç²¾ç®€çš„ç›®æ ‡ç‰ˆæœ¬ Index åºå·"
+    Write-Host "æ­£åœ¨å°†ç›®æ ‡åˆ†å·ä» ESD è½¬æ¢å¯¼å‡ºä¸º install.wim..." -ForegroundColor Green
     & dism.exe /English /Export-Image "/SourceImageFile:$srcEsd" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
 }
 
 if (-not (Test-Path $destWim)) {
-    Write-Host "[ÑÏÖØ´íÎó] install.wim µ¼³öÊ§°Ü£¡ÖÕÖ¹Á÷³Ì¡£" -ForegroundColor Red
+    Write-Host "[ä¸¥é‡é”™è¯¯] install.wim å¯¼å‡ºå¤±è´¥ï¼ç»ˆæ­¢æµç¨‹ã€‚" -ForegroundColor Red
     Stop-Transcript
     pause
     exit
@@ -137,24 +153,29 @@ if (-not (Test-Path $destWim)) {
 
 $index = "1"
 
-Write-Host "½âËø install.wim ·ÃÎÊÈ¨ÏŞ..." -ForegroundColor Green
-attrib.exe -R -S -H "$destWim"
+Write-Host "è§£é” install.wim è®¿é—®æƒé™..." -ForegroundColor Green
+attrib.exe -R -S -H "$destWim" 2>$null
 Start-Process -FilePath "takeown.exe" -ArgumentList "/F `"$destWim`"" -NoNewWindow -Wait
 Start-Process -FilePath "icacls.exe" -ArgumentList "`"$destWim`" /grant *S-1-5-32-544:F /C /Q" -NoNewWindow -Wait
 (Get-Item $destWim).IsReadOnly = $false
 
-Write-Host "ÕıÔÚ¹ÒÔØ install.wim µ½ $scratchDir..." -ForegroundColor Green
+Write-Host "æ­£åœ¨æŒ‚è½½ install.wim åˆ° $scratchDir..." -ForegroundColor Green
+if (Test-Path $scratchDir) {
+    Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
+
 $mountResult = & dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir"
 $mountResult | Out-Host
 
 if (-not (Test-Path "$scratchDir\Windows\System32")) {
-    Write-Host "[ÑÏÖØ´íÎó] Ó³Ïñ¹ÒÔØÊ§°Ü£¡ÖÕÖ¹ÔËĞĞ¡£" -ForegroundColor Red
+    Write-Host "[ä¸¥é‡é”™è¯¯] æ˜ åƒæŒ‚è½½å¤±è´¥ï¼ç»ˆæ­¢è¿è¡Œã€‚" -ForegroundColor Red
     Stop-Transcript
     pause
     exit
 }
 
-# ================= ÖÕ¼«·ÛËéº¯Êı =================
+# ================= è¾…åŠ©å‡½æ•°åŒº =================
 function Force-NukeFolderOrFile {
     param ([string]$Target)
     if (Test-Path -LiteralPath $Target) {
@@ -164,7 +185,6 @@ function Force-NukeFolderOrFile {
         if ($item.PSIsContainer) {
             & takeown.exe /F "$Target" /A /R /D Y 2>$null | Out-Null
             & icacls.exe "$Target" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
-            attrib.exe -R -S -H "$Target" 2>$null
             attrib.exe -R -S -H "$Target\*" /S /D 2>$null
             Remove-Item -LiteralPath $Target -Recurse -Force -ErrorAction SilentlyContinue
             if (Test-Path -LiteralPath $Target) {
@@ -182,8 +202,27 @@ function Force-NukeFolderOrFile {
     }
 }
 
-# ----------------- 1. UWP Ğ¶ÔØ + ¡¾±Ü¿ªÖØ½âÎöµãµÄ°²È«ÎïÀíÇ¿É¾¡¿ -----------------
-Write-Host "ÕıÔÚÇåÀíÈßÓà UWP Ô¤×°Ó¦ÓÃ (ÑÏ¸ñ±£Áô OOBE ÓëÏµÍ³´úÀíÒÀÀµ)..." -ForegroundColor Yellow
+function Safely-UnloadHive {
+    param ([string]$HiveName)
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+    Start-Sleep -Milliseconds 500
+
+    for ($i = 1; $i -le 5; $i++) {
+        $err = & reg.exe unload "$HiveName" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "æˆåŠŸå¸è½½ç¦»çº¿é…ç½®å•å…ƒ: $HiveName" -ForegroundColor DarkGray
+            return $true
+        }
+        Write-Host "æ­£åœ¨ç­‰å¾…é‡Šæ”¾å¥æŸ„ï¼Œå°è¯•ç¬¬ $i æ¬¡é‡è¯•å¸è½½ $HiveName..." -ForegroundColor DarkYellow
+        Start-Sleep -Seconds 1
+    }
+    Write-Host "[è­¦å‘Š] $HiveName å•å…ƒå¸è½½è¶…æ—¶ï¼Œä½†å°†ç»§ç»­æ¨è¿›ã€‚" -ForegroundColor Yellow
+    return $false
+}
+
+# ----------------- 1. UWP å¸è½½ + ã€é¿å¼€é‡è§£æç‚¹çš„å®‰å…¨ç‰©ç†å¼ºåˆ ã€‘ -----------------
+Write-Host "æ­£åœ¨æ¸…ç†å†—ä½™ UWP é¢„è£…åº”ç”¨ (ä¸¥æ ¼ä¿ç•™ OOBE ä¸ç³»ç»Ÿä»£ç†ä¾èµ–)..." -ForegroundColor Yellow
 
 $preservedPackages = @(
     "*VCLibs*",
@@ -209,17 +248,17 @@ foreach ($app in $appxPackages) {
     }
 
     if ($shouldKeep) {
-        Write-Host "±£ÁôºËĞÄ»ù´¡×é¼ş: $($app.DisplayName)" -ForegroundColor DarkGray
+        Write-Host "ä¿ç•™æ ¸å¿ƒåŸºç¡€ç»„ä»¶: $($app.DisplayName)" -ForegroundColor DarkGray
         continue
     }
 
-    Write-Host "É¾³ıÈßÓàÓ¦ÓÃ: $($app.PackageName)" -ForegroundColor Cyan
-    & dism.exe /Image:$scratchDir /Remove-ProvisionedAppxPackage "/PackageName:$($app.PackageName)" | Out-Null
+    Write-Host "åˆ é™¤å†—ä½™åº”ç”¨: $($app.PackageName)" -ForegroundColor Cyan
+    & dism.exe /Image:$scratchDir /Remove-ProvisionedAppxPackage "/PackageName:$($app.PackageName)" 2>$null | Out-Null
 }
 
 $winAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
 if (Test-Path $winAppsDir) {
-    Write-Host "ÕıÔÚ°²È«ÎïÀíÇ¿É¾ WindowsApps ·ÏÆúÓ¦ÓÃ (¾ø¶Ô±£»¤ÏµÍ³µ×²ãÖØ½âÎöµã)..." -ForegroundColor DarkGray
+    Write-Host "æ­£åœ¨å®‰å…¨ç‰©ç†å¼ºåˆ  WindowsApps åºŸå¼ƒåº”ç”¨ (ç»å¯¹ä¿æŠ¤ç³»ç»Ÿåº•å±‚é‡è§£æç‚¹)..." -ForegroundColor DarkGray
     & takeown.exe /F "$winAppsDir" /A 2>$null | Out-Null
     & icacls.exe "$winAppsDir" /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
     
@@ -242,8 +281,8 @@ if (Test-Path $winAppsDir) {
     }
 }
 
-# ----------------- 2. ¹¦ÄÜ°üÇåÀí (±£ÁôÖĞÎÄ + ±£»¤ Hans ×ÖÌå) -----------------
-Write-Host "ÕıÔÚ¼ìË÷ÏµÍ³×é¼ş°ü²¢Ö´ĞĞ¡¾½ö±£ÁôÖĞÎÄ¡¿Éî¶ÈÌŞ³ı..." -ForegroundColor Yellow
+# ----------------- 2. åŠŸèƒ½åŒ…æ¸…ç† (ä¿ç•™ä¸­æ–‡ + ä¿æŠ¤ Hans å­—ä½“) -----------------
+Write-Host "æ­£åœ¨æ£€ç´¢ç³»ç»Ÿç»„ä»¶åŒ…å¹¶æ‰§è¡Œã€ä»…ä¿ç•™ä¸­æ–‡ã€‘æ·±åº¦å‰”é™¤..." -ForegroundColor Yellow
 
 $installedPackages = & dism.exe /English /Image:$scratchDir /Get-Packages /Format:Table
 $pkgLines = $installedPackages -split "`n" | Select-Object -Skip 1
@@ -289,13 +328,13 @@ foreach ($line in $pkgLines) {
     }
 
     if ($shouldDelete) {
-        Write-Host "ÌŞ³ı×é¼ş/ÍâÓï°ü: $pkgId" -ForegroundColor DarkYellow
-        & dism.exe /English /Image:$scratchDir /Remove-Package "/PackageName:$pkgId" /NoRestart | Out-Null
+        Write-Host "å‰”é™¤ç»„ä»¶/å¤–è¯­åŒ…: $pkgId" -ForegroundColor DarkYellow
+        & dism.exe /English /Image:$scratchDir /Remove-Package "/PackageName:$pkgId" /NoRestart 2>$null | Out-Null
     }
 }
 
-# ----------------- 3. °²È«Çı¶¯Ñ¹Õ¥ -----------------
-Write-Host "ÕıÔÚÖ´ĞĞ°²È«Çı¶¯Ñ¹Õ¥ (ÌŞ³ı´òÓ¡»ú/µ÷ÖÆ½âµ÷Æ÷/´«ÕæÇı¶¯)..." -ForegroundColor Yellow
+# ----------------- 3. å®‰å…¨é©±åŠ¨å‹æ¦¨ -----------------
+Write-Host "æ­£åœ¨æ‰§è¡Œå®‰å…¨é©±åŠ¨å‹æ¦¨ (å‰”é™¤æ‰“å°æœº/è°ƒåˆ¶è§£è°ƒå™¨/ä¼ çœŸé©±åŠ¨)..." -ForegroundColor Yellow
 $driverStorePath = Join-Path $scratchDir "Windows\System32\DriverStore\FileRepository"
 
 $safeDriverPurgeList = @(
@@ -311,8 +350,8 @@ if (Test-Path $driverStorePath) {
     }
 }
 
-# ----------------- 4. Í£ÓÃÈßÓàÀÏ¾É Windows ÌØĞÔ -----------------
-Write-Host "¹Ø±ÕÀÏ¾É Windows ÌØĞÔ (WorkFolders/Fax µÈ)..." -ForegroundColor Yellow
+# ----------------- 4. åœç”¨å†—ä½™è€æ—§ Windows ç‰¹æ€§ -----------------
+Write-Host "å…³é—­è€æ—§ Windows ç‰¹æ€§ (WorkFolders/Fax ç­‰)..." -ForegroundColor Yellow
 $featuresToDisable = @(
     "WorkFolders-Client", "Printing-Foundation-Features",
     "Printing-PrintToPDFServices-Features", "FaxServicesClientPackage", "MSRDC-Infrastructure"
@@ -321,8 +360,8 @@ foreach ($feat in $featuresToDisable) {
     & dism.exe /English /Image:$scratchDir /Disable-Feature "/FeatureName:$feat" /Remove /NoRestart 2>$null | Out-Null
 }
 
-# ----------------- 5. ÎïÀí·ÛËé´óÎÄ¼şÊµÌå -----------------
-Write-Host "Éî¶ÈÎïÀí·ÛËé·Ç±ØÒª´óÎÄ¼şÊµÌå (Edge/OneDrive/Defender/Speech)..." -ForegroundColor Yellow
+# ----------------- 5. ç‰©ç†ç²‰ç¢å¤§æ–‡ä»¶å®ä½“ -----------------
+Write-Host "æ·±åº¦ç‰©ç†ç²‰ç¢éå¿…è¦å¤§æ–‡ä»¶å®ä½“ (Edge/OneDrive/Defender/Speech)..." -ForegroundColor Yellow
 
 $recoveryDir = Join-Path $scratchDir "Windows\System32\Recovery"
 Force-NukeFolderOrFile (Join-Path $recoveryDir "winre.wim")
@@ -389,14 +428,14 @@ if (Test-Path $mediaDir) {
 
 $fontsPath = Join-Path $scratchDir "Windows\Fonts"
 if (Test-Path $fontsPath) {
-    Write-Host "ÕıÔÚ¾«Á¶ÖĞÎÄ×ÖÌå¿â..." -ForegroundColor DarkGray
+    Write-Host "æ­£åœ¨ç²¾ç‚¼ä¸­æ–‡å­—ä½“åº“..." -ForegroundColor DarkGray
     Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "calibri*.*", "arial*.*", "times*.*", "msyh*.*", "simsun*.*", "simhei*.*", "kaiu*.*", "mingliu*.*" | ForEach-Object {
         Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
     }
 }
 
-# ----------------- 6. ÀëÏß×¢²á±íÉî¶ÈÑ¹Õ¥ (³¹µ×¶Å¾ø½»»¥¹ÒÆğÓë¾ä±úËÀËø) -----------------
-Write-Host "ÕıÔÚ¹ÒÔØÀëÏß×¢²á±íÅäÖÃµ¥Ôª..." -ForegroundColor Green
+# ----------------- 6. ç¦»çº¿æ³¨å†Œè¡¨æ·±åº¦å‹æ¦¨ (åŸå­æ‰¹å¤„ç†Â·å½»åº•æœç»ç®¡é“ä¸æ€è½¯æ­»é”) -----------------
+Write-Host "æ­£åœ¨æŒ‚è½½ç¦»çº¿æ³¨å†Œè¡¨é…ç½®å•å…ƒ..." -ForegroundColor Green
 $softwarePath = Join-Path $scratchDir "Windows\System32\config\SOFTWARE"
 $systemPath   = Join-Path $scratchDir "Windows\System32\config\SYSTEM"
 $ntuserPath   = Join-Path $scratchDir "Users\Default\ntuser.dat"
@@ -405,16 +444,11 @@ attrib.exe -R -S -H "$softwarePath" 2>$null
 attrib.exe -R -S -H "$systemPath" 2>$null
 attrib.exe -R -S -H "$ntuserPath" 2>$null
 
-& reg.exe load HKLM\zSOFTWARE "$softwarePath" | Out-Null
-& reg.exe load HKLM\zSYSTEM "$systemPath" | Out-Null
-& reg.exe load HKLM\zNTUSER "$ntuserPath" | Out-Null
+& reg.exe load HKLM\zSOFTWARE "$softwarePath" 2>$null | Out-Null
+& reg.exe load HKLM\zSYSTEM "$systemPath" 2>$null | Out-Null
+& reg.exe load HKLM\zNTUSER "$ntuserPath" 2>$null | Out-Null
 
-$imageArch = "amd64"
-$archQuery = & reg.exe query "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion" /v BuildArchitecture 2>$null
-if ($archQuery -match "REG_SZ\s+(\S+)") {
-    $imageArch = $matches[1].Trim()
-}
-Write-Host "³É¹¦Ê¶±ğ²¢»º´æ¾µÏñÎïÀí¼Ü¹¹: $imageArch" -ForegroundColor Green
+Write-Host "æ­£åœ¨é€šè¿‡ç‹¬ç«‹æ‰¹å¤„ç†å¼•æ“æ‰§è¡ŒåŸå­æ³¨å†Œè¡¨ä¿®æ”¹ (æœç» PowerShell ç®¡é“å¡é¡¿)..." -ForegroundColor Green
 
 $normalServices = @(
     "SysMain", "DiagTrack", "dmwappushservice", "WerSvc", "PcaSvc", "WSearch",
@@ -422,106 +456,114 @@ $normalServices = @(
     "wisvc", "WalletService", "SharedRealitySvc", "XblAuthManager", "XblGameSave",
     "XboxNetApiSvc", "XboxGipSvc", "AllJoynRouter", "SecurityHealthService"
 )
-
 $defenderFullStack = @("WinDefend", "WdNisSvc", "Sense", "WdFilter", "WdNisDrv", "WdBoot")
 
-if ($trimMode -eq "2") {
-    Write-Host ">>> [¼«ÏŞÄ£Ê½] Ö´ĞĞ Defender ÖÕ¼«ÎïÀíÄ¨É±Óë·şÎñÇå³ı..." -ForegroundColor Red
-    & reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch" /v "DriverLoadPolicy" /t REG_DWORD /d 8 /f | Out-Null
+# æ„å»ºæ‰¹å¤„ç†è„šæœ¬å®ä½“
+$batLines = New-Object System.Collections.Generic.List[string]
+$batLines.Add("@echo off")
+$batLines.Add("chcp 65001 >nul")
 
+if ($trimMode -eq "2") {
+    $batLines.Add("echo >>> æ‰§è¡Œæé™æ¨¡å¼: æŠ¹æ€ Defender ä¸æ— ç”¨åº•å±‚æœåŠ¡...")
+    $batLines.Add('reg add "HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch" /v "DriverLoadPolicy" /t REG_DWORD /d 8 /f >nul 2>nul')
     $extremeDeleteServices = $normalServices + $defenderFullStack + @("Spooler", "PrintNotify", "Fax", "RemoteRegistry", "diagsvc")
     foreach ($svc in $extremeDeleteServices) {
-        cmd.exe /c "reg delete `"HKLM\zSYSTEM\ControlSet001\Services\$svc`" /f >nul 2>nul"
+        $batLines.Add("reg delete `"HKLM\zSYSTEM\ControlSet001\Services\$svc`" /f >nul 2>nul")
     }
 } else {
-    Write-Host ">>> [ÆÕÍ¨Ä£Ê½] °²È«Í£ÓÃºóÌ¨·şÎñ (Start = 4)..." -ForegroundColor Cyan
+    $batLines.Add("echo >>> æ‰§è¡Œæ™®é€šæ¨¡å¼: å®‰å…¨åœç”¨åå°æœåŠ¡ (Start = 4)...")
     $allServicesToDisable = $normalServices + $defenderFullStack
     foreach ($svc in $allServicesToDisable) {
-        & reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$svc" /v "Start" /t REG_DWORD /d 4 /f 2>$null | Out-Null
+        $batLines.Add("reg add `"HKLM\zSYSTEM\ControlSet001\Services\$svc`" /v `"Start`" /t REG_DWORD /d 4 /f >nul 2>nul")
     }
 }
 
-Write-Host "ÕıÔÚĞ´ÈëÏµÍ³»ù´¡ÓÅ»¯¡¢Ò£²âÆÁ±ÎÓë OneDrive ·âËø²ßÂÔ..." -ForegroundColor DarkGray
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v "AllowTelemetry" /t REG_DWORD /d 0 /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v "MaxTelemetryAllowed" /t REG_DWORD /d 0 /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting" /v "Disabled" /t REG_DWORD /d 1 /f | Out-Null
-& reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 0 /f | Out-Null
+# é¥æµ‹ä¸åŸºæœ¬ä¼˜åŒ–
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v "AllowTelemetry" /t REG_DWORD /d 0 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v "MaxTelemetryAllowed" /t REG_DWORD /d 0 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting" /v "Disabled" /t REG_DWORD /d 1 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 0 /f >nul 2>nul')
 
-# ³¹µ×·âËø OneDrive
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableFileSyncNGSC" /t REG_DWORD /d 1 /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableFileSync" /t REG_DWORD /d 1 /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableMeteredNetworkFileSync" /t REG_DWORD /d 1 /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableLibrariesStylePin" /t REG_DWORD /d 1 /f | Out-Null
+# å½»åº•ç¦ç”¨ OneDrive
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableFileSyncNGSC" /t REG_DWORD /d 1 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableFileSync" /t REG_DWORD /d 1 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableMeteredNetworkFileSync" /t REG_DWORD /d 1 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableLibrariesStylePin" /t REG_DWORD /d 1 /f >nul 2>nul')
+$batLines.Add('reg delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "OneDrive" /f >nul 2>nul')
+$batLines.Add('reg delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "OneDriveSetup" /f >nul 2>nul')
+$batLines.Add('reg delete "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Run" /v "OneDrive" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}" /v "System.IsPinnedToNameSpaceTree" /t REG_DWORD /d 0 /f >nul 2>nul')
 
-cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Run`" /v `"OneDrive`" /f >nul 2>nul"
-cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Run`" /v `"OneDriveSetup`" /f >nul 2>nul"
-cmd.exe /c "reg delete `"HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Run`" /v `"OneDrive`" /f >nul 2>nul"
-& reg.exe add "HKLM\zSOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}" /v "System.IsPinnedToNameSpaceTree" /t REG_DWORD /d 0 /f | Out-Null
+# æœç´¢ç¦ç”¨
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "AllowCortana" /t REG_DWORD /d 0 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "DisableWebSearch" /t REG_DWORD /d 1 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "ConnectedSearchUseWeb" /t REG_DWORD /d 0 /f >nul 2>nul')
 
-# ËÑË÷½ûÓÃ
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "AllowCortana" /t REG_DWORD /d 0 /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "DisableWebSearch" /t REG_DWORD /d 1 /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "ConnectedSearchUseWeb" /t REG_DWORD /d 0 /f | Out-Null
+# Edge å…³è”æ¸…ç†ä¸ Explorer å¢å¼º
+$batLines.Add('reg delete "HKLM\zSOFTWARE\Classes\MSEdgeHTM" /f >nul 2>nul')
+$batLines.Add('reg delete "HKLM\zSOFTWARE\Classes\MSEdgePDF" /f >nul 2>nul')
+$batLines.Add('reg delete "HKLM\zSOFTWARE\Classes\Applications\msedge.exe" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer" /v "NoInternetOpenWith" /t REG_DWORD /d 1 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer" /v "NoUseStoreOpenWith" /t REG_DWORD /d 1 /f >nul 2>nul')
 
-Write-Host "ÕıÔÚÓÅ»¯¼ÇÊÂ±¾ÓëÍ¼Æ¬²é¿´Æ÷¹ØÁª (ÏÔÊ½´«²Î¶Å¾ø STDIN ¼ÙËÀ)..." -ForegroundColor DarkGray
-cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Classes\MSEdgeHTM`" /f >nul 2>nul"
-cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Classes\MSEdgePDF`" /f >nul 2>nul"
-cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Classes\Applications\msedge.exe`" /f >nul 2>nul"
+# è®°äº‹æœ¬å…³è”ä¿®å¤
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.txt" /ve /t REG_SZ /d "txtfile" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.txt" /v "PerceivedType" /t REG_SZ /d "text" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.txt\OpenWithProgids" /v "txtfile" /t REG_SZ /d "" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.txt\ShellNew" /v "NullFile" /t REG_SZ /d "" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\txtfile" /ve /t REG_SZ /d "æ–‡æœ¬æ–‡æ¡£" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\txtfile\DefaultIcon" /ve /t REG_EXPAND_SZ /d "%%SystemRoot%%\system32\imageres.dll,-102" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\txtfile\shell\open\command" /ve /t REG_EXPAND_SZ /d "\"%%SystemRoot%%\System32\notepad.exe\" \"%%1\"" /f >nul 2>nul')
 
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer" /v "NoInternetOpenWith" /t REG_DWORD /d 1 /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer" /v "NoUseStoreOpenWith" /t REG_DWORD /d 1 /f | Out-Null
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.xml" /ve /t REG_SZ /d "xmlfile" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.xml" /v "PerceivedType" /t REG_SZ /d "text" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\.xml\OpenWithProgids" /v "xmlfile" /t REG_SZ /d "" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\xmlfile" /ve /t REG_SZ /d "XML æ–‡æ¡£" /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Classes\xmlfile\shell\open\command" /ve /t REG_EXPAND_SZ /d "\"%%SystemRoot%%\System32\notepad.exe\" \"%%1\"" /f >nul 2>nul')
 
-$notepadSysCmd = "`"%SystemRoot%\System32\notepad.exe`" `"%1`""
+$batLines.Add('reg add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe" /v "UseFilter" /t REG_DWORD /d 0 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe" /ve /t REG_EXPAND_SZ /d "%%SystemRoot%%\system32\notepad.exe" /f >nul 2>nul')
+$batLines.Add('reg delete "HKLM\zSOFTWARE\Classes\Applications\notepad.exe" /v "NoOpenWith" /f >nul 2>nul')
 
-& reg.exe add "HKLM\zSOFTWARE\Classes\.txt" /ve /t REG_SZ /d "txtfile" /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Classes\.txt" /v "PerceivedType" /t REG_SZ /d "text" /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Classes\.txt\OpenWithProgids" /v "txtfile" /t REG_NONE /d "" /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Classes\.txt\ShellNew" /v "NullFile" /t REG_SZ /d "" /f | Out-Null
-
-& reg.exe add "HKLM\zSOFTWARE\Classes\txtfile" /ve /t REG_SZ /d "ÎÄ±¾ÎÄµµ" /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Classes\txtfile\DefaultIcon" /ve /t REG_EXPAND_SZ /d "`"%SystemRoot%\system32\imageres.dll`",-102" /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Classes\txtfile\shell\open\command" /ve /t REG_EXPAND_SZ /d $notepadSysCmd /f | Out-Null
-
-& reg.exe add "HKLM\zSOFTWARE\Classes\.xml" /ve /t REG_SZ /d "xmlfile" /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Classes\.xml" /v "PerceivedType" /t REG_SZ /d "text" /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Classes\.xml\OpenWithProgids" /v "xmlfile" /t REG_NONE /d "" /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Classes\xmlfile" /ve /t REG_SZ /d "XML ÎÄµµ" /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Classes\xmlfile\shell\open\command" /ve /t REG_EXPAND_SZ /d $notepadSysCmd /f | Out-Null
-
-& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe" /v "UseFilter" /t REG_DWORD /d 0 /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe" /ve /t REG_EXPAND_SZ /d "`"%SystemRoot%\system32\notepad.exe`"" /f | Out-Null
-cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Classes\Applications\notepad.exe`" /v `"NoOpenWith`" /f >nul 2>nul"
-
+# ç»å…¸ç…§ç‰‡æŸ¥çœ‹å™¨æ¿€æ´»
 $photoExts = @(".jpg", ".jpeg", ".png", ".bmp", ".gif", ".ico", ".tiff", ".tif", ".jfif")
-& reg.exe add "HKLM\zSOFTWARE\RegisteredApplications" /v "Windows Photo Viewer" /t REG_SZ /d "SOFTWARE\Microsoft\Windows Photo Viewer\Capabilities" /f | Out-Null
+$batLines.Add('reg add "HKLM\zSOFTWARE\RegisteredApplications" /v "Windows Photo Viewer" /t REG_SZ /d "SOFTWARE\Microsoft\Windows Photo Viewer\Capabilities" /f >nul 2>nul')
 foreach ($ext in $photoExts) {
-    & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations" /v "$ext" /t REG_SZ /d "PhotoViewer.FileAssoc.Tiff" /f | Out-Null
-    & reg.exe add "HKLM\zSOFTWARE\Classes\$ext" /ve /t REG_SZ /d "PhotoViewer.FileAssoc.Tiff" /f | Out-Null
+    $batLines.Add("reg add `"HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations`" /v `"$ext`" /t REG_SZ /d `"PhotoViewer.FileAssoc.Tiff`" /f >nul 2>nul")
+    $batLines.Add("reg add `"HKLM\zSOFTWARE\Classes\$ext`" /ve /t REG_SZ /d `"PhotoViewer.FileAssoc.Tiff`" /f >nul 2>nul")
 }
 
-Write-Host "ÕıÔÚĞ´ÈëÓ²¼ş¼ì²âÈÆ¹ı (LabConfig) Óë OOBE ±¾µØ»¯²ÎÊı..." -ForegroundColor DarkGray
+# ç¡¬ä»¶ç»•è¿‡ä¸ OOBE ä¼˜åŒ–
 $labConfigKeys = @("BypassCPUCheck", "BypassRAMCheck", "BypassSecureBootCheck", "BypassStorageCheck", "BypassTPMCheck", "BypassDiskCheck")
 foreach ($k in $labConfigKeys) {
-    & reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $k /t REG_DWORD /d 1 /f | Out-Null
+    $batLines.Add("reg add `"HKLM\zSYSTEM\Setup\LabConfig`" /v `"$k`" /t REG_DWORD /d 1 /f >nul 2>nul")
 }
-& reg.exe add "HKLM\zSYSTEM\Setup\MoSetup" /v "AllowUpgradesWithUnsupportedTPMOrCPU" /t REG_DWORD /d 1 /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v "DisableWindowsConsumerFeatures" /t REG_DWORD /d 1 /f | Out-Null
+$batLines.Add('reg add "HKLM\zSYSTEM\Setup\MoSetup" /v "AllowUpgradesWithUnsupportedTPMOrCPU" /t REG_DWORD /d 1 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v "DisableWindowsConsumerFeatures" /t REG_DWORD /d 1 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v "BypassNRO" /t REG_DWORD /d 1 /f >nul 2>nul')
+$batLines.Add('reg add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v "DisableOnline" /t REG_DWORD /d 1 /f >nul 2>nul')
 
-& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v "BypassNRO" /t REG_DWORD /d 1 /f | Out-Null
-& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v "DisableOnline" /t REG_DWORD /d 1 /f | Out-Null
+# å†™å…¥ä¸´æ—¶æ‰¹å¤„ç†å¹¶ä»¥åŸç”Ÿ cmd å¿«é€Ÿæ‰§è¡Œ (0 å¥æŸ„å ç”¨)
+$tempBatFile = Join-Path $env:TEMP "win11_reg_apply.bat"
+[System.IO.File]::WriteAllLines($tempBatFile, $batLines, [System.Text.Encoding]::ASCII)
 
-Write-Host "ÕıÔÚ°²È«Ğ¶ÔØÀëÏß×¢²á±íÅäÖÃµ¥Ôª..." -ForegroundColor Green
-Start-Sleep -Seconds 1
-& reg.exe unload HKLM\zSOFTWARE 2>$null | Out-Null
-& reg.exe unload HKLM\zSYSTEM 2>$null | Out-Null
-& reg.exe unload HKLM\zNTUSER 2>$null | Out-Null
+$proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$tempBatFile`"" -NoNewWindow -Wait -PassThru
+Remove-Item -LiteralPath $tempBatFile -Force -ErrorAction SilentlyContinue
 
-# ----------------- 7. ×¢Èë autounattend.xml (30ÃëÖÇÄÜµ¹¼ÆÊ±ÎŞÈËÖµÊØ) -----------------
-Write-Host "ÕıÔÚÅäÖÃ¸ß¼¶ÎŞÈËÖµÊØÓ¦´ğÎÄ¼ş..." -ForegroundColor Green
+Write-Host ">>> æ³¨å†Œè¡¨ä¼˜åŒ–ä¸æœåŠ¡é…ç½®å·²æé€Ÿåº”ç”¨å®Œæˆï¼" -ForegroundColor Green
 
+# é‡Šæ”¾å¹¶å®‰å…¨å¸è½½é…ç½®å•å…ƒ
+Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
+Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
+Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
+
+# ----------------- 7. æ³¨å…¥ autounattend.xml (30ç§’æ™ºèƒ½å€’è®¡æ—¶æ— äººå€¼å®ˆ) -----------------
+Write-Host "æ­£åœ¨é…ç½®é«˜çº§æ— äººå€¼å®ˆåº”ç­”æ–‡ä»¶..." -ForegroundColor Green
+
+# 30 ç§’æ™ºèƒ½å€’è®¡æ—¶å‡½æ•° (å…·å¤‡ç¯å¢ƒè‡ªé€‚åº”é˜²å´©é€»è¾‘)
 function Read-InputWithTimeout {
     param(
-        [string]$Prompt = "ÇëÊäÈë×Ô¶¨ÒåÓÃ»§Ãû",
+        [string]$Prompt = "è¯·è¾“å…¥è‡ªå®šä¹‰ç”¨æˆ·å",
         [int]$Seconds = 30,
         [string]$Default = "Admin"
     )
@@ -529,7 +571,7 @@ function Read-InputWithTimeout {
     try {
         $null = [Console]::KeyAvailable
     } catch {
-        $fallback = Read-Host "$Prompt (»Ø³µÄ¬ÈÏ: $Default)"
+        $fallback = Read-Host "$Prompt (å›è½¦é»˜è®¤: $Default)"
         if ([string]::IsNullOrWhiteSpace($fallback)) { return @{ TimedOut = $false; Value = $Default } }
         return @{ TimedOut = $false; Value = $fallback.Trim() }
     }
@@ -541,14 +583,14 @@ function Read-InputWithTimeout {
     while ($true) {
         $remaining = $Seconds - [int]([DateTime]::Now - $startTime).TotalSeconds
         if ($remaining -le 0 -and $inputStr.Length -eq 0) {
-            Write-Host "`n>>> [³¬Ê±] ³¬¹ı $Seconds ÃëÎ´ÊäÈë£¬ÒÑ×Ô¶¯²ÉÓÃÄ¬ÈÏÓÃ»§Ãû: $Default (ÃÜÂë×Ô¶¯Áô¿Õ)" -ForegroundColor Yellow
+            Write-Host "`n>>> [è¶…æ—¶] è¶…è¿‡ $Seconds ç§’æœªè¾“å…¥ï¼Œå·²è‡ªåŠ¨é‡‡ç”¨é»˜è®¤ç”¨æˆ·å: $Default (å¯†ç è‡ªåŠ¨ç•™ç©º)" -ForegroundColor Yellow
             return @{ TimedOut = $true; Value = $Default }
         }
 
         if ($inputStr.Length -eq 0 -and $remaining -ne $lastPrinted) {
             $lastPrinted = $remaining
-            [Console]::CursorLeft = 0
-            Write-Host -NoNewline "$Prompt (Ä¬ÈÏ: $Default) [Ê£Óà $remaining Ãë]: " -ForegroundColor Cyan
+            try { [Console]::CursorLeft = 0 } catch { }
+            Write-Host -NoNewline "$Prompt (é»˜è®¤: $Default) [å‰©ä½™ $remaining ç§’]: " -ForegroundColor Cyan
         }
 
         if ([Console]::KeyAvailable) {
@@ -569,10 +611,12 @@ function Read-InputWithTimeout {
             }
             elseif ($key.KeyChar -ge 32) {
                 if ($inputStr.Length -eq 0) {
-                    [Console]::CursorLeft = 0
-                    $blank = " " * [Math]::Max(1, ([Console]::WindowWidth - 1))
-                    Write-Host -NoNewline $blank
-                    [Console]::CursorLeft = 0
+                    try {
+                        [Console]::CursorLeft = 0
+                        $blank = " " * [Math]::Max(1, ([Console]::WindowWidth - 1))
+                        Write-Host -NoNewline $blank
+                        [Console]::CursorLeft = 0
+                    } catch { }
                     Write-Host -NoNewline "${Prompt}: " -ForegroundColor Cyan
                 }
                 $inputStr.Append($key.KeyChar) | Out-Null
@@ -583,18 +627,20 @@ function Read-InputWithTimeout {
     }
 }
 
-$userResult = Read-InputWithTimeout -Prompt "ÇëÊäÈëµÇÂ¼ÓÃ»§Ãû" -Seconds 30 -Default "Admin"
+# è·å–ç”¨æˆ·å
+$userResult = Read-InputWithTimeout -Prompt "è¯·è¾“å…¥ç™»å½•ç”¨æˆ·å" -Seconds 30 -Default "Admin"
 $inputUser = $userResult.Value
 
 if ($inputUser -match "^(Administrator|Guest)$") {
-    Write-Host "[¾¯¸æ] ÊäÈëÁËÏµÍ³±£ÁôÕË»§Ãû $inputUser£¬×Ô¶¯ÖØÖÃÎª Admin£¡" -ForegroundColor Yellow
+    Write-Host "[è­¦å‘Š] è¾“å…¥äº†ç³»ç»Ÿä¿ç•™è´¦æˆ·å $inputUserï¼Œè‡ªåŠ¨é‡ç½®ä¸º Adminï¼" -ForegroundColor Yellow
     $inputUser = "Admin"
 }
 
+# å¯†ç è®¾å®š
 if ($userResult.TimedOut) {
     $inputPass = ""
 } else {
-    $inputPass = Read-Host "ÇëÊäÈëµÇÂ¼ÃÜÂë (Ö±½Ó»Ø³µ±íÊ¾Áô¿ÕÎŞÃÜÂë)"
+    $inputPass = Read-Host "è¯·è¾“å…¥ç™»å½•å¯†ç  (ç›´æ¥å›è½¦è¡¨ç¤ºç•™ç©ºæ— å¯†ç )"
 }
 
 $inputPassEscaped = [System.Security.SecurityElement]::Escape($inputPass)
@@ -670,7 +716,7 @@ $unattendTemplate = @'
 			<UserAccounts>
 				<LocalAccounts>
 					<LocalAccount wcm:action="add">
-						<Description>×Ô¶¨Òå¹ÜÀíÔ±ÕË»§</Description>
+						<Description>è‡ªå®šä¹‰ç®¡ç†å‘˜è´¦æˆ·</Description>
 						<DisplayName>__CUSTOM_USER__</DisplayName>
 						<Group>Administrators</Group>
 						<Name>__CUSTOM_USER__</Name>
@@ -915,21 +961,22 @@ $autoUnattendXml | Out-File -FilePath (Join-Path $sysprepDir "autounattend.xml")
 $autoUnattendXml | Out-File -FilePath (Join-Path $pantherDir "unattend.xml") -Encoding utf8 -Force
 $autoUnattendXml | Out-File -FilePath (Join-Path $workDir "autounattend.xml") -Encoding utf8 -Force
 
-# ----------------- 8. Ä£Ê½·ÖÖ§£º¼«ÏŞÄ£Ê½Ö´ĞĞ¡¾Í¨ÓÃ×ÔÊÊÓ¦ WinSxS ÊİÉí¡¿ -----------------
+# ----------------- 8. æ¨¡å¼åˆ†æ”¯ï¼šæé™æ¨¡å¼æ‰§è¡Œã€é€šç”¨è‡ªé€‚åº” WinSxS ç˜¦èº«ã€‘ -----------------
 if ($trimMode -eq "2") {
-    Write-Host ">>> [¼«ÏŞÄ£Ê½] Ö´ĞĞÍ¨ÓÃ×ÔÊÊÓ¦ WinSxS ×é¼ş¿âÉî¶ÈÊİÉí (¼æÈİÈ«°æ±¾ Win11)..." -ForegroundColor Red
+    Write-Host ">>> [æé™æ¨¡å¼] æ‰§è¡Œé€šç”¨è‡ªé€‚åº” WinSxS ç»„ä»¶åº“æ·±åº¦ç˜¦èº« (å…¼å®¹å…¨ç‰ˆæœ¬ Win11)..." -ForegroundColor Red
     
     $winsxsPath     = Join-Path $scratchDir "Windows\WinSxS"
     $winsxsEditPath = Join-Path $scratchDir "Windows\WinSxS_edit"
 
-    $arch = $imageArch
-    Write-Host ">>> µ÷ÓÃÒÑËø¶¨µÄÏµÍ³ÎïÀí¼Ü¹¹: $arch£¬ÕıÔÚ¹¹½¨¶¯Ì¬±£ÁôÁ´..." -ForegroundColor Cyan
+    $arch = if (Test-Path "$scratchDir\Windows\SysWOW64") { "amd64" } else { "arm64" }
+    Write-Host ">>> è¯†åˆ«åˆ°ç³»ç»Ÿæ¶æ„ä¸º: $archï¼Œæ­£åœ¨æ„å»ºåŠ¨æ€ä¿ç•™é“¾..." -ForegroundColor Cyan
 
     & takeown.exe /F "$winsxsPath" /R /D Y 2>$null | Out-Null
     & icacls.exe "$winsxsPath" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
     
     New-Item -Path $winsxsEditPath -ItemType Directory -Force | Out-Null
 
+    # ä¿æŠ¤é€šç”¨æ ¸å¿ƒå…ƒæ•°æ®ç›®å½•
     $metaDirs = @("Catalogs", "FileMaps", "Fusion", "InstallTemp", "Manifests", "Settings")
     foreach ($meta in $metaDirs) {
         $metaSrc = Join-Path $winsxsPath $meta
@@ -938,6 +985,7 @@ if ($trimMode -eq "2") {
         }
     }
 
+    # åŠ¨æ€ç‰¹å¾é€šé…ä¿ç•™
     $featureKeywords = @(
         "*common-controls*",
         "*gdiplus*",
@@ -968,29 +1016,30 @@ if ($trimMode -eq "2") {
     Force-NukeFolderOrFile $winsxsPath
     Rename-Item -Path $winsxsEditPath -NewName "WinSxS" -Force
 
-    Write-Host ">>> ×ÔÊÊÓ¦ WinSxS ÊİÉíÍê³É£¡ÒÑ°²È«±£Áô¹Ø¼üÒÀÀµ¡£" -ForegroundColor Green
+    Write-Host ">>> è‡ªé€‚åº” WinSxS ç˜¦èº«å®Œæˆï¼å·²å®‰å…¨ä¿ç•™å…³é”®ä¾èµ–ã€‚" -ForegroundColor Green
 } else {
-    Write-Host ">>> [ÆÕÍ¨Ä£Ê½] Ö´ĞĞ¹Ù·½±ê×¼ ResetBase ÇåÀí²¹¶¡»º´æ..." -ForegroundColor Green
-    & dism.exe /English /Image:$scratchDir /Cleanup-Image /StartComponentCleanup /ResetBase | Out-Null
+    Write-Host ">>> [æ™®é€šæ¨¡å¼] æ‰§è¡Œå®˜æ–¹æ ‡å‡† ResetBase æ¸…ç†è¡¥ä¸ç¼“å­˜..." -ForegroundColor Green
+    & dism.exe /English /Image:$scratchDir /Cleanup-Image /StartComponentCleanup /ResetBase 2>$null | Out-Null
 }
 
-Write-Host "ÕıÔÚ±£´æ²¢Ğ¶ÔØ install.wim..." -ForegroundColor Green
+# æäº¤å¹¶å¸è½½ä¸»é•œåƒ
+Write-Host "æ­£åœ¨ä¿å­˜å¹¶å¸è½½ install.wim..." -ForegroundColor Green
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
 
-# ----------------- 9. µ¼³öÎª¸ßÑ¹ËõÂÊ ESD -----------------
-Write-Host "ÕıÔÚµ¼³öÎª¸ßÑ¹ËõÂÊ install.esd..." -ForegroundColor Green
+# ----------------- 9. å¯¼å‡ºä¸ºé«˜å‹ç¼©ç‡ ESD -----------------
+Write-Host "æ­£åœ¨å¯¼å‡ºä¸ºé«˜å‹ç¼©ç‡ install.esd..." -ForegroundColor Green
 $esdFile = Join-Path $sourcesDir "install.esd"
 & dism.exe /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:1" "/DestinationImageFile:$esdFile" /Compress:recovery /CheckIntegrity
 
 if (Test-Path -LiteralPath $esdFile) {
-    Write-Host "[³É¹¦] install.esd ¹¹½¨Íê³É£¬ÒÑÒÆ³ıÁÙÊ± install.wim¡£" -ForegroundColor Green
+    Write-Host "[æˆåŠŸ] install.esd æ„å»ºå®Œæˆï¼Œå·²ç§»é™¤ä¸´æ—¶ install.wimã€‚" -ForegroundColor Green
     Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
 } else {
-    Write-Host "[¾¯¸æ] ESD ×ª»»Òì³££¬±£Áô install.wim ¼ÌĞøÁ÷³Ì¡£" -ForegroundColor Yellow
+    Write-Host "[è­¦å‘Š] ESD è½¬æ¢å¼‚å¸¸ï¼Œä¿ç•™ install.wim ç»§ç»­æµç¨‹ã€‚" -ForegroundColor Yellow
 }
 
-# ----------------- 10. ĞŞ²¹ WinPE (boot.wim) -----------------
-Write-Host "Îª WinPE (boot.wim) Ğ´ÈëÃâÓ²¼ş¼ì²â²ßÂÔ..." -ForegroundColor Green
+# ----------------- 10. ä¿®è¡¥ WinPE (boot.wim) -----------------
+Write-Host "ä¸º WinPE (boot.wim) å†™å…¥å…ç¡¬ä»¶æ£€æµ‹ç­–ç•¥..." -ForegroundColor Green
 $bootWimPath = Join-Path $sourcesDir "boot.wim"
 attrib.exe -R -S -H "$bootWimPath" 2>$null
 
@@ -1002,29 +1051,28 @@ if ($bootInfo -notmatch "Index : 2") { $bootIndex = "1" }
 
 $bootSystemPath = Join-Path $scratchDir "Windows\System32\config\SYSTEM"
 attrib.exe -R -S -H "$bootSystemPath" 2>$null
-& reg.exe load HKLM\zSYSTEM "$bootSystemPath" | Out-Null
+& reg.exe load HKLM\zSYSTEM "$bootSystemPath" 2>$null | Out-Null
 
 foreach ($k in $labConfigKeys) {
-    & reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $k /t REG_DWORD /d 1 /f | Out-Null
+    & reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $k /t REG_DWORD /d 1 /f 2>$null | Out-Null
 }
 
-Start-Sleep -Seconds 1
-& reg.exe unload HKLM\zSYSTEM 2>$null | Out-Null
+Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
 
-# ----------------- 11. ×îÖÕ´ò°üÉú³É ISO (ÍêÃÀ UEFI + BIOS Ë«Ä£Òıµ¼) -----------------
-Write-Host "ÕıÔÚ´ò°ü×îÖÕ¿ÉÒıµ¼ ISO ¾µÏñ (¼æÈİ BIOS + UEFI)..." -ForegroundColor Green
+# ----------------- 11. æœ€ç»ˆæ‰“åŒ…ç”Ÿæˆ ISO (å®Œç¾ UEFI + BIOS åŒæ¨¡å¼•å¯¼) -----------------
+Write-Host "æ­£åœ¨æ‰“åŒ…æœ€ç»ˆå¯å¼•å¯¼ ISO é•œåƒ (å…¼å®¹ BIOS + UEFI)..." -ForegroundColor Green
 
 $oscdimgExe = Join-Path $scriptDir "oscdimg.exe"
 
 if (-not (Test-Path $oscdimgExe)) {
     $adkOscdimg = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
     if (Test-Path $adkOscdimg) {
-        Write-Host "´Ó±¾µØ Windows ADK ¼ì²âµ½ oscdimg.exe£¬ÕıÔÚÌáÈ¡..." -ForegroundColor Green
+        Write-Host "ä»æœ¬åœ° Windows ADK æ£€æµ‹åˆ° oscdimg.exeï¼Œæ­£åœ¨æå–..." -ForegroundColor Green
         Copy-Item -Path $adkOscdimg -Destination $oscdimgExe -Force
     } else {
-        Write-Host "ÕıÔÚÀ­È¡Ö§³ÖÏÖ´ú UEFI µÄ oscdimg.exe..." -ForegroundColor Yellow
+        Write-Host "æ­£åœ¨æ‹‰å–æ”¯æŒç°ä»£ UEFI çš„ oscdimg.exe..." -ForegroundColor Yellow
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
         $oscdimgUrl = "https://ghproxy.net/https://raw.githubusercontent.com/driver1998/oscdimg/master/oscdimg.exe"
         try {
@@ -1033,7 +1081,7 @@ if (-not (Test-Path $oscdimgExe)) {
             try {
                 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/driver1998/oscdimg/master/oscdimg.exe" -OutFile $oscdimgExe -UseBasicParsing -TimeoutSec 15
             } catch {
-                Write-Host "[ÑÏÖØ´íÎó] oscdimg.exe ×Ô¶¯ÏÂÔØÊ§°Ü£¡ÇëÊÖ¶¯½« Windows ADK ÏÖ´ú°æµÄ oscdimg.exe ·ÅÈë½Å±¾Ä¿Â¼ºóÔÙÔËĞĞ£¡" -ForegroundColor Red
+                Write-Host "[ä¸¥é‡é”™è¯¯] oscdimg.exe è‡ªåŠ¨ä¸‹è½½å¤±è´¥ï¼è¯·æ‰‹åŠ¨å°† Windows ADK ç°ä»£ç‰ˆçš„ oscdimg.exe æ”¾å…¥è„šæœ¬ç›®å½•åå†è¿è¡Œï¼" -ForegroundColor Red
                 Stop-Transcript
                 pause
                 exit
@@ -1043,7 +1091,7 @@ if (-not (Test-Path $oscdimgExe)) {
 }
 
 if (-not (Test-Path $oscdimgExe)) {
-    Write-Host "[ÑÏÖØ´íÎó] È±Ê§ oscdimg.exe£¬Á÷³Ì×è¶Ï£¡" -ForegroundColor Red
+    Write-Host "[ä¸¥é‡é”™è¯¯] ç¼ºå¤± oscdimg.exeï¼Œæµç¨‹é˜»æ–­ï¼" -ForegroundColor Red
     Stop-Transcript
     pause
     exit
@@ -1058,7 +1106,7 @@ if (-not (Test-Path $efisys)) {
 }
 
 if (-not (Test-Path $etfsboot) -or -not (Test-Path $efisys)) {
-    Write-Host "[ÑÏÖØ´íÎó] È±ÉÙ¹Ø¼üÒıµ¼ÎÄ¼ş (etfsboot.com »ò efisys.bin)£¬ÎŞ·¨´´½¨ UEFI ¾µÏñ£¡" -ForegroundColor Red
+    Write-Host "[ä¸¥é‡é”™è¯¯] ç¼ºå°‘å…³é”®å¼•å¯¼æ–‡ä»¶ (etfsboot.com æˆ– efisys.bin)ï¼Œæ— æ³•åˆ›å»º UEFI é•œåƒï¼" -ForegroundColor Red
     Stop-Transcript
     pause
     exit
@@ -1079,11 +1127,11 @@ $oscdimgArgs = @(
 & $oscdimgExe @oscdimgArgs
 
 Write-Host "==========================================================" -ForegroundColor Green
-Write-Host " ¹¹½¨Íê±Ï£¡ISO ¾µÏñÊä³öÂ·¾¶:" -ForegroundColor Green
+Write-Host " æ„å»ºå®Œæ¯•ï¼ISO é•œåƒè¾“å‡ºè·¯å¾„:" -ForegroundColor Green
 Write-Host " $outputISO" -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Green
 
-Read-Host "°´»Ø³µ¼ü [ENTER] ÇåÀí D ÅÌÁÙÊ±¹¤×÷»º´æ..."
+Read-Host "æŒ‰å›è½¦é”® [ENTER] æ¸…ç†ä¸´æ—¶å·¥ä½œç¼“å­˜..."
 
 cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
 Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
