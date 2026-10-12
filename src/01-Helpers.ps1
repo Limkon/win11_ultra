@@ -18,7 +18,6 @@ function Force-NukeFolderOrFile {
         if ($null -eq $item) { return }
 
         if ($item.PSIsContainer) {
-            # 目录递归夺权、提权、解属性并粉碎
             & takeown.exe /F "$Target" /A /R /D Y 2>$null | Out-Null
             & icacls.exe "$Target" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
             attrib.exe -R -S -H "$Target\*" /S /D 2>$null
@@ -27,7 +26,6 @@ function Force-NukeFolderOrFile {
                 cmd.exe /c "rd /s /q `"$Target`"" 2>$null
             }
         } else {
-            # 单文件夺权、提权、解属性并粉碎
             & takeown.exe /F "$Target" /A 2>$null | Out-Null
             & icacls.exe "$Target" /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
             attrib.exe -R -S -H "$Target" 2>$null
@@ -50,7 +48,6 @@ function Safely-UnloadHive {
         [string]$HiveName
     )
 
-    # 强制清理 .NET 运行时可能残留的注册表句柄
     [System.GC]::Collect()
     [System.GC]::WaitForPendingFinalizers()
     Start-Sleep -Milliseconds 500
@@ -69,11 +66,11 @@ function Safely-UnloadHive {
     return $false
 }
 
-# ----------------- 3. 智能倒计时输入函数 -----------------
+# ----------------- 3. 智能倒计时输入函数 (防跳行·回车符稳固版) -----------------
 function Read-InputWithTimeout {
     <#
     .SYNOPSIS
-        带实时倒计时显示、支持退格与回车交互的安全输入读取器
+        使用原生回车符 (\r) 替代光标位置坐标，彻底杜绝横向跳行并完美兼容中英文输入
     #>
     param (
         [string]$Prompt = "请输入自定义用户名",
@@ -81,7 +78,8 @@ function Read-InputWithTimeout {
         [string]$Default = "Admin"
     )
 
-    # 如果在非控制台环境（如无句柄的自动化流水线），回退到 Read-Host
+    Write-Host "[提示] 倒计时进行中。若需自定义请输入（请切至英文输入法）；若不输入，30秒后默认采用 [$Default]。" -ForegroundColor DarkGray
+
     try {
         $null = [Console]::KeyAvailable
     } catch {
@@ -101,11 +99,11 @@ function Read-InputWithTimeout {
             return @{ TimedOut = $true; Value = $Default }
         }
 
-        # 刷新倒计时提示
+        # 使用 \r 回车符重置光标至行首，并用足够空格覆盖历史文字，彻底杜绝跳行追加
         if ($inputStr.Length -eq 0 -and $remaining -ne $lastPrinted) {
             $lastPrinted = $remaining
-            try { [Console]::CursorLeft = 0 } catch { }
-            Write-Host -NoNewline "$Prompt (默认: $Default) [剩余 $remaining 秒]: " -ForegroundColor Cyan
+            $statusLine = "`r$Prompt (默认: $Default) [剩余 $remaining 秒]: "
+            Write-Host -NoNewline ($statusLine.PadRight(65)) -ForegroundColor Cyan
         }
 
         if ([Console]::KeyAvailable) {
@@ -125,13 +123,9 @@ function Read-InputWithTimeout {
                 }
             }
             elseif ($key.KeyChar -ge 32) {
+                # 捕获到第一个有效字符时，彻底擦除倒计时字样，转为常规输入提示行
                 if ($inputStr.Length -eq 0) {
-                    try {
-                        [Console]::CursorLeft = 0
-                        $blank = " " * [Math]::Max(1, ([Console]::WindowWidth - 1))
-                        Write-Host -NoNewline $blank
-                        [Console]::CursorLeft = 0
-                    } catch { }
+                    Write-Host -NoNewline ("`r" + (" " * 75) + "`r")
                     Write-Host -NoNewline "${Prompt}: " -ForegroundColor Cyan
                 }
                 $inputStr.Append($key.KeyChar) | Out-Null
