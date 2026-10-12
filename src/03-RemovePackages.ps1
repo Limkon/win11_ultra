@@ -2,7 +2,7 @@
 #  win11 Builder - [模块 4/11] UWP 应用与可选功能包精简 (src/03-RemovePackages.ps1)
 # ==============================================================================
 
-# ----------------- 1. UWP 卸载 + 定向物理粉碎 (借鉴 nano11 极限制点杀) -----------------
+# ----------------- 1. UWP 卸载 + 定向物理粉碎 (完全对齐 nano11 精准点杀模型) -----------------
 Write-Host "`n[步骤 4/11] 正在清理冗余 UWP 预装应用 (严格保留 CBS 与核心运行库)..." -ForegroundColor Cyan
 
 # 核心基础白名单（绝不能删除的底层基础框架）
@@ -46,15 +46,15 @@ foreach ($app in $appxPackages) {
 }
 Write-Progress -Activity "正在清理 UWP 预装应用" -Completed
 
-# 借鉴 nano11 模式：针对已卸载的包名执行精准物理粉碎 (绝不污染父目录 SDDL，压榨 1.5GB+ 空间)
+# 完全对齐 nano11 模式：针对已卸载的包名执行精准定向物理粉碎 (绝不污染父目录 SDDL，压榨 1.5GB+ 空间)
 $winAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
 if (Test-Path $winAppsDir) {
-    Write-Host "   正在执行 WindowsApps 废弃应用实体定向物理粉碎 (nano11 精准点杀模型)..." -ForegroundColor DarkGray
+    Write-Host "   正在执行 WindowsApps 废弃应用实体定向物理粉碎 (nano11 经典点杀机制)..." -ForegroundColor DarkGray
 
     foreach ($pkgName in $deletedAppxList) {
         $targetFolder = Join-Path $winAppsDir $pkgName
         if (Test-Path $targetFolder) {
-            # 仅对具体被卸载的目标文件夹执行夺权和物理粉碎
+            # 仅对具体被卸载的目标文件夹执行夺权和物理粉碎，不动父目录根安全描述符
             Force-NukeFolderOrFile $targetFolder
         }
     }
@@ -65,17 +65,17 @@ if (Test-Path $winAppsDir) {
 }
 Write-Host "[完成] UWP 应用清理与实体定向粉碎完毕。" -ForegroundColor Green
 
-# ----------------- 2. 功能包清理 (借鉴 nano11 底层合法剥离搜索引擎客户端) -----------------
+# ----------------- 2. 功能包清理 (完全对齐 nano11：合法剥离搜索引擎客户端 + 彻底剔除 IE) -----------------
 Write-Host "`n[步骤 5/11] 正在检索系统组件包并执行【仅保留中文】深度剔除..." -ForegroundColor Cyan
 
 $installedPackages = & dism.exe /English /Image:$scratchDir /Get-Packages /Format:Table
 $pkgLines = $installedPackages -split "`n" | Select-Object -Skip 1
 
 # 基础需要剥离的无用功能包列表
-# 关键：吸纳 nano11 经验，加入 Microsoft-Windows-Search-Engine-Client-Package~ 从内核合法卸载搜索！
-# 关键：排除 IE 可选包，防止 Shell 核心接口被连坐剥离！
+# 完全对齐 nano11：包含 Search-Engine-Client（内核合法灭活搜索）与 InternetExplorer-Optional（极限省空间）
 $basePackagesToRemove = @(
-    "Microsoft-Windows-Search-Engine-Client-Package~",     # 【借鉴 nano11】在系统底层合法杀死搜索引擎客户端
+    "Microsoft-Windows-Search-Engine-Client-Package~",     # 【nano11 标杆】在系统底层合法杀死搜索引擎客户端
+    "Microsoft-Windows-InternetExplorer-Optional-Package~",# 【对齐 nano11】IE 基础包彻底剔除，极限压榨空间
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
@@ -130,4 +130,4 @@ foreach ($pkgId in $targetPkgs) {
     & dism.exe /English /Image:$scratchDir /Remove-Package "/PackageName:$pkgId" /NoRestart 2>$null | Out-Null
 }
 Write-Progress -Activity "正在剔除组件与外语包" -Completed
-Write-Host "[完成] 系统可选功能包精炼完毕 (搜索引擎客户端已由底层合法剥离)。" -ForegroundColor Green
+Write-Host "[完成] 系统可选功能包精炼完毕 (搜索引擎客户端与 IE 已全量剥离)。" -ForegroundColor Green
