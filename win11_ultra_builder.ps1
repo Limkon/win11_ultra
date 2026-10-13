@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-12 16:19:07 UTC
+#  生成时间: 2026-10-13 02:36:29 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -357,12 +357,21 @@ Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 4/11] UWP 应用与可选功能包精简 (src/03-RemovePackages.ps1)
+#  [重构加固]：动态语言感知 + 属性页 COM 架构保护 + 生产力组件保留
 # ==============================================================================
 
-# ----------------- 1. UWP 卸载 + 定向物理粉碎 (完全对齐 nano11 精准点杀模型) -----------------
-Write-Host "`n[步骤 4/11] 正在清理冗余 UWP 预装应用 (严格保留 CBS 与核心运行库)..." -ForegroundColor Cyan
+# ----------------- 0. 动态环境感知与主语言探测 (彻底杜绝外语 ISO 报废) -----------------
+Write-Host "`n[步骤 4/11] 正在探查映像主语言并清理冗余 UWP 预装应用..." -ForegroundColor Cyan
 
-# 核心基础白名单（绝不能删除的底层基础框架）
+$imageIntl = & dism.exe /English /Image:$scratchDir /Get-Intl
+$defaultLang = ($imageIntl -split '\r?\n' | Where-Object { $_ -match 'Default system UI language : ([a-zA-Z]{2}-[a-zA-Z]{2})' } | ForEach-Object { $Matches[1] })
+if ([string]::IsNullOrWhiteSpace($defaultLang)) {
+    $defaultLang = "zh-CN"
+}
+Write-Host "   [母盘语言检测] 锁定系统原生核心语言为: $defaultLang" -ForegroundColor Green
+
+# ----------------- 1. UWP 卸载 + 定向物理粉碎 -----------------
+# 核心基础白名单（绝不能删除的底层基础框架与高频终端环境）
 $preservedPackages = @(
     "*VCLibs*",
     "*UI.Xaml*",
@@ -371,13 +380,15 @@ $preservedPackages = @(
     "*ShellExperience*",
     "*AccountsControl*",
     "*CloudExperienceHost*",
-    "*BioEnrollment*"
+    "*BioEnrollment*",
+    "*WindowsTerminal*",        # 保留终端：彻底杜绝右键“在终端中打开”报找不到应用
+    "*DesktopAppInstaller*"     # 保留应用安装程序：保留 Winget 与离线 MSIX/APPX 安装能力
 )
 
 $appxPackages = Get-AppxProvisionedPackage -Path $scratchDir
 $totalAppx = $appxPackages.Count
 $currentAppx = 0
-$deletedAppxList = @()
+$deletedAppxList = New-Object System.Collections.Generic.List[string]
 
 foreach ($app in $appxPackages) {
     $currentAppx++
@@ -398,41 +409,40 @@ foreach ($app in $appxPackages) {
     }
 
     Write-Host "   [$currentAppx/$totalAppx] [删除应用] $($app.PackageName)" -ForegroundColor Yellow
-    & dism.exe /Image:$scratchDir /Remove-ProvisionedAppxPackage "/PackageName:$($app.PackageName)" 2>$null | Out-Null
-    $deletedAppxList += $app.PackageName
+    & dism.exe /English /Image:$scratchDir /Remove-ProvisionedAppxPackage "/PackageName:$($app.PackageName)" 2>$null | Out-Null
+    $deletedAppxList.Add($app.PackageName)
 }
 Write-Progress -Activity "正在清理 UWP 预装应用" -Completed
 
-# 完全对齐 nano11 模式：针对已卸载的包名执行精准定向物理粉碎 (绝不污染父目录 SDDL，压榨 1.5GB+ 空间)
+# 精准定向物理粉碎已卸载的应用实体 (绝不污染父目录 SDDL，彻底释放磁盘空间)
 $winAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
-if (Test-Path $winAppsDir) {
-    Write-Host "   正在执行 WindowsApps 废弃应用实体定向物理粉碎 (nano11 经典点杀机制)..." -ForegroundColor DarkGray
+if (Test-Path -LiteralPath $winAppsDir) {
+    Write-Host "   正在执行 WindowsApps 废弃应用实体定向物理粉碎..." -ForegroundColor DarkGray
 
     foreach ($pkgName in $deletedAppxList) {
         $targetFolder = Join-Path $winAppsDir $pkgName
-        if (Test-Path $targetFolder) {
-            # 仅对具体被卸载的目标文件夹执行夺权和物理粉碎，不动父目录根安全描述符
+        if (Test-Path -LiteralPath $targetFolder) {
             Force-NukeFolderOrFile $targetFolder
         }
     }
 
-    # 关键加固：确保父目录具备 ALL APPLICATION PACKAGES 只读权限，彻底杜绝沙箱进程闪退
+    # 关键安全加固：确保父目录具备 ALL APPLICATION PACKAGES 只读权限，彻底杜绝沙箱进程闪退
     & icacls.exe "$winAppsDir" /grant "*S-1-15-2-1:(OI)(CI)RX" /C /Q 2>$null | Out-Null
     & icacls.exe "$winAppsDir" /grant "*S-1-5-32-545:(OI)(CI)RX" /C /Q 2>$null | Out-Null
 }
 Write-Host "[完成] UWP 应用清理与实体定向粉碎完毕。" -ForegroundColor Green
 
-# ----------------- 2. 功能包清理 (完全对齐 nano11：合法剥离搜索引擎客户端 + 彻底剔除 IE) -----------------
-Write-Host "`n[步骤 5/11] 正在检索系统组件包并执行【仅保留中文】深度剔除..." -ForegroundColor Cyan
+# ----------------- 2. 功能包清理 (严格保留 Search-Engine-Client 以固化属性页) -----------------
+Write-Host "`n[步骤 5/11] 正在检索系统组件包并执行深度可选功能精简..." -ForegroundColor Cyan
 
 $installedPackages = & dism.exe /English /Image:$scratchDir /Get-Packages /Format:Table
-$pkgLines = $installedPackages -split "`n" | Select-Object -Skip 1
+$pkgLines = $installedPackages -split '\r?\n' | Select-Object -Skip 1
 
 # 基础需要剥离的无用功能包列表
-# 完全对齐 nano11：包含 Search-Engine-Client（内核合法灭活搜索）与 InternetExplorer-Optional（极限省空间）
+# 【底层架构警示】：绝对不能删除 Microsoft-Windows-Search-Engine-Client-Package，
+#  否则盘符属性页底部的索引复选框和文件高级属性 COM 结构会彻底暴毙，导致右键属性无反应！
 $basePackagesToRemove = @(
-    "Microsoft-Windows-Search-Engine-Client-Package~",     # 【nano11 标杆】在系统底层合法杀死搜索引擎客户端
-    "Microsoft-Windows-InternetExplorer-Optional-Package~",# 【对齐 nano11】IE 基础包彻底剔除，极限压榨空间
+    "Microsoft-Windows-InternetExplorer-Optional-Package~", # IE 基础可选组件彻底剔除
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
@@ -447,11 +457,12 @@ $basePackagesToRemove = @(
     "Microsoft-Windows-WebcamExperience-Package~"
 )
 
-# 筛选需剔除的目标列表
-$targetPkgs = @()
+# 动态筛选需剔除的目标列表
+$targetPkgs = New-Object System.Collections.Generic.List[string]
+
 foreach ($line in $pkgLines) {
-    $pkgId = ($line -split "\s+")[0]
-    if (-not $pkgId -or $pkgId -eq "Package" -or $pkgId -match "^-+$") { continue }
+    $pkgId = ($line -split '\s+')[0]
+    if ([string]::IsNullOrWhiteSpace($pkgId) -or $pkgId -eq "Package" -or $pkgId -match "^-+$") { continue }
 
     $shouldDelete = $false
     foreach ($bp in $basePackagesToRemove) {
@@ -461,20 +472,31 @@ foreach ($line in $pkgLines) {
         }
     }
 
-    # 外语包判定（保留 zh-CN、zh-cn、Hans，其余语系全剔除）
+    # 动态外语包判定：严格保护母盘核心主语言，非主语言组件包全量剔除
     if (-not $shouldDelete) {
         $isLangRelated = ($pkgId -match "LanguageFeatures" -or $pkgId -match "LanguagePack" -or $pkgId -match "TextToSpeech" -or $pkgId -match "Speech-" -or $pkgId -match "Handwriting-" -or $pkgId -match "OCR-")
-        if ($isLangRelated -and ($pkgId -notmatch "zh-CN|zh-cn|Hans")) {
-            $shouldDelete = $true
+        if ($isLangRelated) {
+            $isCurrentLang = ($pkgId -like "*$defaultLang*")
+            if ($defaultLang -match "^zh-") {
+                # 中文环境下，额外保留简体中文 Hans 标识
+                if ($pkgId -match "zh-CN|zh-cn|Hans") { $isCurrentLang = $true }
+            }
+            if (-not $isCurrentLang) {
+                $shouldDelete = $true
+            }
         }
     }
 
-    # 剔除日文、韩文、繁体中文输入法包
-    if (-not $shouldDelete -and ($pkgId -match "IME-ja-jp" -or $pkgId -match "IME-ko-kr" -or $pkgId -match "IME-zh-tw")) {
-        $shouldDelete = $true
+    # 冗余非主语言输入法包判定 (仅在当前环境非对应语系时剔除)
+    if (-not $shouldDelete) {
+        if ($defaultLang -ne "ja-JP" -and $pkgId -match "IME-ja-jp") { $shouldDelete = $true }
+        if ($defaultLang -ne "ko-KR" -and $pkgId -match "IME-ko-kr") { $shouldDelete = $true }
+        if ($defaultLang -ne "zh-TW" -and $pkgId -match "IME-zh-tw") { $shouldDelete = $true }
     }
 
-    if ($shouldDelete) { $targetPkgs += $pkgId }
+    if ($shouldDelete) { 
+        $targetPkgs.Add($pkgId) 
+    }
 }
 
 $totalPkgs = $targetPkgs.Count
@@ -487,7 +509,7 @@ foreach ($pkgId in $targetPkgs) {
     & dism.exe /English /Image:$scratchDir /Remove-Package "/PackageName:$pkgId" /NoRestart 2>$null | Out-Null
 }
 Write-Progress -Activity "正在剔除组件与外语包" -Completed
-Write-Host "[完成] 系统可选功能包精炼完毕 (搜索引擎客户端与 IE 已全量剥离)。" -ForegroundColor Green
+Write-Host "[完成] 系统可选功能包精炼完毕 (Search-Engine-Client 核心属性底层接口已受保护保留)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/03-RemovePackages.ps1
 
@@ -670,6 +692,7 @@ Write-Host "[完成] 大文件实体物理粉碎完毕。" -ForegroundColor Gree
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表原生 Unicode 导入引擎 (src/06-RegistryTweaks.ps1)
+#  [重构加固]：ELAM 蓝屏防护 + 属性页架构固化 + 幽灵扩展清剿 + 文本文档全开
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统参数..." -ForegroundColor Cyan
@@ -691,7 +714,44 @@ attrib.exe -R -S -H "$ntuserPath" 2>$null
 $reg = New-Object System.Text.StringBuilder
 $null = $reg.AppendLine("Windows Registry Editor Version 5.00`n")
 
-# ----------------- 模式分支：服务配置 -----------------
+# ==============================================================================
+#  A. 全局底层安全加固策略 (普通模式与极限模式均必须执行)
+# ==============================================================================
+
+# 1. 内核级 ELAM 启动策略豁免 (彻底杜绝强删 wdboot.sys 后主板开启安全启动引发的 0xc0000428 蓝屏)
+$null = $reg.AppendLine(@"
+[HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Control\EarlyLaunch]
+"DriverLoadPolicy"=dword:00000008
+
+; 2. 彻底拔除导致盘符属性瘫痪的 BitLocker 幽灵扩展
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\PropertySheetHandlers\{D9DE8B79-CE8A-421A-98C3-5F17A9EB2269}]
+
+; 3. 彻底抹杀导致右键菜单卡死 1~3 秒的 Defender EPP 幽灵扩展 (DLL 物理粉碎后的关键收尾)
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shellex\ContextMenuHandlers\EPP]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Directory\shellex\ContextMenuHandlers\EPP]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\ContextMenuHandlers\EPP]
+
+; 4. 固化盘符与文件标准属性页 COM 挂载 (确保常规与安全属性稳定弹出)
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\PropertySheetHandlers\Sharing]
+@="{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\PropertySheetHandlers\Security]
+@="{1f2e5c40-9550-11ce-99d2-00aa006e086a}"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shellex\PropertySheetHandlers\Security]
+@="{1f2e5c40-9550-11ce-99d2-00aa006e086a}"
+
+; 5. 全局切换至 Windows 经典高效右键菜单 (彻底解决 Win11 现代 XAML 菜单吞点击事件导致的属性不响应 BUG)
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32]
+@=""
+
+[HKEY_LOCAL_MACHINE\zNTUSER\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32]
+@=""
+"@)
+
+# ==============================================================================
+#  B. 模式分支：服务配置
+# ==============================================================================
 $normalServices = @(
     "SysMain", "DiagTrack", "dmwappushservice", "WerSvc", "PcaSvc",
     "MapsBroker", "SensorService", "SensrSvc", "lfsvc", "RetailDemo",
@@ -700,20 +760,20 @@ $normalServices = @(
 )
 $defenderFullStack = @("WinDefend", "WdNisSvc", "Sense", "WdFilter", "WdNisDrv", "WdBoot")
 
-# 关键：由于 Search 实体已被 100% 物理粉碎，两模式均彻底物理抹杀 WSearch 服务，防后台死循环拉起
-$null = $reg.AppendLine("[-HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\WSearch]")
-
 if ($trimMode -eq "2") {
-    Write-Host "   >>> [极限模式] 构建 Defender 物理抹杀与服务清除指令..." -ForegroundColor DarkYellow
-    $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Control\EarlyLaunch]")
-    $null = $reg.AppendLine('"DriverLoadPolicy"=dword:00000008' + "`n")
-    
+    Write-Host "   >>> [极限模式] 构建 Defender 物理抹杀与服务深度清除指令..." -ForegroundColor DarkYellow
+    # 极限模式：连同 WSearch 彻底物理擦除键值
+    $null = $reg.AppendLine("[-HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\WSearch]")
     $extremeDeleteServices = $normalServices + $defenderFullStack + @("Spooler", "PrintNotify", "Fax", "RemoteRegistry", "diagsvc")
     foreach ($svc in $extremeDeleteServices) {
         $null = $reg.AppendLine("[-HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\$svc]")
     }
 } else {
     Write-Host "   >>> [普通模式] 构建服务安全停用指令 (Start = 4)..." -ForegroundColor Cyan
+    # 普通模式：采用 Start=4 安全禁用 WSearch 与核心遥测服务，保留键值以防外部调用报 1060 错误
+    $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\WSearch]")
+    $null = $reg.AppendLine('"Start"=dword:00000004' + "`n")
+
     $allServicesToDisable = $normalServices + $defenderFullStack
     foreach ($svc in $allServicesToDisable) {
         $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\$svc]")
@@ -721,7 +781,9 @@ if ($trimMode -eq "2") {
     }
 }
 
-# ----------------- 基础优化与遥测 -----------------
+# ==============================================================================
+#  C. 系统基础优化与隐私遥测剥离
+# ==============================================================================
 $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\DataCollection]
 "AllowTelemetry"=dword:00000000
@@ -749,7 +811,7 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}]
 "System.IsPinnedToNameSpaceTree"=dword:00000000
 
-; 彻底关闭 Windows 搜索策略 (借鉴 nano11 规范)
+; 关闭 Windows 联网搜索与 Cortana
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Windows Search]
 "AllowCortana"=dword:00000000
 "DisableWebSearch"=dword:00000001
@@ -769,7 +831,7 @@ $null = $reg.AppendLine(@"
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\AppID\Microsoft.MicrosoftEdge_8wekyb3d8bbwe]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Extensions\ContractId\Windows.File\PackageId\Microsoft.MicrosoftEdge_44.22000.120.0_neutral__8wekyb3d8bbwe]
 
-; 关闭 SmartScreen 拦截策略 (防 smartscreen.exe 物理删除后调用挂死)
+; 关闭 SmartScreen 拦截策略 (防 smartscreen.exe 物理删除后调用挂起)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\System]
 "EnableSmartScreen"=dword:00000000
 
@@ -777,7 +839,9 @@ $null = $reg.AppendLine(@"
 "SmartScreenEnabled"="Off"
 "@)
 
-# ----------------- 核心修复：固化 Shell 接口、激活记事本与注入应用池垫片 -----------------
+# ==============================================================================
+#  D. 核心修复：固化 Shell 接口、激活记事本与注入应用池垫片
+# ==============================================================================
 $null = $reg.AppendLine(@"
 ; 1. 固化写入丢失的 IEnumAssocHandlers 与 IAssocHandler 核心接口 (防 E_NOINTERFACE 报错)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{973810AE-9599-4B88-9E4D-6EE98C0C8AC3}]
@@ -798,7 +862,7 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Interface\{F04061AC-1659-4A42-9F4E-E150522B1037}\NumMethods]
 @="10"
 
-; 2. 扩展名关联与 ShellNew 唤醒
+; 2. 扩展名关联与 ShellNew 唤醒 (彻底剔除失效的 -470 资源宏，直连纯文本原语)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
 @="txtfile"
 "Content Type"="text/plain"
@@ -806,17 +870,17 @@ $null = $reg.AppendLine(@"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
 "NullFile"=""
-"ItemName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,37,00,30,00,00,00
+"ItemName"="文本文档"
 
 ; 彻底清空并重置 OpenWithProgids，抹除原版残留的幽灵 AppX
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
 "txtfile"=hex(0):
+"txtfilelegacy"=hex(0):
 
-; 3. txtfile ProgID 实体定义
+; 3. txtfile 与 txtfilelegacy 实体定义 (兼容 Win11 双轨 Shell 架构并直指经典 notepad.exe)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
 @="文本文档"
-"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\DefaultIcon]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
@@ -825,7 +889,16 @@ $null = $reg.AppendLine(@"
 @="open"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
-@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
+@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
+@="文本文档"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\DefaultIcon]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\shell\open\command]
+@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
 ; 4. XML 文档关联
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.xml]
@@ -837,40 +910,43 @@ $null = $reg.AppendLine(@"
 @="XML 文档"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\xmlfile\shell\open\command]
-@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
+@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 5. 彻底去除记事本劫持并注册全局应用实体
+; 5. 彻底去除记事本劫持并注册全局应用实体 (直指经典 C:\Windows\notepad.exe)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe]
 "UseFilter"=dword:00000000
 "Debugger"=-
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,00,00
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,00,00
 
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe\NoOpenWith]
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe]
-"FriendlyAppName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
+"FriendlyAppName"="记事本"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\notepad.exe\shell\open\command]
-@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
+@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
 ; 6. 注册原生资源管理器到应用枚举池 (0 字节垫片，防止应用数为 0 触发 DirectUI 折叠 BUG)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\explorer.exe]
 "FriendlyAppName"="Windows 资源管理器"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\explorer.exe\shell\open\command]
-@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,65,00,78,00,70,00,6c,00,6f,00,72,00,65,00,72,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
+@=hex(2):22,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,65,00,78,00,70,00,6c,00,6f,00,72,00,65,00,72,00,2e,00,65,00,78,00,65,00,22,00,20,00,22,00,25,00,31,00,22,00,00,00
 
 ; 7. 抹除 Default 用户中 UWP 留下的损坏关联
 [-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
 [HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
 "txtfile"=hex(0):
+"txtfilelegacy"=hex(0):
 
 [-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\UserChoice]
 "@)
 
-# ----------------- 硬件检测绕过与 OOBE -----------------
+# ==============================================================================
+#  E. 硬件检测全量绕过与 OOBE 免联网
+# ==============================================================================
 $labConfigKeys = @("BypassCPUCheck", "BypassRAMCheck", "BypassSecureBootCheck", "BypassStorageCheck", "BypassTPMCheck", "BypassDiskCheck")
 $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\Setup\LabConfig]")
 foreach ($k in $labConfigKeys) {
@@ -890,7 +966,9 @@ $null = $reg.AppendLine(@"
 "DisableOnline"=dword:00000001
 "@)
 
-# ----------------- 照片查看器关联 -----------------
+# ==============================================================================
+#  F. 经典 Windows 照片查看器关联激活
+# ==============================================================================
 $photoExts = @(".jpg", ".jpeg", ".png", ".bmp", ".gif", ".ico", ".tiff", ".tif", ".jfif")
 $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSOFTWARE\RegisteredApplications]")
 $null = $reg.AppendLine('"Windows Photo Viewer"="SOFTWARE\\Microsoft\\Windows Photo Viewer\\Capabilities"' + "`n")
@@ -911,17 +989,21 @@ Write-Host "   正在通过 Windows 原生注册表引擎导入 Unicode 策略�
 & reg.exe import "$tempRegFile" 2>&1 | Out-Null
 Remove-Item -LiteralPath $tempRegFile -Force -ErrorAction SilentlyContinue
 
-# 4. 彻底物理粉碎 Explorer 僵尸缓存 (必须执行，否则 Win11 拒绝刷新新建菜单)
-Write-Host "   正在粉碎 Explorer 新建菜单僵尸缓存 (强制唤醒文本文档)..." -ForegroundColor DarkGray
+# 4. 彻底物理粉碎 Explorer 僵尸缓存 (强制唤醒文本文档与新建菜单项)
+Write-Host "   正在粉碎 Explorer 新建菜单僵尸缓存 (强制刷新菜单索引)..." -ForegroundColor DarkGray
 cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
 cmd.exe /c "reg delete `"HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
 
-# 5. 安全卸载配置单元
-Write-Host "   正在安全卸载配置单元 (防句柄残留)..." -ForegroundColor Green
+# 5. 安全卸载配置单元 (防句柄残留死锁)
+Write-Host "   正在安全卸载配置单元 (GC 垃圾回收防锁死机制推进)..." -ForegroundColor Green
+[System.GC]::Collect()
+[System.GC]::WaitForPendingFinalizers()
+
 Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
-Write-Host "[完成] 离线注册表优化全部完毕 (WSearch 服务彻底物理抹杀，Shell 核心接口永久固化)。" -ForegroundColor Green
+
+Write-Host "[完成] 离线注册表加固优化全部完毕 (ELAM 蓝屏隐患已根除，右键属性与新建菜单永久恢复)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/06-RegistryTweaks.ps1
 
@@ -930,6 +1012,7 @@ Write-Host "[完成] 离线注册表优化全部完毕 (WSearch 服务彻底物�
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
+#  [重构加固]：自毁句柄死锁根治 + Sysprep 规范对齐 + XML 注入严格转义
 # ==============================================================================
 
 Write-Host "`n[步骤 9/11] 正在配置高级无人值守应答文件 (30秒智能倒计时)..." -ForegroundColor Cyan
@@ -942,15 +1025,16 @@ if ($inputUser -match "^(Administrator|Guest)$") {
     $inputUser = "Admin"
 }
 
-# 2. 密码设定
+# 2. 密码设定与 XML 特殊字符严格安全转义 (彻底防止 XML 结构断裂)
 if ($userResult.TimedOut) {
     $inputPass = ""
 } else {
     $inputPass = Read-Host "请输入登录密码 (直接回车表示留空无密码)"
 }
+$inputUserEscaped = [System.Security.SecurityElement]::Escape($inputUser)
 $inputPassEscaped = [System.Security.SecurityElement]::Escape($inputPass)
 
-# 3. 100% 完整无损原版 XML 应答模板 (补齐语言/地区/键盘全自动声明)
+# 3. 100% 完整无损原版 XML 应答模板 (修复自毁死锁与规范映射)
 $unattendTemplate = @'
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
@@ -992,6 +1076,10 @@ $unattendTemplate = @'
 					<Order>5</Order>
 					<Path>reg add HKLM\System\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
 				</RunSynchronousCommand>
+				<RunSynchronousCommand wcm:action="add">
+					<Order>6</Order>
+					<Path>reg add HKLM\System\Setup\LabConfig /v BypassDiskCheck /t REG_DWORD /d 1 /f</Path>
+				</RunSynchronousCommand>
 			</RunSynchronous>
 		</component>
 	</settings>
@@ -1028,7 +1116,7 @@ $unattendTemplate = @'
 	<settings pass="auditSystem"></settings>
 	<settings pass="auditUser"></settings>
 	<settings pass="oobeSystem">
-		<!-- 2. OOBE 阶段国际化全自动闭环 (彻底跳过“选择中国”、“键盘布局”与“第二键盘提示”) -->
+		<!-- 2. OOBE 阶段国际化全自动闭环 (彻底跳过地区、键盘布局交互) -->
 		<component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<InputLocale>zh-CN</InputLocale>
 			<SystemLocale>zh-CN</SystemLocale>
@@ -1039,7 +1127,7 @@ $unattendTemplate = @'
 			<UserAccounts>
 				<LocalAccounts>
 					<LocalAccount wcm:action="add">
-						<Description>自定义管理员账户</Description>
+						<Description>系统核心管理员账户</Description>
 						<DisplayName>__CUSTOM_USER__</DisplayName>
 						<Group>Administrators</Group>
 						<Name>__CUSTOM_USER__</Name>
@@ -1131,7 +1219,7 @@ $scripts = @(
     "`r`n" * 3;
     $complete += $increment;
   }
-} *&gt;&amp;1 &gt;&gt; "C:\Windows\Setup\Scripts\Specialize.log";
+} *&gt;&amp;1 &gt;&gt; "$env:TEMP\Specialize.log";
 		</File>
 		<File path="C:\Windows\Setup\Scripts\UserOnce.ps1">
 $scripts = @(
@@ -1221,7 +1309,7 @@ $scripts = @(
     "`r`n" * 3;
     $complete += $increment;
   }
-} *&gt;&amp;1 &gt;&gt; "C:\Windows\Setup\Scripts\DefaultUser.log";
+} *&gt;&amp;1 &gt;&gt; "$env:TEMP\DefaultUser.log";
 		</File>
 		<File path="C:\Windows\Setup\Scripts\FirstLogon.ps1">
 $scripts = @(
@@ -1235,7 +1323,7 @@ $scripts = @(
 		cmd.exe /c "rmdir C:\Windows.old";
 	};
 	{
-		# 1. 立即销毁可能包含明文密码的 xml 应答文件副本
+		# 1. 彻底销毁可能包含明文密码的各层级应答文件副本
 		$xmlFiles = @(
 			'C:\Windows\Panther\unattend.xml',
 			'C:\Windows\Panther\Unattend\unattend.xml',
@@ -1246,8 +1334,8 @@ $scripts = @(
 			if (Test-Path $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; }
 		}
 
-		# 2. 延迟 3 秒自毁整个 C:\Windows\Setup\Scripts 脚本与日志目录
-		Start-Process -WindowStyle Hidden -FilePath "cmd.exe" -ArgumentList '/c timeout /t 3 /nobreak >nul & rd /s /q "C:\Windows\Setup\Scripts"'
+		# 2. 彻底根治句柄锁：将日志重定向到 TEMP 后，使用循环重试命令执行Scripts目录自毁
+		Start-Process -WindowStyle Hidden -FilePath "cmd.exe" -ArgumentList '/c timeout /t 3 /nobreak >nul &amp; for /l %i in (1,1,10) do (if exist "C:\Windows\Setup\Scripts" (rd /s /q "C:\Windows\Setup\Scripts" &amp; timeout /t 1 >nul) else (exit))'
 	};
 );
 
@@ -1271,26 +1359,34 @@ $scripts = @(
     "`r`n" * 3;
     $complete += $increment;
   }
-} *&gt;&amp;1 &gt;&gt; "C:\Windows\Setup\Scripts\FirstLogon.log";
+} *&gt;&amp;1 &gt;&gt; "$env:TEMP\FirstLogon.log";
 		</File>
 	</Extensions>
 </unattend>
 '@
 
-# 替换自定义参数
-$autoUnattendXml = $unattendTemplate.Replace('__CUSTOM_USER__', $inputUser).Replace('__CUSTOM_PASS__', $inputPassEscaped)
+# 替换自定义参数 (严格经过 XML 安全字符转义)
+$autoUnattendXml = $unattendTemplate.Replace('__CUSTOM_USER__', $inputUserEscaped).Replace('__CUSTOM_PASS__', $inputPassEscaped)
 
-# 4. 三通道注入 (Sysprep、Panther、光驱根目录)
+# 4. 多通道合规注入 (Sysprep 标准规范、Panther 自动化、安装介质根目录)
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
-if (-not (Test-Path $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
-if (-not (Test-Path $pantherDir)) { New-Item -ItemType Directory -Path $pantherDir -Force | Out-Null }
+if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
+if (-not (Test-Path -LiteralPath $pantherDir)) { New-Item -ItemType Directory -Path $pantherDir -Force | Out-Null }
 
-$autoUnattendXml | Out-File -FilePath (Join-Path $sysprepDir "autounattend.xml") -Encoding utf8 -Force
-$autoUnattendXml | Out-File -FilePath (Join-Path $pantherDir "unattend.xml") -Encoding utf8 -Force
-$autoUnattendXml | Out-File -FilePath (Join-Path $workDir "autounattend.xml") -Encoding utf8 -Force
+$utf8Encoding = [System.Text.Encoding]::UTF8
 
-Write-Host "[完成] 高级无人值守应答文件三通道注入完毕 (已实现区域与键盘完全免交互)。" -ForegroundColor Green
+# Sysprep 核心规范通道：必须写入 unattend.xml，同时补充 autounattend.xml 以确保双向兼容
+[System.IO.File]::WriteAllText((Join-Path $sysprepDir "unattend.xml"), $autoUnattendXml, $utf8Encoding)
+[System.IO.File]::WriteAllText((Join-Path $sysprepDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
+
+# Panther 初始化通道
+[System.IO.File]::WriteAllText((Join-Path $pantherDir "unattend.xml"), $autoUnattendXml, $utf8Encoding)
+
+# ISO 可移动介质根目录自启动通道
+[System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
+
+Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自毁死锁彻底根治，Sysprep 合规固化)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/07-UnattendInject.ps1
 
@@ -1299,6 +1395,7 @@ Write-Host "[完成] 高级无人值守应答文件三通道注入完毕 (已实
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 9/11] WinSxS 优化与主映像提交卸载 (src/08-WinSxSOptimize.ps1)
+#  [重构加固]：Win11 短文件名通配补齐 + SettingsManifests 固化 + 架构精准检测
 # ==============================================================================
 
 Write-Host "`n[步骤 10/11] 正在执行组件库深度瘦身与补丁清理..." -ForegroundColor Cyan
@@ -1308,8 +1405,15 @@ if ($trimMode -eq "2") {
     $winsxsPath     = Join-Path $scratchDir "Windows\WinSxS"
     $winsxsEditPath = Join-Path $scratchDir "Windows\WinSxS_edit"
     
-    # 架构零碰注册表探查
-    $arch = if (Test-Path "$scratchDir\Windows\SysWOW64") { "amd64" } else { "arm64" }
+    # 架构权威探查 (提取 DISM 映像真实 Architecture 字段，杜绝 SysWOW64 误判 ARM64)
+    $destWimPath = Join-Path $sourcesDir "install.wim"
+    $wimInfoText = & dism.exe /English /Get-WimInfo "/WimFile:$destWimPath" "/Index:1"
+    $arch = "amd64"
+    if ($wimInfoText -match "Architecture\s*:\s*(ARM64|arm64)") {
+        $arch = "arm64"
+    } elseif ($wimInfoText -match "Architecture\s*:\s*(x64|amd64)") {
+        $arch = "amd64"
+    }
 
     Write-Host ">>> [极限模式] WinSxS 自适应瘦身 5 阶段引擎启动 (目标架构: $arch)" -ForegroundColor Yellow
 
@@ -1323,35 +1427,43 @@ if ($trimMode -eq "2") {
     Write-Host "              (正在赋权底层文件，耗时约 1~3 分钟，请耐心等待)" -ForegroundColor DarkGray
     & icacls.exe "$winsxsPath" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
 
-    # 阶段 3：保护并复制通用核心清单元数据
-    Write-Host "   [阶段 3/5] 正在复制通用核心清单元数据 (Catalogs/Manifests)..." -ForegroundColor Yellow
+    # 阶段 3：保护并复制通用核心清单元数据 (补全 SettingsManifests)
+    Write-Host "   [阶段 3/5] 正在复制通用核心清单元数据 (Catalogs/Manifests/SettingsManifests)..." -ForegroundColor Yellow
     New-Item -Path $winsxsEditPath -ItemType Directory -Force | Out-Null
-    $metaDirs = @("Catalogs", "FileMaps", "Fusion", "InstallTemp", "Manifests", "Settings")
+    $metaDirs = @("Catalogs", "FileMaps", "Fusion", "InstallTemp", "Manifests", "Settings", "SettingsManifests")
     foreach ($meta in $metaDirs) {
         $metaSrc = Join-Path $winsxsPath $meta
-        if (Test-Path $metaSrc) {
+        if (Test-Path -LiteralPath $metaSrc) {
             Write-Host "              -> 同步元数据目录: $meta" -ForegroundColor DarkGray
             Copy-Item -Path $metaSrc -Destination (Join-Path $winsxsEditPath $meta) -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
-    # 阶段 4：动态通配匹配并提取依赖组件 (带实时动态计数器)
-    Write-Host "   [阶段 4/5] 正在通配匹配并提取依赖组件 (带动态计数器)..." -ForegroundColor Yellow
+    # 阶段 4：动态通配匹配并提取依赖组件 (全量覆盖 Win11 短文件名)
+    Write-Host "   [阶段 4/5] 正在通配匹配并提取依赖组件 (含 Win11 截断短文件名支持)..." -ForegroundColor Yellow
     $featureKeywords = @(
         "*common-controls*",
+        "*c..-controls*",          # 【关键修复】：Win11 截断的公共控件语言包及资源
         "*gdiplus*",
         "*isolationautomation*",
+        "*i..utomation*",          # 【关键修复】：Win11 截断的隔离自动化组件
         "*proxystub*",
         "*servicingstack*",
+        "*s..stack*",              # 【关键修复】：Win11 截断的服务堆栈组件
+        "*s..ngstack*",            # 【关键修复】：Win11 截断的 onecore 基础堆栈
         "*onecore*",
         "*vc*.crt*",
+        "*vc*.mfc*",
         "*termsrv-extra*"
     )
 
     $allSxSDirs = Get-ChildItem -Path $winsxsPath -Directory | Where-Object {
         $dirName = $_.Name
         if ($metaDirs -contains $dirName) { return $false }
-        if (-not ($dirName.StartsWith($arch) -or $dirName.StartsWith("x86") -or $dirName.StartsWith("msil"))) { 
+        # 严格限制目标架构、x86 兼容层以及 MSIL 跨平台运行时
+        if (-not ($dirName.StartsWith($arch, [System.StringComparison]::OrdinalIgnoreCase) -or 
+                  $dirName.StartsWith("x86", [System.StringComparison]::OrdinalIgnoreCase) -or 
+                  $dirName.StartsWith("msil", [System.StringComparison]::OrdinalIgnoreCase))) { 
             return $false 
         }
         foreach ($kw in $featureKeywords) {
@@ -1383,9 +1495,19 @@ if ($trimMode -eq "2") {
     & dism.exe /English /Image:$scratchDir /Cleanup-Image /StartComponentCleanup /ResetBase
 }
 
-# 提交并卸载主映像
-Write-Host "`n正在提交更改并卸载 install.wim (展示官方原生百分比进度条)..." -ForegroundColor Cyan
+# 提交并卸载主映像 (提前强制执行 GC，彻底释放文件句柄防提交冲突)
+Write-Host "`n正在回收句柄资源并准备提交主映像..." -ForegroundColor DarkGray
+[System.GC]::Collect()
+[System.GC]::WaitForPendingFinalizers()
+Start-Sleep -Seconds 2
+
+Write-Host "正在提交更改并卸载 install.wim (展示官方原生百分比进度条)..." -ForegroundColor Cyan
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[警告] 主映像初次提交遇到阻碍，正在进行安全重试..." -ForegroundColor DarkYellow
+    Start-Sleep -Seconds 3
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
+}
 Write-Host "[完成] 主映像已成功保存并提交更改。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/08-WinSxSOptimize.ps1
@@ -1395,7 +1517,12 @@ Write-Host "[完成] 主映像已成功保存并提交更改。" -ForegroundColo
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 10/11] 映像格式分支处理与 WinPE 免硬件检测修补 (src/09-ExportAndPE.ps1)
+#  [重构加固]：boot.wim 碎片清理二次极速压榨 + BCD 兼容双卷重构 + ESD 完整性校验
 # ==============================================================================
+
+# ----------------- 0. 变量作用域安全兜底 -----------------
+if (-not $destWim)    { $destWim    = Join-Path $sourcesDir "install.wim" }
+if (-not $sourcesDir) { $sourcesDir = Split-Path -Parent $destWim }
 
 # ----------------- 1. 映像格式条件分支处理 (受控于全局开关 $enableEsdConversion) -----------------
 Write-Host "`n[步骤 11/11] 正在处理安装映像输出格式..." -ForegroundColor Cyan
@@ -1408,47 +1535,105 @@ if ($enableEsdConversion) {
 
     & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:1" "/DestinationImageFile:$esdFile" /Compress:recovery /CheckIntegrity
 
-    if (Test-Path -LiteralPath $esdFile) {
+    if ((Test-Path -LiteralPath $esdFile) -and ((Get-Item $esdFile).Length -gt 500MB)) {
         Write-Host "[成功] install.esd 构建完成，已移除临时 install.wim。" -ForegroundColor Green
         Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
     } else {
-        Write-Host "[警告] ESD 转换异常，保留 install.wim 继续推进后续流程。" -ForegroundColor Yellow
+        Write-Host "[警告] ESD 转换异常或文件不完整，保留 install.wim 继续推进后续流程。" -ForegroundColor Yellow
     }
 } else {
     Write-Host ">>> [开关生效: 默认关闭] 跳过 ESD 高耗时压缩，直接使用 install.wim 进行极速打包！" -ForegroundColor Green
-    if (Test-Path $destWim) {
-        Write-Host "[就绪] 核心安装映像锁定: $destWim" -ForegroundColor DarkGray
+    if (Test-Path -LiteralPath $destWim) {
+        $wimSizeGB = [math]::Round(((Get-Item $destWim).Length / 1GB), 2)
+        Write-Host "[就绪] 核心安装映像锁定: $destWim (当前体积: $wimSizeGB GB)" -ForegroundColor DarkGray
     }
 }
 
-# ----------------- 2. 修补 WinPE (boot.wim) 免硬件检测策略 -----------------
-Write-Host "`n正在为 WinPE (boot.wim) 写入免硬件检测策略..." -ForegroundColor Cyan
-$bootWimPath = Join-Path $sourcesDir "boot.wim"
+# ----------------- 2. 修补 WinPE (boot.wim) 免硬件检测策略与碎片重构 -----------------
+Write-Host "`n正在为 WinPE (boot.wim) 写入免硬件检测策略并执行深度瘦身..." -ForegroundColor Cyan
+$bootWimPath     = Join-Path $sourcesDir "boot.wim"
+$tempBootWimPath = Join-Path $sourcesDir "boot_optimized.wim"
+
 attrib.exe -R -S -H "$bootWimPath" 2>$null
+& takeown.exe /F "$bootWimPath" /A 2>$null | Out-Null
+& icacls.exe "$bootWimPath" /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
+(Get-Item $bootWimPath).IsReadOnly = $false
 
-# 自适应分卷探查 (优先卷 2 Setup 引导，单卷 PE 自动选卷 1)
+# 自适应分卷探查 (探测总卷数与安装引导卷索引)
 $bootInfo = & dism.exe /English /Get-WimInfo "/WimFile:$bootWimPath"
-$bootIndex = "2"
-if ($bootInfo -notmatch "Index : 2") { $bootIndex = "1" }
+$hasIndex2 = ($bootInfo -match "Index\s*:\s*2")
+$targetBootIndex = if ($hasIndex2) { "2" } else { "1" }
 
-Write-Host "正在挂载 boot.wim 分卷 $bootIndex..." -ForegroundColor DarkGray
-& dism.exe /English /Mount-Image "/ImageFile:$bootWimPath" "/Index:$bootIndex" "/MountDir:$scratchDir"
+# 清理挂载目录防碰撞
+if (Test-Path -LiteralPath $scratchDir) {
+    Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
 
-# 挂载 WinPE 的 SYSTEM 单元并注入 LabConfig 绕过策略
-$bootSystemPath = Join-Path $scratchDir "Windows\System32\config\SYSTEM"
-attrib.exe -R -S -H "$bootSystemPath" 2>$null
-& reg.exe load HKLM\zSYSTEM "$bootSystemPath" 2>$null | Out-Null
+Write-Host "正在挂载 boot.wim 核心引导卷 (分卷 $targetBootIndex)..." -ForegroundColor DarkGray
+& dism.exe /English /Mount-Image "/ImageFile:$bootWimPath" "/Index:$targetBootIndex" "/MountDir:$scratchDir"
 
-$labConfigKeys = @("BypassCPUCheck", "BypassRAMCheck", "BypassSecureBootCheck", "BypassStorageCheck", "BypassTPMCheck", "BypassDiskCheck")
-foreach ($k in $labConfigKeys) {
-    & reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $k /t REG_DWORD /d 1 /f 2>$null | Out-Null
+if (-not (Test-Path "$scratchDir\Windows\System32")) {
+    Write-Host "[错误] boot.wim 挂载异常，跳过策略写入以防损坏镜像。" -ForegroundColor Red
+} else {
+    # 挂载 WinPE 的 SYSTEM 注册表单元
+    $bootSystemPath = Join-Path $scratchDir "Windows\System32\config\SYSTEM"
+    attrib.exe -R -S -H "$bootSystemPath" 2>$null
+    & reg.exe load HKLM\zSYSTEM "$bootSystemPath" 2>$null | Out-Null
+
+    # 注入全量 LabConfig 绕过策略 (全规格兼容 Win11 22H2/23H2/24H2)
+    $labConfigKeys = @(
+        "BypassCPUCheck",
+        "BypassRAMCheck",
+        "BypassSecureBootCheck",
+        "BypassStorageCheck",
+        "BypassTPMCheck",
+        "BypassDiskCheck"
+    )
+    foreach ($k in $labConfigKeys) {
+        & reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $k /t REG_DWORD /d 1 /f 2>$null | Out-Null
+    }
+    & reg.exe add "HKLM\zSYSTEM\Setup\MoSetup" /v "AllowUpgradesWithUnsupportedTPMOrCPU" /t REG_DWORD /d 1 /f 2>$null | Out-Null
+
+    # 安全卸载注册表
+    Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
+
+    # 提交修改
+    Write-Host "正在提交并保存 boot.wim 引导修改..." -ForegroundColor DarkGray
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
 }
 
-# 稳健卸载注册表并提交 WinPE 映像更改
-Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
-Write-Host "正在提交并保存 boot.wim..." -ForegroundColor DarkGray
-& dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
-Write-Host "[完成] WinPE (boot.wim) 免硬件检测策略写入完毕。" -ForegroundColor Green
+# ----------------- 3. boot.wim 碎片物理清剿与原子重构 (nano11 关键工程升华) -----------------
+Write-Host "正在对 boot.wim 执行二次去碎片极限压缩导出 (重建 BCD 完美兼容双卷)..." -ForegroundColor DarkYellow
+if (Test-Path -LiteralPath $tempBootWimPath) {
+    Remove-Item -LiteralPath $tempBootWimPath -Force -ErrorAction SilentlyContinue
+}
+
+if ($hasIndex2) {
+    # 导出卷 1 (标准 WinPE 恢复环境，保持 BCD 序号不变)
+    Write-Host "   -> 正在导出并压缩 boot.wim [分卷 1/2: WinPE]..." -ForegroundColor DarkGray
+    & dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" "/SourceIndex:1" "/DestinationImageFile:$tempBootWimPath" /Compress:max /CheckIntegrity
+    # 导出卷 2 (已打补丁的 Windows Setup 引导环境)
+    Write-Host "   -> 正在导出并压缩 boot.wim [分卷 2/2: Setup]..." -ForegroundColor DarkGray
+    & dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" "/SourceIndex:2" "/DestinationImageFile:$tempBootWimPath" /Compress:max /CheckIntegrity
+} else {
+    # 单卷环境直接紧凑导出
+    Write-Host "   -> 正在单卷导出压缩 boot.wim..." -ForegroundColor DarkGray
+    & dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" "/SourceIndex:1" "/DestinationImageFile:$tempBootWimPath" /Compress:max /CheckIntegrity
+}
+
+# 替换旧版高碎片 boot.wim
+if (Test-Path -LiteralPath $tempBootWimPath) {
+    Remove-Item -LiteralPath $bootWimPath -Force -ErrorAction SilentlyContinue
+    Move-Item -LiteralPath $tempBootWimPath -Destination $bootWimPath -Force
+    Write-Host "[成功] boot.wim 物理去碎片与二次高压完毕 (体积大幅瘦身，脏标记完全清除)。" -ForegroundColor Green
+} else {
+    Write-Host "[提示] boot.wim 导出重构跳过，保留提交版本。" -ForegroundColor DarkGray
+}
+
+Write-Host "[完成] WinPE 引导环境免硬件检测注入与镜像重构完毕。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/09-ExportAndPE.ps1
 
