@@ -147,7 +147,7 @@ XING                                           # 职场社交应用
 # ============================================================================================================== #
 
 # 1. 核心底层与商店 (删除会导致系统运行异常或无法安装应用)
-#Microsoft.WindowsStore                        # 微软应用商店 (绝对不可删除，否则后续无法补充任何 UWP)
+Microsoft.WindowsStore                        # 微软应用商店 (绝对不可删除，否则后续无法补充任何 UWP)
 #Microsoft.WindowsTerminal                     # Windows 终端 (保留以防止右键“在终端中打开”报错)
 #Microsoft.DesktopAppInstaller                 # 应用安装程序 (包含 Winget 命令行包管理器)
 
