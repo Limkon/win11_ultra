@@ -1,6 +1,6 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表原生 Unicode 导入引擎 (src/06-RegistryTweaks.ps1)
-#  [终极重构加固]：彻底根治打开方式“更多应用”死锁 + 唤醒新建文本文档 + IFEO 内核绝杀 SearchHost
+#  [终极重构加固]：彻底根治打开方式“更多应用”死锁 + IFEO 内核绝杀 SearchHost
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -120,72 +120,7 @@ if ($trimMode -eq "2") {
 }
 
 # ==============================================================================
-#  D. 核心修复：新建文本文档 100% 唤醒机制 (规范化 Win11 字符串间接资源与双 ProgID)
-# ==============================================================================
-$null = $reg.AppendLine(@"
-; 1. 扩展名 .txt 基础关联 (主指 txtfilelegacy)
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
-@="txtfilelegacy"
-"Content Type"="text/plain"
-"PerceivedType"="text"
-
-; 【关键修复】：必须写入间接字符串资源 @%SystemRoot%\system32\notepad.exe,-470，否则 Win11 判定名称为空直接隐藏
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
-"ItemName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,37,00,30,00,00,00
-"NullFile"=""
-
-; 清空可能干扰的 OpenWithProgids
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
-"txtfilelegacy"=hex(0):
-"txtfile"=hex(0):
-
-; 2. Win11 核心实体 txtfilelegacy 深度补全
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
-@="文本文档"
-"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\DefaultIcon]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\shell]
-@="open"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\shell\open\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-
-; 3. 经典 txtfile 回退兼容实体
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
-@="文本文档"
-"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\DefaultIcon]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
-@="open"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-
-; 4. 彻底修正 App Paths，强制直指 System32 经典记事本
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,00,00
-
-; 5. 抹除 Default 用户中 UWP 留下的损坏关联
-[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
-[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
-"txtfilelegacy"=hex(0):
-"txtfile"=hex(0):
-
-[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\UserChoice]
-"@)
-
-# ==============================================================================
-#  E. 终极修复：彻底根治“打开方式 -> 更多应用”点击无反应、无法展开的死锁
+#  D. 终极修复：彻底根治“打开方式 -> 更多应用”点击无反应、无法展开的死锁
 # ==============================================================================
 $null = $reg.AppendLine(@"
 ; 1. 【核心救砖策略】：全域禁用 OpenWith 对 Microsoft Store 的网络/组件依赖探测
@@ -219,7 +154,7 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  F. 系统基础优化与隐私遥测剥离
+#  E. 系统基础优化与隐私遥测剥离
 # ==============================================================================
 $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\DataCollection]
@@ -267,7 +202,7 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  G. 硬件检测全量绕过与 OOBE 免联网
+#  F. 硬件检测全量绕过与 OOBE 免联网
 # ==============================================================================
 $labConfigKeys = @("BypassCPUCheck", "BypassRAMCheck", "BypassSecureBootCheck", "BypassStorageCheck", "BypassTPMCheck", "BypassDiskCheck")
 $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\Setup\LabConfig]")
@@ -288,7 +223,7 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  H. 经典 Windows 照片查看器关联激活
+#  G. 经典 Windows 照片查看器关联激活
 # ==============================================================================
 $photoExts = @(".jpg", ".jpeg", ".png", ".bmp", ".gif", ".ico", ".tiff", ".tif", ".jfif")
 $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSOFTWARE\RegisteredApplications]")
@@ -310,12 +245,7 @@ Write-Host "   正在通过 Windows 原生注册表引擎导入 Unicode 策略�
 & reg.exe import "$tempRegFile" 2>&1 | Out-Null
 Remove-Item -LiteralPath $tempRegFile -Force -ErrorAction SilentlyContinue
 
-# 4. 彻底物理粉碎 Explorer 僵尸缓存 (强制唤醒文本文档与新建菜单项)
-Write-Host "   正在粉碎 Explorer 新建菜单僵尸缓存 (强制刷新菜单索引)..." -ForegroundColor DarkGray
-cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
-cmd.exe /c "reg delete `"HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
-
-# 5. 安全卸载配置单元 (防句柄残留死锁)
+# 4. 安全卸载配置单元 (防句柄残留死锁)
 Write-Host "   正在安全卸载配置单元 (GC 垃圾回收防锁死机制推进)..." -ForegroundColor Green
 [System.GC]::Collect()
 [System.GC]::WaitForPendingFinalizers()
@@ -324,4 +254,4 @@ Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
 
-Write-Host "[完成] 离线注册表加固优化全部完毕 (打开方式“更多应用”死锁已排除，新建文本文档已全面激活)。" -ForegroundColor Green
+Write-Host "[完成] 离线注册表加固优化全部完毕 (记事本保持原生系统配置，打开方式“更多应用”死锁已排除)。" -ForegroundColor Green
