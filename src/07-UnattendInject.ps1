@@ -1,6 +1,6 @@
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
-#  [重构加固]：自毁句柄死锁根治 + Sysprep 规范对齐 + XML 注入严格转义
+#  [重构加固]：自毁句柄死锁根治 + Sysprep 规范对齐 + 打开方式策略全自动固化
 # ==============================================================================
 
 Write-Host "`n[步骤 9/11] 正在配置高级无人值守应答文件 (30秒智能倒计时)..." -ForegroundColor Cyan
@@ -185,6 +185,11 @@ $scripts = @(
 	{
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f;
 	};
+	{
+		# 固化打开方式免应用商店依赖 (确保更多应用展开无阻)
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Explorer" /v "NoUseStoreOpenWith" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoUseStoreOpenWith" /t REG_DWORD /d 1 /f;
+	};
 );
 
 &amp; {
@@ -271,6 +276,11 @@ $scripts = @(
 		foreach( $name in $names ) {
 		  reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v $name /t REG_DWORD /d 0 /f;
 		}
+	};
+	{
+		# 为每个新用户配置 OpenWith 离线模式
+		reg.exe add "HKU\DefaultUser\Software\Policies\Microsoft\Windows\Explorer" /v "NoUseStoreOpenWith" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoUseStoreOpenWith" /t REG_DWORD /d 1 /f;
 	};
 	{
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "UnattendedSetup" /t REG_SZ /d "powershell.exe -WindowStyle Normal -NoProfile -Command \""Get-Content -LiteralPath 'C:\Windows\Setup\Scripts\UserOnce.ps1' -Raw | Invoke-Expression;\""" /f;
@@ -374,4 +384,4 @@ $utf8Encoding = [System.Text.Encoding]::UTF8
 # ISO 可移动介质根目录自启动通道
 [System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自毁死锁彻底根治，Sysprep 合规固化)。" -ForegroundColor Green
+Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (打开方式组策略全域注入，自毁死锁彻底根治)。" -ForegroundColor Green
