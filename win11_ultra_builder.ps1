@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-13 08:02:56 UTC
+#  生成时间: 2026-10-13 08:17:43 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -347,8 +347,10 @@ $index = "1"
 # 4. 解锁映像访问权限并正式挂载 (步骤 3/11)
 Write-Host "`n[步骤 3/11] 解锁 install.wim 访问权限并挂载..." -ForegroundColor Cyan
 attrib.exe -R -S -H "$destWim" 2>$null
-Start-Process -FilePath "takeown.exe" -ArgumentList "/F `"$destWim`"" -NoNewWindow -Wait
-Start-Process -FilePath "icacls.exe" -ArgumentList "`"$destWim`" /grant *S-1-5-32-544:F /C /Q" -NoNewWindow -Wait
+
+# 采用原生原子执行管道，彻底消除 Start-Process 因子进程极速退出引发的 InvalidOperationException
+& takeown.exe /F "$destWim" /A 2>$null | Out-Null
+& icacls.exe "$destWim" /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
 (Get-Item $destWim).IsReadOnly = $false
 
 if (Test-Path $scratchDir) {
