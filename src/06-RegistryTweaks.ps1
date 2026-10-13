@@ -1,6 +1,6 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表原生 Unicode 导入引擎 (src/06-RegistryTweaks.ps1)
-#  [终极重构]：彻底唤醒新建文本文档 + IFEO 内核绝杀 SearchHost + 修复打开方式死锁
+#  [终极重构加固]：彻底根治打开方式“更多应用”死锁 + 唤醒新建文本文档 + IFEO 内核绝杀 SearchHost
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -185,15 +185,25 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  E. 核心修复：彻底根治“打开方式 -> 选择其他应用”无反应的死锁
+#  E. 终极修复：彻底根治“打开方式 -> 更多应用”点击无反应、无法展开的死锁
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 彻底删除导致 Win11 XAML OpenWith 按钮路由断裂的策略
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
-[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
+; 1. 【核心救砖策略】：全域禁用 OpenWith 对 Microsoft Store 的网络/组件依赖探测
+; 彻底切断无应用商店时点击“更多应用”引发的 COM 异常与线程假死，直接同步展开本地程序并调出“在这台电脑上查找其他应用”
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
+"NoUseStoreOpenWith"=dword:00000001
 
-; 2. 【核心修复】：为 openas 与 opendlg 注入原生 COM DelegateExecute 代理契约
-; 严禁裸调 OpenWith.exe，必须由 Shell 代理调度器托管拉起
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer]
+"NoUseStoreOpenWith"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer]
+"NoUseStoreOpenWith"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer]
+"NoUseStoreOpenWith"=dword:00000001
+
+; 2. 【核心修复】：为 openas 与 opendlg 注入原生正确的 DelegateExecute COM 代理契约
+; 采用正牌 Windows Storage Open With Handler: {1fbae463-61f3-4442-bc96-61512d68d8ed}
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas]
 @=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,73,00,68,00,65,00,6c,00,6c,00,33,00,32,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,35,00,33,00,37,00,36,00,00,00
 "MultiSelectModel"="Single"
@@ -201,12 +211,13 @@ $null = $reg.AppendLine(@"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
+"DelegateExecute"="{1fbae463-61f3-4442-bc96-61512d68d8ed}"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Unknown\shell\opendlg\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
+"DelegateExecute"="{1fbae463-61f3-4442-bc96-61512d68d8ed}"
 "@)
+
 # ==============================================================================
 #  F. 系统基础优化与隐私遥测剥离
 # ==============================================================================
@@ -313,4 +324,4 @@ Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
 
-Write-Host "[完成] 离线注册表加固优化全部完毕 (文本文档已三重加固，SearchHost 已内核拦截，打开方式死锁已排除)。" -ForegroundColor Green
+Write-Host "[完成] 离线注册表加固优化全部完毕 (打开方式“更多应用”死锁已排除，新建文本文档已全面激活)。" -ForegroundColor Green
