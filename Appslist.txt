@@ -1,151 +1,168 @@
+# ============================================================================================================== #
+#  Windows 11 精简母盘 - UWP 应用黑名单卸载清单 (Appslist.txt)                                                   #
+#  规则说明：                                                                                                    #
+#  1. 未带 '#' 的行：将被 DISM 和脚本彻底卸载并物理粉碎。                                                       #
+#  2. 带有 '#' 的行：将被安全保留，不会执行任何删除操作。                                                        #
+# ============================================================================================================== #
+
 # -------------------------------------------------------------------------------------------------------------- #
-#  The apps below this line WILL be uninstalled by default. Add a # character in front of any app you want to    #
-#   KEEP installed by default.                                                                                   #
+#  [分区 1/5] 微软已停运/废弃老旧组件 & 幽灵残留 (100% 无副作用，强烈推荐删除)                                  #
 # -------------------------------------------------------------------------------------------------------------- #
-Clipchamp.Clipchamp                            # Video editor from Microsoft
-Microsoft.3DBuilder                            # Basic 3D modeling software
-Microsoft.549981C3F5F10                        # Cortana app (Voice assistant)
-Microsoft.BingFinance                          # Finance news and tracking via Bing (Discontinued)
-Microsoft.BingFoodAndDrink                     # Recipes and food news via Bing (Discontinued)
-Microsoft.BingHealthAndFitness                 # Health and fitness tracking/news via Bing (Discontinued)
-Microsoft.BingNews                             # News aggregator via Bing (Replaced by Microsoft News/Start)
-Microsoft.BingSports                           # Sports news and scores via Bing (Discontinued)
-Microsoft.BingTranslator                       # Translation service via Bing
-Microsoft.BingTravel                           # Travel planning and news via Bing (Discontinued)
-Microsoft.BingWeather                          # Weather forecast via Bing
-Microsoft.Copilot                              # AI assistant integrated into Windows
-Microsoft.Getstarted                           # Tips and introductory guide for Windows (Cannot be uninstalled in Windows 11)
-Microsoft.Messaging                            # Messaging app, often integrates with Skype (Largely deprecated)
-Microsoft.Microsoft3DViewer                    # Viewer for 3D models
-Microsoft.MicrosoftJournal                     # Digital note-taking app optimized for pen input
-Microsoft.MicrosoftOfficeHub                   # Hub to access Microsoft Office apps and documents (Precursor to Microsoft 365 app)
-Microsoft.MicrosoftPowerBIForWindows           # Business analytics service client
-Microsoft.MicrosoftSolitaireCollection         # Collection of solitaire card games
-Microsoft.MicrosoftStickyNotes                 # Digital sticky notes app
-Microsoft.MixedReality.Portal                  # Portal for Windows Mixed Reality headsets
-Microsoft.NetworkSpeedTest                     # Internet connection speed test utility
-Microsoft.News                                 # News aggregator (Replaced Bing News, now part of Microsoft Start)
-Microsoft.Office.OneNote                       # Digital note-taking app (Universal Windows Platform version)
-Microsoft.Office.Sway                          # Presentation and storytelling app
-Microsoft.OneConnect                           # Mobile Operator management app (Replaced by Mobile Plans)
-Microsoft.Print3D                              # 3D printing preparation software
-Microsoft.SkypeApp                             # Skype communication app (Universal Windows Platform version)
-Microsoft.Todos                                # To-do list and task management app
-Microsoft.WindowsAlarms                        # Alarms & Clock app
-Microsoft.WindowsFeedbackHub                   # App for providing feedback to Microsoft on Windows
-Microsoft.WindowsMaps                          # Mapping and navigation app
-Microsoft.WindowsSoundRecorder                 # Basic audio recording app
-Microsoft.XboxApp                              # Old Xbox Console Companion App, no longer supported
-Microsoft.ZuneVideo                            # Movies & TV app for renting/buying/playing video content (Rebranded as "Films & TV")
-MicrosoftCorporationII.MicrosoftFamily         # Family Safety App for managing family accounts and settings
-MicrosoftCorporationII.QuickAssist             # Remote assistance tool
-MicrosoftTeams                                 # Old MS Teams personal (MS Store version)
-MSTeams                                        # New MS Teams app (Work/School or Personal)
+Microsoft.549981C3F5F10                        # 微软已废弃的旧版 Cortana 语音助手
+Microsoft.MSPaint                             # Paint 3D (微软已停止维护并下架的三维画图)
+Microsoft.windowscommunicationsapps           # 旧版“邮件与日历” (微软已于2024年底全面停运，留着无法收发邮件)
+Microsoft.People                              # 旧版人脉 (随邮件日历一同废弃)
+Microsoft.Office.OneNote                       # UWP 旧版 OneNote (Office 365 包含更强桌面版)
+Microsoft.Office.Sway                          # Sway 演示文稿工具 (已废弃在线工具)
+Microsoft.SkypeApp                             # Skype 通讯应用 (微软已主推 Teams)
+Microsoft.XboxApp                              # 旧版 Xbox 控制台小帮手 (官方已停止支持)
+Microsoft.Messaging                            # 传统短信/消息传递客户端 (已淘汰)
+Microsoft.OneConnect                           # 移动套餐/移动运营商管理 (绝大多数 PC 无用)
+Microsoft.MixedReality.Portal                  # Windows 混合现实门户 (WMR，微软已宣布弃用)
+Microsoft.3DBuilder                            # 早期 3D 建模工具
+Microsoft.Print3D                              # 3D 打印工具
+Microsoft.BingFinance                          # 必应财经资讯 (旧版)
+Microsoft.BingFoodAndDrink                     # 必应美食与饮品 (已停止服务)
+Microsoft.BingHealthAndFitness                 # 必应健康与健身 (已停止服务)
+Microsoft.BingSports                           # 必应体育资讯 (旧版)
+Microsoft.BingTravel                           # 必应旅行指南 (已停止服务)
 
-ACGMediaPlayer                                 # Media player app
-ActiproSoftwareLLC                             # Potentially UI controls or software components, often bundled by OEMs
-AdobeSystemsIncorporated.AdobePhotoshopExpress # Basic photo editing app from Adobe
-Amazon.com.Amazon                              # Amazon shopping app
-AmazonVideo.PrimeVideo                         # Amazon Prime Video streaming service app
-Asphalt8Airborne                               # Racing game
-AutodeskSketchBook                             # Digital drawing and sketching app
-CaesarsSlotsFreeCasino                         # Casino slot machine game
-COOKINGFEVER                                   # Restaurant simulation game
-CyberLinkMediaSuiteEssentials                  # Multimedia software suite (often preinstalled by OEMs)
-DisneyMagicKingdoms                            # Disney theme park building game
-Disney                                         # General Disney content app (may vary by region/OEM, often Disney+)
-DrawboardPDF                                   # PDF viewing and annotation app, often focused on pen input
-Duolingo-LearnLanguagesforFree                 # Language learning app
-EclipseManager                                 # Often related to specific OEM software or utilities (e.g., for managing screen settings)
-Facebook                                       # Facebook social media app
-FarmVille2CountryEscape                        # Farming simulation game
-fitbit                                         # Fitbit activity tracker companion app
-Flipboard                                      # News and social network aggregator styled as a magazine
-HiddenCity                                     # Hidden object puzzle adventure game
-HULULLC.HULUPLUS                               # Hulu streaming service app
-iHeartRadio                                    # Internet radio streaming app
-Instagram                                      # Instagram social media app
-king.com.BubbleWitch3Saga                      # Puzzle game from King
-king.com.CandyCrushSaga                        # Puzzle game from King
-king.com.CandyCrushSodaSaga                    # Puzzle game from King
-LinkedInforWindows                             # LinkedIn professional networking app
-MarchofEmpires                                 # Strategy game
-Netflix                                        # Netflix streaming service app
-NYTCrossword                                   # New York Times crossword puzzle app
-OneCalendar                                    # Calendar aggregation app
-PandoraMediaInc                                # Pandora music streaming app
-PhototasticCollage                             # Photo collage creation app
-PicsArt-PhotoStudio                            # Photo editing and creative app
-Plex                                           # Media server and player app
-PolarrPhotoEditorAcademicEdition               # Photo editing app (Academic Edition)
-Royal Revolt                                   # Tower defense / strategy game
-Shazam                                         # Music identification app
-Sidia.LiveWallpaper                            # Live wallpaper app
-SlingTV                                        # Live TV streaming service app
-Spotify                                        # Spotify music streaming app
-TikTok                                         # TikTok short-form video app
-TuneInRadio                                    # Internet radio streaming app
-Twitter                                        # Twitter (now X) social media app
-Viber                                          # Messaging and calling app
-WinZipUniversal                                # File compression and extraction utility (Universal Windows Platform version)
-Wunderlist                                     # To-do list app (Acquired by Microsoft, functionality moved to Microsoft To Do)
-XING                                           # Professional networking platform popular in German-speaking countries
+# -------------------------------------------------------------------------------------------------------------- #
+#  [分区 2/5] 微软臃肿套壳组件、后台常驻服务 & 遥测工具 (无副作用，释放数 GB 空间)                               #
+# -------------------------------------------------------------------------------------------------------------- #
+Microsoft.OneDrive                            # OneDrive 预装包 (配合脚本已彻底物理粉碎)
+Microsoft.Windows.DevHome                     # Win11 强推的“开发人员主页” (占用数百兆且后台常驻)
+Microsoft.PowerAutomateDesktop                # Power Automate 桌面流程自动化 (体积近 1GB，普通用户极少使用)
+Microsoft.OutlookForWindows                   # 新版 Outlook (仅为 Edge/WebView2 网页套壳，体验差且体积大)
+Microsoft.Copilot                             # Windows 网页套壳 AI 助手 (国内受限且易在后台常驻)
+Microsoft.BingSearch                          # 必应网络搜索集成 (剥离后开始菜单更纯粹)
+Microsoft.Getstarted                          # “开始”提示与使用技巧向导
+Microsoft.GetHelp                             # 获取帮助 (在线支持引导弹窗)
+Microsoft.WindowsFeedbackHub                   # Windows 反馈中心
+Microsoft.WindowsMaps                          # 离线地图应用
+Microsoft.WindowsSoundRecorder                 # 简易录音机
+Microsoft.WindowsAlarms                        # 闹钟与时钟
+Microsoft.BingNews                             # 必应新闻
+Microsoft.News                                 # Microsoft Start 新闻资讯流
+Microsoft.BingWeather                          # 必应天气
+Microsoft.BingTranslator                       # 必应翻译
+Microsoft.MicrosoftSolitaireCollection         # 微软纸牌游戏集合
+Microsoft.MicrosoftStickyNotes                 # 便签应用
+Microsoft.MicrosoftJournal                     # 数字笔记日志 (专为触控笔设计)
+Microsoft.MicrosoftOfficeHub                   # Office 引导门户 (Microsoft 365 推广前身)
+Microsoft.MicrosoftPowerBIForWindows           # Power BI 移动客户端
+Microsoft.NetworkSpeedTest                     # 微软旧版测速工具
+Microsoft.Todos                                # 微软待办事项 To-Do
+Microsoft.Whiteboard                           # 微软白板协作应用
+Microsoft.YourPhone                           # 手机连接 Phone Link
+MicrosoftWindows.CrossDevice                  # 跨设备连接 (资源管理器/相机手机协同组件)
+Microsoft.ZuneVideo                            # 电影与电视应用
+Microsoft.ZuneMusic                           # 现代媒体播放器 (通常用户更青睐 PotPlayer/VLC)
+MicrosoftCorporationII.MicrosoftFamily         # 家庭安全管理 Family Safety
+MicrosoftCorporationII.QuickAssist             # 远程协助 (易被恶意远控利用)
+MicrosoftTeams                                 # 个人版旧 Teams
+MSTeams                                        # 商业/个人新 Teams
+
+# -------------------------------------------------------------------------------------------------------------- #
+#  [分区 3/5] HP 品牌机 OEM 预装垃圾全家桶 (100% 放心删除，纯垃圾软件)                                          #
+# -------------------------------------------------------------------------------------------------------------- #
+AD2F1837.HPAIExperienceCenter                 # HP AI 体验中心
+AD2F1837.HPConnectedMusic                     # HP 音乐组件
+AD2F1837.HPConnectedPhotopoweredbySnapfish    # HP 照片冲印推广组件
+AD2F1837.HPDesktopSupportUtilities            # HP 桌面支持工具
+AD2F1837.HPEasyClean                          # HP 简易清理
+AD2F1837.HPFileViewer                         # HP 文件查看器
+AD2F1837.HPJumpStarts                         # HP 新机开箱指南与推广
+AD2F1837.HPPCHardwareDiagnosticsWindows       # HP 硬件诊断 Windows 客户端
+AD2F1837.HPPowerManager                       # HP 电源管理插件
+AD2F1837.HPPrinterControl                     # HP 打印机控制辅助
+AD2F1837.HPPrivacySettings                    # HP 隐私设置
+AD2F1837.HPQuickDrop                          # HP 文件快传工具
+AD2F1837.HPQuickTouch                         # HP 触控捷径
+AD2F1837.HPRegistration                       # HP 设备注册弹窗
+AD2F1837.HPSupportAssistant                   # HP 助手支持服务
+AD2F1837.HPSureShieldAI                       # HP 安全防御推广组件
+AD2F1837.HPSystemInformation                  # HP 系统信息展示工具
+AD2F1837.HPWelcome                            # HP 欢迎体验
+AD2F1837.HPWorkWell                           # HP 健康工作提醒
+AD2F1837.myHP                                 # myHP 控制中心
+
+# -------------------------------------------------------------------------------------------------------------- #
+#  [分区 4/5] 第三方推广应用与流氓游戏 (全部删除，无任何系统依赖)                                                #
+# -------------------------------------------------------------------------------------------------------------- #
+ACGMediaPlayer                                 # 第三方媒体播放器
+ActiproSoftwareLLC                             # OEM UI 捆绑组件
+AdobeSystemsIncorporated.AdobePhotoshopExpress # 基础版 PS Express 推广
+Amazon.com.Amazon                              # 亚马逊购物应用
+AmazonVideo.PrimeVideo                         # 亚马逊流媒体视频
+Asphalt8Airborne                               # 狂野飙车 8
+AutodeskSketchBook                             # 绘图应用
+CaesarsSlotsFreeCasino                         # 赌场老虎机游戏
+COOKINGFEVER                                   # 烹饪发烧友游戏
+CyberLinkMediaSuiteEssentials                  # 讯连科技多媒体套件
+DisneyMagicKingdoms                            # 迪士尼魔法王国游戏
+Disney                                         # 迪士尼+ 推广
+DrawboardPDF                                   # Drawboard PDF 试用版
+Duolingo-LearnLanguagesforFree                 # 多邻国语言学习
+EclipseManager                                 # OEM 屏幕/驱动关联软件
+Facebook                                       # 脸书客户端
+FarmVille2CountryEscape                        # 开心农场 2
+fitbit                                         # Fitbit 健身手环同步
+Flipboard                                      # 飞丽博新闻杂志
+HiddenCity                                     # 寻宝解谜游戏
+HULULLC.HULUPLUS                               # Hulu 视频流媒体
+iHeartRadio                                    # 网络收音机
+Instagram                                      # Instagram 客户端
+king.com.BubbleWitch3Saga                      # 泡泡魔女传奇 3
+king.com.CandyCrushSaga                        # 糖果传奇
+king.com.CandyCrushSodaSaga                    # 糖果苏打传奇
+LinkedInforWindows                             # 领英客户端
+MarchofEmpires                                 # 帝国霸业策略游戏
+Netflix                                        # 奈飞流媒体
+NYTCrossword                                   # 纽约时报填字游戏
+OneCalendar                                    # 第三方日历整合应用
+PandoraMediaInc                                # 潘多拉网络电台
+PhototasticCollage                             # 照片拼贴工具
+PicsArt-PhotoStudio                            # 图片编辑软件
+Plex                                           # Plex 流媒体播放器
+PolarrPhotoEditorAcademicEdition               # 泼辣修图
+Royal Revolt                                   # 皇家起义塔防游戏
+Shazam                                         # 听歌识曲应用
+Sidia.LiveWallpaper                            # 动态壁纸应用
+SlingTV                                        # 网络电视直播
+Spotify                                        # 声田音乐客户端
+TikTok                                         # 抖音海外版客户端
+TuneInRadio                                    # 全球电台收听软件
+Twitter                                        # 推特 (X) 客户端
+Viber                                          # 通信社交软件
+WinZipUniversal                                # WinZip UWP 压缩工具
+Wunderlist                                     # 奇妙清单 (服务已终止)
+XING                                           # 职场社交应用
 
 
 
 
-# ------------------------------------------------------------------------------------------------------------- #
-#  The apps below this line will NOT be uninstalled by default. Remove the # character in front of any app you  #
-#   want to UNINSTALL by default.                                                                               #
-# ------------------------------------------------------------------------------------------------------------- #
-#Microsoft.BingSearch                          # Web Search from Microsoft Bing (Integrates into Windows Search)
-#Microsoft.Copilot                             # New Microsoft Copilot app (AI assistant)
-#Microsoft.Edge                                # Edge browser (Can only be uninstalled in European Economic Area)
-#Microsoft.GamingApp                           # Modern Xbox Gaming App, required for installing some PC games
-#Microsoft.GetHelp                             # Required for some Windows 11 Troubleshooters and support interactions
-#Microsoft.MSPaint                             # Paint 3D (Modern paint application with 3D features)
-#Microsoft.OneDrive                            # OneDrive consumer cloud storage client
-#Microsoft.OutlookForWindows                   # New mail app: Outlook for Windows
-#Microsoft.Paint                               # Classic Paint (Traditional 2D paint application)
-#Microsoft.People                              # Required for & included with Mail & Calendar (Contacts management)
-#Microsoft.PowerAutomateDesktop                # Desktop automation tool (RPA)
-#Microsoft.RemoteDesktop                       # Remote Desktop client app
-#Microsoft.ScreenSketch                        # Snipping Tool (Screenshot and annotation tool)
-#Microsoft.StartExperiencesApp                 # This app powers Windows Widgets My Feed
-#Microsoft.Whiteboard                          # Digital collaborative whiteboard app
-#Microsoft.Windows.DevHome                     # Developer dashboard and tool configuration utility
-#Microsoft.Windows.Photos                      # Default photo viewing and basic editing app
-#Microsoft.WindowsCalculator                   # Calculator app
-#Microsoft.WindowsCamera                       # Camera app for using built-in or connected cameras
-#Microsoft.windowscommunicationsapps           # Mail & Calendar app suite
-#Microsoft.WindowsNotepad                      # Notepad text editor app
-#Microsoft.WindowsStore                        # Microsoft Store, WARNING: This app cannot be reinstalled easily if removed!
-#Microsoft.WindowsTerminal                     # New default terminal app in windows 11 (Command Prompt, PowerShell, WSL)
-#Microsoft.Xbox.TCUI                           # UI framework, seems to be required for MS store, photos and certain games
-#Microsoft.XboxGameOverlay                     # Game overlay, required/useful for some games (Part of Xbox Game Bar)
-#Microsoft.XboxGamingOverlay                   # Game overlay, required/useful for some games (Part of Xbox Game Bar)
-#Microsoft.XboxIdentityProvider                # Xbox sign-in framework, required for some games and Xbox services
-#Microsoft.XboxSpeechToTextOverlay             # Might be required for some games, WARNING: This app cannot be reinstalled easily! (Accessibility feature)
-#Microsoft.YourPhone                           # Phone link (Connects Android/iOS phone to PC)
-#Microsoft.ZuneMusic                           # Modern Media Player (Replaced Groove Music, plays local audio/video)
-#MicrosoftWindows.CrossDevice                  # Phone integration within File Explorer, Camera and more (Part of Phone Link features)
-#AD2F1837.HPAIExperienceCenter                 # HP OEM software, AI-enhanced features and support
-#AD2F1837.HPConnectedMusic                     # HP OEM software for music (Potentially discontinued)
-#AD2F1837.HPConnectedPhotopoweredbySnapfish    # HP OEM software for photos, integrated with Snapfish (Potentially discontinued)
-#AD2F1837.HPDesktopSupportUtilities            # HP OEM software providing desktop support tools
-#AD2F1837.HPEasyClean                          # HP OEM software for system cleaning or optimization
-#AD2F1837.HPFileViewer                         # HP OEM software for viewing specific file types
-#AD2F1837.HPJumpStarts                         # HP OEM software for tutorials, app discovery, or quick access to HP features
-#AD2F1837.HPPCHardwareDiagnosticsWindows       # HP OEM software for PC hardware diagnostics
-#AD2F1837.HPPowerManager                       # HP OEM software for managing power settings and battery
-#AD2F1837.HPPrinterControl                     # HP OEM software for managing HP printers
-#AD2F1837.HPPrivacySettings                    # HP OEM software for managing privacy settings
-#AD2F1837.HPQuickDrop                          # HP OEM software for quick file transfer between devices
-#AD2F1837.HPQuickTouch                         # HP OEM software, possibly for touch-specific shortcuts or controls
-#AD2F1837.HPRegistration                       # HP OEM software for product registration
-#AD2F1837.HPSupportAssistant                   # HP OEM software for support, updates, and troubleshooting
-#AD2F1837.HPSureShieldAI                       # HP OEM security software, likely AI-based threat protection
-#AD2F1837.HPSystemInformation                  # HP OEM software for displaying system information
-#AD2F1837.HPWelcome                            # HP OEM software providing a welcome experience or initial setup help
-#AD2F1837.HPWorkWell                           # HP OEM software focused on well-being, possibly with break reminders or ergonomic tips
-#AD2F1837.myHP                                 # HP OEM central hub app for device info, support, and services
+# ============================================================================================================== #
+#  [分区 5/5] 系统核心基础设施与必备工具 (默认加 '#' 保留，若无特殊需求切勿解除注释！)                            #
+# ============================================================================================================== #
+
+# 1. 核心底层与商店 (删除会导致系统运行异常或无法安装应用)
+#Microsoft.WindowsStore                        # 微软应用商店 (绝对不可删除，否则后续无法补充任何 UWP)
+#Microsoft.WindowsTerminal                     # Windows 终端 (保留以防止右键“在终端中打开”报错)
+#Microsoft.DesktopAppInstaller                 # 应用安装程序 (包含 Winget 命令行包管理器)
+
+# 2. 必备基础桌面工具 (符合日常操作习惯)
+#Microsoft.WindowsNotepad                      # Windows 11 全新多标签页记事本 (按要求保留原生应用)
+#Microsoft.Paint                               # Windows 11 原生画图工具
+#Microsoft.WindowsCalculator                   # 原生科学计算器
+#Microsoft.Windows.Photos                      # 原生照片查看与编辑工具
+#Microsoft.ScreenSketch                        # 截图和草图 / 截屏工具 (按下 Win+Shift+S 核心依赖)
+Microsoft.WindowsCamera                       # 相机应用 (笔记本/外接摄像头必备)
+
+# 3. 游戏生态与 Xbox 认证依赖 (若完全不玩微软商店/XGP游戏，可解除注释删除)
+Microsoft.GamingApp                           # 现代 Xbox 游戏中心主程序
+Microsoft.Xbox.TCUI                           # Xbox UI 框架 (部分商店游戏或登录界面的依赖项)
+Microsoft.XboxGameOverlay                     # Xbox 游戏浮条覆盖层 (Game Bar 核心)
+Microsoft.XboxGamingOverlay                   # Xbox 游戏录制与监控浮条
+Microsoft.XboxIdentityProvider                # Xbox 账户登录与身份认证底层支持
+Microsoft.XboxSpeechToTextOverlay             # Xbox 游戏语音转文字无障碍层
