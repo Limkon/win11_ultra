@@ -1,6 +1,6 @@
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 大文件实体深度物理粉碎 (src/05-PhysicalNuke.ps1)
-#  [核心逻辑] 无论选择普通模式还是极限模式，本模块内所有目标实体均执行彻底物理粉碎
+#  [重构加固]：全盘彻底剿灭 SearchHost 实体 + 杜绝后台拉起 + 核心框架保护
 # ==============================================================================
 
 Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/Search/Defender/OneDrive/Speech)..." -ForegroundColor Cyan
@@ -16,13 +16,10 @@ Force-NukeFolderOrFile (Join-Path $recoveryDir "ReAgent.xml")
 Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整生态 (Chromium 本体 + WebView + UWP 桩程序)..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\Edge")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\EdgeUpdate")
-
-# 吸纳 nano11 经验：物理粉碎 System32 下的 WebView 实体
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\Microsoft-Edge-Webview")
 
-# 彻底粉碎 SystemApps 中的 Edge 幽灵桩程序 (根除 DCOM 10001 死锁源)
 $systemApps = Join-Path $scratchDir "Windows\SystemApps"
-if (Test-Path $systemApps) {
+if (Test-Path -LiteralPath $systemApps) {
     Get-ChildItem -Path $systemApps -Directory | Where-Object { 
         $_.Name -like "*MicrosoftEdge*" 
     } | ForEach-Object {
@@ -60,17 +57,26 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\CHT"
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\JPN")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\KOR")
 
-# 6. Cortana 与 Windows Search 全套引擎实体 (前台界面 + 后台索引引擎彻底粉碎)
-Write-Host "   -> 正在物理粉碎 Cortana 与 Windows Search 前后台全套引擎实体..." -ForegroundColor DarkGray
-if (Test-Path $systemApps) {
+# 6. Cortana 与 Windows Search 前后台全套引擎实体 (深度清除 Client.CBS 内部残留)
+Write-Host "   -> 正在物理粉碎 Cortana 与 Windows Search (包含 SearchHost/SearchApp)..." -ForegroundColor DarkGray
+if (Test-Path -LiteralPath $systemApps) {
+    # 清理明确的 Cortana 与 Search 专属包
     Get-ChildItem -Path $systemApps -Directory | Where-Object { 
-        $_.Name -like "*Cortana*" -or $_.Name -like "*Search*" 
+        $_.Name -like "*Cortana*" -or $_.Name -like "*Microsoft.Windows.Search*" 
     } | ForEach-Object {
+        Force-NukeFolderOrFile $_.FullName
+    }
+
+    # 【深度修复】：全盘递归粉碎隐藏在 CBS 或其他宿主目录中的 SearchHost 执行实体
+    Get-ChildItem -Path $systemApps -Recurse -Filter "SearchHost.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+        Force-NukeFolderOrFile $_.FullName
+    }
+    Get-ChildItem -Path $systemApps -Recurse -Filter "SearchApp.exe" -ErrorAction SilentlyContinue | ForEach-Object {
         Force-NukeFolderOrFile $_.FullName
     }
 }
 
-# 物理粉碎 System32 下的真正后台搜索引擎二进制文件 (彻底杜绝后台重启)
+# 物理粉碎 System32 传统后台索引二进制文件
 $sys32Dir = Join-Path $scratchDir "Windows\System32"
 Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchIndexer.exe")
 Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchFilterHost.exe")
@@ -85,7 +91,7 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Help")
 
 # 8. 冗余壁纸 (严格保护保留默认 img0.jpg)
 $wallpapers = Join-Path $scratchDir "Windows\Web\Wallpaper"
-if (Test-Path $wallpapers) {
+if (Test-Path -LiteralPath $wallpapers) {
     Write-Host "   -> 正在清理多余壁纸 (严格保留默认 img0.jpg)..." -ForegroundColor DarkGray
     Get-ChildItem -Path $wallpapers -Recurse -File | Where-Object { $_.Name -ne "img0.jpg" } | ForEach-Object {
         Force-NukeFolderOrFile $_.FullName
@@ -96,7 +102,7 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Web\TouchKeyboard")
 
 # 9. 系统提示音 (严格保护保留 Windows 核心事件声音)
 $mediaDir = Join-Path $scratchDir "Windows\Media"
-if (Test-Path $mediaDir) {
+if (Test-Path -LiteralPath $mediaDir) {
     Write-Host "   -> 正在精炼系统提示音 (保留核心事件声音)..." -ForegroundColor DarkGray
     Get-ChildItem -Path $mediaDir -Filter "*.wav" | Where-Object { 
         $_.Name -notmatch "Windows (Background|Foreground|Error|Ding|Default)\.wav" 
@@ -107,11 +113,11 @@ if (Test-Path $mediaDir) {
 
 # 10. 中文字体库深度精炼 (保护保留常见中文字体与核心 UI 字体)
 $fontsPath = Join-Path $scratchDir "Windows\Fonts"
-if (Test-Path $fontsPath) {
+if (Test-Path -LiteralPath $fontsPath) {
     Write-Host "   -> 正在精炼中文字体库..." -ForegroundColor DarkGray
     Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "calibri*.*", "arial*.*", "times*.*", "msyh*.*", "simsun*.*", "simhei*.*", "kaiu*.*", "mingliu*.*" | ForEach-Object {
         Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
     }
 }
 
-Write-Host "[完成] 大文件实体物理粉碎完毕。" -ForegroundColor Green
+Write-Host "[完成] 大文件实体物理粉碎完毕 (SearchHost 物理实体已全面歼灭)。" -ForegroundColor Green
