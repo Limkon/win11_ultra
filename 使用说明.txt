@@ -1,4 +1,0 @@
-﻿以管理员身份打开 PowerShell，执行以下命令，临时允许脚本执行（当前会话）：
-Set-ExecutionPolicy Bypass -Scope Process
-运行脚本./win11builder.ps1
-按提示输入镜像挂载的盘符，如 E，及选择构建什么版本，输入对应的序号
