@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-14 04:35:20 UTC
+#  生成时间: 2026-10-14 04:53:20 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -721,27 +721,23 @@ if (Test-Path -LiteralPath $mediaDir) {
     }
 }
 
-# 10. 中文字体库深度精炼 (保护保留常见中文字体与核心 UI 字体)
-$fontsPath = Join-Path $scratchDir "Windows\Fonts"
-if (Test-Path -LiteralPath $fontsPath) {
-    Write-Host "   -> 正在精炼中文字体库..." -ForegroundColor DarkGray
-    Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "calibri*.*", "arial*.*", "times*.*", "msyh*.*", "simsun*.*", "simhei*.*", "kaiu*.*", "mingliu*.*" | ForEach-Object {
-        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
-    }
-}
+# 10. 中文字体库深度精炼 (注：只删物理文件不删注册表会导致 Office/PS 闪退，建议整段注释跳过)
+# $fontsPath = Join-Path $scratchDir "Windows\Fonts"
+# if (Test-Path -LiteralPath $fontsPath) {
+#     Write-Host "   -> 正在精炼中文字体库..." -ForegroundColor DarkGray
+#     Get-ChildItem -Path $fontsPath -Exclude ... | ForEach-Object {
+#         Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+#     }
+# }
 
-Write-Host "[完成] 大文件实体物理粉碎完毕 (SearchHost 物理实体已全面歼灭)。" -ForegroundColor Green
-
-# ----------------- 11. 修复记事本物理执行实体 (消灭 Windows 目录下的 UWP 幽灵桩) -----------------
-Write-Host "   -> 正在使用 System32 经典记事本覆盖根目录 UWP 跳转死桩..." -ForegroundColor DarkGray
-$winDir = Join-Path $scratchDir "Windows"
-$sys32Notepad = Join-Path $winDir "System32\notepad.exe"
-$rootNotepad  = Join-Path $winDir "notepad.exe"
-
-if (Test-Path -LiteralPath $sys32Notepad) {
-    Force-NukeFolderOrFile $rootNotepad
-    Copy-Item -LiteralPath $sys32Notepad -Destination $rootNotepad -Force
-}
+# ----------------- 11. 修复记事本物理执行实体 (已由注册表标准接管，此处无需重复覆盖) -----------------
+# $winDir = Join-Path $scratchDir "Windows"
+# $sys32Notepad = Join-Path $winDir "System32\notepad.exe"
+# $rootNotepad  = Join-Path $winDir "notepad.exe"
+# if (Test-Path -LiteralPath $sys32Notepad) {
+#     Force-NukeFolderOrFile $rootNotepad
+#     Copy-Item -LiteralPath $sys32Notepad -Destination $rootNotepad -Force
+# }
 
 # <<< [分块结束] 文件来源: src/05-PhysicalNuke.ps1
 
@@ -808,19 +804,9 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  B. 内核级绝对拦截 SearchHost / SearchIndexer (彻底杜绝后台常驻拉起)
+#  B. 组策略安全禁用 SearchHost / Cortana 联网与后台 (移除危险的 IFEO 劫持)
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 使用系统内核级 IFEO 机制：任何拉起 SearchHost/SearchApp 的行为直接在 0 毫秒内退出
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchHost.exe]
-"Debugger"="systray.exe"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchApp.exe]
-"Debugger"="systray.exe"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchIndexer.exe]
-"Debugger"="systray.exe"
-
 ; 关闭任务栏搜索图标展示
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Search]
 "SearchboxTaskbarMode"=dword:00000000
@@ -870,17 +856,17 @@ if ($trimMode -eq "2") {
 }
 
 # ==============================================================================
-#  D. 终极修复：回归纯净 Win32 打开方式，彻底杜绝 COM 死锁
+#  D. 终极修复：回归纯净 Win32 打开方式，彻底杜绝 COM 死锁与记事本冲突
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 全域禁用打开方式向应用商店查询推荐应用（提升速度）
+; 1. 全域禁用打开方式向应用商店查询推荐应用（提升秒开速度）
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
 "NoUseStoreOpenWith"=dword:00000001
 
 [HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer]
 "NoUseStoreOpenWith"=dword:00000001
 
-; 2. 【核心策略】：彻底移除 DelegateExecute 键值（用负号 - 拔除）
+; 2. 【核心修复】：彻底移除 DelegateExecute 键值（用负号 - 拔除）
 ; 让 OpenWith 直接执行纯正的 Win32 OpenWith.exe 进程，永不假死，永不依赖任何损坏的 UWP
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
 @="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
@@ -890,11 +876,17 @@ $null = $reg.AppendLine(@"
 @="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
 "DelegateExecute"=-
 
-; 3. 稳固 .txt 文件的原生 Win32 记事本关联（阻断包验证报错）
+; 3. 【核心固化】：强制将 .txt 关联锁定到本地 Win32 记事本，彻底根治“包无法验证”报错
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
 @="txtfile"
 "Content Type"="text/plain"
 "PerceivedType"="text"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
+@="文本文档"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
+@="open"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
 @="\"%SystemRoot%\\System32\\notepad.exe\" \"%1\""
