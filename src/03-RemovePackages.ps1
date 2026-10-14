@@ -3,7 +3,7 @@
 #  [nano11 逻辑直装重构版]：彻底抛弃脆弱的拓扑解析，采用原生安全匹配与极速剥离
 # ==============================================================================
 
-Write-Host "`n[步骤 4/11] 正在执行 UWP 预装应用剥离..." -ForegroundColor Cyan
+Write-Host "`n[步骤 4/11] 正在执行UWP预装应用剥离..." -ForegroundColor Cyan
 
 # ----------------- 1. 母盘主语言探测 (严格保护母盘核心语言) -----------------
 $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
@@ -89,7 +89,7 @@ if ($totalApps -gt 0) {
         # 使用 DISM 官方原生接口规范化反注册，不强行抹杀注册表
         & dism.exe /English /Image:$scratchDir /Remove-ProvisionedAppxPackage "/PackageName:$($app.PackageName)" 2>$null | Out-Null
     }
-    Write-Progress -Activity "正在同步 nano11 逻辑精简预装 UWP" -Completed
+    Write-Progress -Activity "正在同步逻辑精简预装 UWP" -Completed
 
     # 按照 nano11 原生逻辑清理 WindowsApps 目录下的残留大实体文件夹
     Write-Host "   正在清理 WindowsApps 残留实体文件..." -ForegroundColor DarkGray
@@ -106,13 +106,13 @@ if ($totalApps -gt 0) {
         & icacls.exe "$winAppsDir" /grant "*S-1-5-32-545:(OI)(CI)RX" /C /Q 2>$null | Out-Null
     }
 } else {
-    Write-Host "   [提示] 未发现匹配 nano11 规则的预装应用。" -ForegroundColor DarkGray
+    Write-Host "   [提示] 未发现匹配规则的预装应用。" -ForegroundColor DarkGray
 }
 
 Write-Host "[完成] UWP 预装应用剥离完毕。" -ForegroundColor Green
 
 # ----------------- 3. nano11 原生系统可选功能包 (FOD) 精炼 -----------------
-Write-Host "`n[步骤 5/11] 正在同步 nano11 规则精炼可选功能与外语包..." -ForegroundColor Cyan
+Write-Host "`n[步骤 5/11] 正在同步规则精炼可选功能与外语包..." -ForegroundColor Cyan
 
 # 继承自 nano11 官方精简方案 (安全保留 Search-Engine-Client，避免属性页与索引架构损伤)
 $packagePatterns = @(
