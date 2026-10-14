@@ -1,83 +1,34 @@
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
-#  [架构重构]：彻底清除 NoUseStoreOpenWith + 集成 FirstLogon 原生自愈流水线
+#  [重构加固]：自毁句柄死锁根治 + Sysprep 规范对齐 + XML 注入严格转义
 # ==============================================================================
 
-# 0. 变量作用域安全兜底
-if (-not $unattendMode) { $unattendMode = "Semi" }
+Write-Host "`n[步骤 9/11] 正在配置高级无人值守应答文件 (30秒智能倒计时)..." -ForegroundColor Cyan
 
-Write-Host "`n[步骤 9/11] 正在配置高级无人值守应答文件与首次登入优化引擎..." -ForegroundColor Cyan
-
-# 1. 根据模式动态生成账户配置块
-if ($unattendMode -eq "Full") {
-    Write-Host ">>> [模式生效] 全无人值守模式：全自动无人值守安装 (30秒智能倒计时设置用户名/密码)..." -ForegroundColor Cyan
-    $userResult = Read-InputWithTimeout -Prompt "请输入登录用户名" -Seconds 30 -Default "Admin"
-    $inputUser = $userResult.Value
-    if ($inputUser -match "^(Administrator|Guest)$") {
-        Write-Host "[警告] 输入了系统保留账户名 $inputUser，自动重置为 Admin！" -ForegroundColor Yellow
-        $inputUser = "Admin"
-    }
-
-    if ($userResult.TimedOut) {
-        $inputPass = ""
-    } else {
-        $inputPass = Read-Host "请输入登录密码 (直接回车表示留空无密码)"
-    }
-    $inputUserEscaped = [System.Security.SecurityElement]::Escape($inputUser)
-    $inputPassEscaped = [System.Security.SecurityElement]::Escape($inputPass)
-
-    $shellAccountXml = @"
-			<UserAccounts>
-				<LocalAccounts>
-					<LocalAccount wcm:action="add">
-						<Description>系统核心管理员账户</Description>
-						<DisplayName>$inputUserEscaped</DisplayName>
-						<Group>Administrators</Group>
-						<Name>$inputUserEscaped</Name>
-						<Password>
-							<Value>$inputPassEscaped</Value>
-							<PlainText>true</PlainText>
-						</Password>
-					</LocalAccount>
-				</LocalAccounts>
-			</UserAccounts>
-			<AutoLogon>
-				<Username>$inputUserEscaped</Username>
-				<Enabled>true</Enabled>
-				<LogonCount>1</LogonCount>
-				<Password>
-					<Value>$inputPassEscaped</Value>
-					<PlainText>true</PlainText>
-				</Password>
-			</AutoLogon>
-			<OOBE>
-				<ProtectYourPC>3</ProtectYourPC>
-				<HideEULAPage>true</HideEULAPage>
-				<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-				<HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-				<HideLocalAccountScreen>true</HideLocalAccountScreen>
-			</OOBE>
-"@
-} else {
-    Write-Host ">>> [模式生效] 半无人值守模式 (默认)：跳过硬件/免联网/协议跳过，装机 OOBE 阶段提示设置自定义账户..." -ForegroundColor Green
-    $shellAccountXml = @"
-			<OOBE>
-				<ProtectYourPC>3</ProtectYourPC>
-				<HideEULAPage>true</HideEULAPage>
-				<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-				<HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-				<HideLocalAccountScreen>false</HideLocalAccountScreen>
-			</OOBE>
-"@
+# 1. 调用倒计时输入函数获取登录账户
+$userResult = Read-InputWithTimeout -Prompt "请输入登录用户名" -Seconds 30 -Default "Admin"
+$inputUser = $userResult.Value
+if ($inputUser -match "^(Administrator|Guest)$") {
+    Write-Host "[警告] 输入了系统保留账户名 $inputUser，自动重置为 Admin！" -ForegroundColor Yellow
+    $inputUser = "Admin"
 }
 
-# 2. 100% 完整合规的应答模板 (动态拼接账户控制块)
+# 2. 密码设定与 XML 特殊字符严格安全转义 (彻底防止 XML 结构断裂)
+if ($userResult.TimedOut) {
+    $inputPass = ""
+} else {
+    $inputPass = Read-Host "请输入登录密码 (直接回车表示留空无密码)"
+}
+$inputUserEscaped = [System.Security.SecurityElement]::Escape($inputUser)
+$inputPassEscaped = [System.Security.SecurityElement]::Escape($inputPass)
+
+# 3. 100% 完整无损原版 XML 应答模板 (修复自毁死锁与规范映射)
 $unattendTemplate = @'
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
 	<settings pass="offlineServicing"></settings>
 	<settings pass="windowsPE">
-		<!-- 1. WinPE 安装环境国际化 (跳过初始语言与键盘选择) -->
+		<!-- 1. WinPE 安装环境国际化 (跳过安装初始语言/键盘选择) -->
 		<component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<SetupUILanguage>
 				<UILanguage>zh-CN</UILanguage>
@@ -153,7 +104,7 @@ $unattendTemplate = @'
 	<settings pass="auditSystem"></settings>
 	<settings pass="auditUser"></settings>
 	<settings pass="oobeSystem">
-		<!-- 2. OOBE 阶段国际化全自动闭环 -->
+		<!-- 2. OOBE 阶段国际化全自动闭环 (彻底跳过地区、键盘布局交互) -->
 		<component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<InputLocale>zh-CN</InputLocale>
 			<SystemLocale>zh-CN</SystemLocale>
@@ -161,7 +112,36 @@ $unattendTemplate = @'
 			<UserLocale>zh-CN</UserLocale>
 		</component>
 		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-__SHELL_ACCOUNT_BLOCK__
+			<UserAccounts>
+				<LocalAccounts>
+					<LocalAccount wcm:action="add">
+						<Description>系统核心管理员账户</Description>
+						<DisplayName>__CUSTOM_USER__</DisplayName>
+						<Group>Administrators</Group>
+						<Name>__CUSTOM_USER__</Name>
+						<Password>
+							<Value>__CUSTOM_PASS__</Value>
+							<PlainText>true</PlainText>
+						</Password>
+					</LocalAccount>
+				</LocalAccounts>
+			</UserAccounts>
+			<AutoLogon>
+				<Username>__CUSTOM_USER__</Username>
+				<Enabled>true</Enabled>
+				<LogonCount>1</LogonCount>
+				<Password>
+					<Value>__CUSTOM_PASS__</Value>
+					<PlainText>true</PlainText>
+				</Password>
+			</AutoLogon>
+			<OOBE>
+				<ProtectYourPC>3</ProtectYourPC>
+				<HideEULAPage>true</HideEULAPage>
+				<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+				<HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+				<HideLocalAccountScreen>true</HideLocalAccountScreen>
+			</OOBE>
 			<FirstLogonCommands>
 				<SynchronousCommand wcm:action="add">
 					<Order>1</Order>
@@ -328,25 +308,10 @@ $scripts = @(
 		Disable-ComputerRestore -Drive 'C:\';
 	};
 	{
-		cmd.exe /c "rmdir C:\Windows.old" 2>$null;
+		cmd.exe /c "rmdir C:\Windows.old";
 	};
 	{
-		# 【Win11Debloat 级活体自愈】：为首登用户注入记事本正规注册，彻底消灭“包无法验证”报错
-		try {
-			$notepadManifest = Get-ChildItem -Path "C:\Program Files\WindowsApps" -Filter "AppxManifest.xml" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*WindowsNotepad*" } | Select-Object -First 1
-			if ($notepadManifest) {
-				Add-AppxPackage -DisableDevelopmentMode -Register $notepadManifest.FullName -ErrorAction SilentlyContinue
-			}
-		} catch {}
-	};
-	{
-		# 清除潜在的 UserChoice 残留冲突，确保 txtfile 基础关联生效
-		cmd.exe /c "reg delete `"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\UserChoice`" /f" 2>$null;
-		cmd.exe /c "assoc .txt=txtfile" 2>$null;
-		cmd.exe /c 'ftype txtfile="%SystemRoot%\System32\notepad.exe" "%1"' 2>$null;
-	};
-	{
-		# 彻底销毁应答文件副本 (防信息泄露)
+		# 1. 彻底销毁可能包含明文密码的各层级应答文件副本
 		$xmlFiles = @(
 			'C:\Windows\Panther\unattend.xml',
 			'C:\Windows\Panther\Unattend\unattend.xml',
@@ -357,8 +322,8 @@ $scripts = @(
 			if (Test-Path $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; }
 		}
 
-		# 异步延时平滑自毁临时 Scripts 目录
-		Start-Process -WindowStyle Hidden -FilePath "cmd.exe" -ArgumentList '/c timeout /t 5 /nobreak >nul &amp; rd /s /q "C:\Windows\Setup\Scripts"'
+		# 2. 彻底根治句柄锁：将日志重定向到 TEMP 后，使用循环重试命令执行Scripts目录自毁
+		Start-Process -WindowStyle Hidden -FilePath "cmd.exe" -ArgumentList '/c timeout /t 3 /nobreak >nul &amp; for /l %i in (1,1,10) do (if exist "C:\Windows\Setup\Scripts" (rd /s /q "C:\Windows\Setup\Scripts" &amp; timeout /t 1 >nul) else (exit))'
 	};
 );
 
@@ -366,9 +331,20 @@ $scripts = @(
   [float] $complete = 0;
   [float] $increment = 100 / $scripts.Count;
   foreach( $script in $scripts ) {
-    Write-Progress -Activity 'Finalizing Windows deployment...' -PercentComplete $complete;
+    Write-Progress -Activity 'Running scripts to finalize your Windows installation. Do not close this window.' -PercentComplete $complete;
+    '*** Will now execute command &#xAB;{0}&#xBB;.' -f $(
+      $str = $script.ToString().Trim() -replace '\s+', ' ';
+      $max = 100;
+      if( $str.Length -le $max ) {
+        $str;
+      } else {
+        $str.Substring( 0, $max - 1 ) + '&#x2026;';
+      }
+    );
     $start = [datetime]::Now;
     &amp; $script;
+    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( $start ).TotalMilliseconds;
+    "`r`n" * 3;
     $complete += $increment;
   }
 } *&gt;&amp;1 &gt;&gt; "$env:TEMP\FirstLogon.log";
@@ -377,8 +353,8 @@ $scripts = @(
 </unattend>
 '@
 
-# 3. 动态注入账户控制块
-$autoUnattendXml = $unattendTemplate.Replace('__SHELL_ACCOUNT_BLOCK__', $shellAccountXml)
+# 替换自定义参数 (严格经过 XML 安全字符转义)
+$autoUnattendXml = $unattendTemplate.Replace('__CUSTOM_USER__', $inputUserEscaped).Replace('__CUSTOM_PASS__', $inputPassEscaped)
 
 # 4. 多通道合规注入 (Sysprep 标准规范、Panther 自动化、安装介质根目录)
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
@@ -388,7 +364,7 @@ if (-not (Test-Path -LiteralPath $pantherDir)) { New-Item -ItemType Directory -P
 
 $utf8Encoding = [System.Text.Encoding]::UTF8
 
-# Sysprep 核心规范通道：双向兼容
+# Sysprep 核心规范通道：必须写入 unattend.xml，同时补充 autounattend.xml 以确保双向兼容
 [System.IO.File]::WriteAllText((Join-Path $sysprepDir "unattend.xml"), $autoUnattendXml, $utf8Encoding)
 [System.IO.File]::WriteAllText((Join-Path $sysprepDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
 
@@ -398,4 +374,4 @@ $utf8Encoding = [System.Text.Encoding]::UTF8
 # ISO 可移动介质根目录自启动通道
 [System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (有害策略已清零，首登自愈流水线已就绪)。" -ForegroundColor Green
+Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自毁死锁彻底根治，Sysprep 合规固化)。" -ForegroundColor Green

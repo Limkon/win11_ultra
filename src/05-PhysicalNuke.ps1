@@ -1,19 +1,19 @@
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 大文件实体深度物理粉碎 (src/05-PhysicalNuke.ps1)
-#  [架构重构]：零外壳损伤 + 保护 Client.CBS 签名 + 杜绝字体/记事本误伤
+#  [重构加固]：全盘彻底剿灭 SearchHost 实体 + 杜绝后台拉起 + 核心框架保护
 # ==============================================================================
 
-Write-Host "`n[步骤 7/11] 深度物理粉碎非必要独立大文件实体 (Edge/Defender/OneDrive/WinRE)..." -ForegroundColor Cyan
-Write-Host "   [设计原则] 仅粉碎 100% 独立且无外壳绑定的实体，严格保护系统核心 XAML 宿主。" -ForegroundColor DarkCyan
+Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/Search/Defender/OneDrive/Speech)..." -ForegroundColor Cyan
+Write-Host "   [模式说明] 普通模式与极限模式均完整执行以下实体物理粉碎：" -ForegroundColor DarkCyan
 
-# 1. 恢复环境 (WinRE - 释放约 500MB)
+# 1. 恢复环境 (WinRE)
 $recoveryDir = Join-Path $scratchDir "Windows\System32\Recovery"
 Write-Host "   -> 正在物理粉碎 WinRE 恢复环境文件..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $recoveryDir "winre.wim")
 Force-NukeFolderOrFile (Join-Path $recoveryDir "ReAgent.xml")
 
-# 2. Microsoft Edge 浏览器完整生态 (Chromium 本体 + WebView + 独立更新服务 - 释放约 1.2GB)
-Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整生态 (Chromium 本体 + WebView)..." -ForegroundColor DarkGray
+# 2. Microsoft Edge 浏览器完整生态 (Chromium 本体 + WebView + SystemApps 遗留 UWP 桩程序)
+Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整生态 (Chromium 本体 + WebView + UWP 桩程序)..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\Edge")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\EdgeUpdate")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\Microsoft-Edge-Webview")
@@ -27,7 +27,7 @@ if (Test-Path -LiteralPath $systemApps) {
     }
 }
 
-# 3. Microsoft OneDrive (全路径预装源与运行实体 - 释放约 200MB)
+# 3. Microsoft OneDrive (全路径与预装源)
 Write-Host "   -> 正在物理粉碎 OneDrive 各层级安装与运行实体..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\OneDriveSetup.exe")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\SysWOW64\OneDriveSetup.exe")
@@ -36,7 +36,7 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft One
 Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft OneDrive")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Users\Default\AppData\Local\Microsoft\OneDrive")
 
-# 4. Windows Defender 全栈驱动与服务组件实体 (配合注册表 ELAM 免蓝屏)
+# 4. Windows Defender 全栈驱动与服务组件
 Write-Host "   -> 正在物理粉碎 Windows Defender 全栈驱动与服务组件实体..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft\Windows Defender")
 Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft\Windows Defender Advanced Threat Protection")
@@ -51,31 +51,39 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\WdFilter
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\WdNisDrv.sys")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\wdboot.sys")
 
-# 5. 日语、韩语、繁体中文输入法大字库实体
-Write-Host "   -> 正在物理粉碎繁体/日语/韩语输入法字典实体..." -ForegroundColor DarkGray
+# 5. 日语、韩语、繁体中文输入法字库实体
+Write-Host "   -> 正在物理粉碎繁体/日语/韩语输入法实体..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\CHT")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\JPN")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\KOR")
 
-# 6. 独立 Cortana 与传统后台检索实体 (【绝密级红线】：绝对不进入 Client.CBS 强删内部文件)
-Write-Host "   -> 正在物理粉碎独立 Cortana 目录与 System32 传统索引二进制..." -ForegroundColor DarkGray
+# 6. Cortana 与 Windows Search 前后台全套引擎实体 (深度清除 Client.CBS 内部残留)
+Write-Host "   -> 正在物理粉碎 Cortana 与 Windows Search (包含 SearchHost/SearchApp)..." -ForegroundColor DarkGray
 if (Test-Path -LiteralPath $systemApps) {
-    # 仅安全删除独立的 Cortana 目录，杜绝递归检索 Client.CBS
+    # 清理明确的 Cortana 与 Search 专属包
     Get-ChildItem -Path $systemApps -Directory | Where-Object { 
-        $_.Name -like "*Cortana*" 
+        $_.Name -like "*Cortana*" -or $_.Name -like "*Microsoft.Windows.Search*" 
     } | ForEach-Object {
+        Force-NukeFolderOrFile $_.FullName
+    }
+
+    # 【深度修复】：全盘递归粉碎隐藏在 CBS 或其他宿主目录中的 SearchHost 执行实体
+    Get-ChildItem -Path $systemApps -Recurse -Filter "SearchHost.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+        Force-NukeFolderOrFile $_.FullName
+    }
+    Get-ChildItem -Path $systemApps -Recurse -Filter "SearchApp.exe" -ErrorAction SilentlyContinue | ForEach-Object {
         Force-NukeFolderOrFile $_.FullName
     }
 }
 
-# 物理粉碎 System32 传统后台索引执行程序
+# 物理粉碎 System32 传统后台索引二进制文件
 $sys32Dir = Join-Path $scratchDir "Windows\System32"
 Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchIndexer.exe")
 Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchFilterHost.exe")
 Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchProtocolHost.exe")
 
 # 7. 语音引擎与离线帮助文档
-Write-Host "   -> 正在物理粉碎离线语音引擎与帮助文档..." -ForegroundColor DarkGray
+Write-Host "   -> 正在物理粉碎语音引擎与帮助文档..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Speech\Engines\SR")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Speech\Engines\TTS\en-US")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\Speech\Engines\SR")
@@ -103,4 +111,24 @@ if (Test-Path -LiteralPath $mediaDir) {
     }
 }
 
-Write-Host "[完成] 独立实体物理粉碎完毕 (系统核心外壳包签名完整无损)。" -ForegroundColor Green
+# 10. 中文字体库深度精炼 (保护保留常见中文字体与核心 UI 字体)
+$fontsPath = Join-Path $scratchDir "Windows\Fonts"
+if (Test-Path -LiteralPath $fontsPath) {
+    Write-Host "   -> 正在精炼中文字体库..." -ForegroundColor DarkGray
+    Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "calibri*.*", "arial*.*", "times*.*", "msyh*.*", "simsun*.*", "simhei*.*", "kaiu*.*", "mingliu*.*" | ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Host "[完成] 大文件实体物理粉碎完毕 (SearchHost 物理实体已全面歼灭)。" -ForegroundColor Green
+
+# ----------------- 11. 修复记事本物理执行实体 (消灭 Windows 目录下的 UWP 幽灵桩) -----------------
+Write-Host "   -> 正在使用 System32 经典记事本覆盖根目录 UWP 跳转死桩..." -ForegroundColor DarkGray
+$winDir = Join-Path $scratchDir "Windows"
+$sys32Notepad = Join-Path $winDir "System32\notepad.exe"
+$rootNotepad  = Join-Path $winDir "notepad.exe"
+
+if (Test-Path -LiteralPath $sys32Notepad) {
+    Force-NukeFolderOrFile $rootNotepad
+    Copy-Item -LiteralPath $sys32Notepad -Destination $rootNotepad -Force
+}

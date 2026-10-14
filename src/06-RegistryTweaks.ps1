@@ -1,6 +1,6 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表原生 Unicode 导入引擎 (src/06-RegistryTweaks.ps1)
-#  [架构重构]：官方原生 COM 调度 + 肃清 NoUseStoreOpenWith + 纯策略安全禁用
+#  [终极重构]：彻底唤醒新建文本文档 + IFEO 内核绝杀 SearchHost + 修复打开方式死锁
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -34,13 +34,10 @@ $null = $reg.AppendLine(@"
 ; 2. 彻底拔除导致盘符属性瘫痪的 BitLocker 幽灵扩展
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\PropertySheetHandlers\{D9DE8B79-CE8A-421A-98C3-5F17A9EB2269}]
 
-; 3. 彻底抹杀导致右键菜单卡死 1~3 秒的 Defender EPP 幽灵扩展与协议残留
+; 3. 彻底抹杀导致右键菜单卡死 1~3 秒的 Defender EPP 幽灵扩展
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shellex\ContextMenuHandlers\EPP]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Directory\shellex\ContextMenuHandlers\EPP]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\ContextMenuHandlers\EPP]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\windowsdefender]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\windowsdefender]
-@=""
 
 ; 4. 固化盘符与文件标准属性页 COM 挂载
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\PropertySheetHandlers\Sharing]
@@ -61,13 +58,18 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  B. 纯策略安全禁用 Windows Search / Cortana (安全无害，杜绝 IFEO 劫持)
+#  B. 内核级绝对拦截 SearchHost / SearchIndexer (彻底杜绝后台常驻拉起)
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 清除任何潜在的 IFEO 进程劫持残留
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchHost.exe]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchApp.exe]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchIndexer.exe]
+; 使用系统内核级 IFEO 机制：任何拉起 SearchHost/SearchApp 的行为直接在 0 毫秒内退出
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchHost.exe]
+"Debugger"="systray.exe"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchApp.exe]
+"Debugger"="systray.exe"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchIndexer.exe]
+"Debugger"="systray.exe"
 
 ; 关闭任务栏搜索图标展示
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Search]
@@ -118,45 +120,95 @@ if ($trimMode -eq "2") {
 }
 
 # ==============================================================================
-#  D. 核心修复：还原打开方式官方标准契约 + 固化 .txt 基准关联
+#  D. 核心修复：新建文本文档 100% 唤醒机制 (规范化 Win11 字符串间接资源与双 ProgID)
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 恢复官方原厂 DelegateExecute 调度器，确保“更多应用”正常展开与本地查找无阻
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas]
-@="@shell32.dll,-5376"
-"MultiSelectModel"="Single"
-"Position"="Bottom"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
-@="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
-"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Unknown\shell\opendlg\command]
-@="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
-"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
-
-; 2. 拔除破坏 XAML 打开方式展开容器的 NoUseStoreOpenWith 键值
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer\NoUseStoreOpenWith]
-[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer\NoUseStoreOpenWith]
-
-; 3. 稳固 .txt 基础关联体系
+; 1. 扩展名 .txt 基础关联 (主指 txtfilelegacy)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
-@="txtfile"
+@="txtfilelegacy"
 "Content Type"="text/plain"
 "PerceivedType"="text"
 
+; 【关键修复】：必须写入间接字符串资源 @%SystemRoot%\system32\notepad.exe,-470，否则 Win11 判定名称为空直接隐藏
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
+"ItemName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,37,00,30,00,00,00
+"NullFile"=""
+
+; 清空可能干扰的 OpenWithProgids
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
+"txtfilelegacy"=hex(0):
+"txtfile"=hex(0):
+
+; 2. Win11 核心实体 txtfilelegacy 深度补全
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
+@="文本文档"
+"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\DefaultIcon]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\shell]
+@="open"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\shell\open\command]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
+
+; 3. 经典 txtfile 回退兼容实体
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
 @="文本文档"
+"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\DefaultIcon]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
 @="open"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
-@="\"%SystemRoot%\\System32\\notepad.exe\" \"%1\""
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
+
+; 4. 彻底修正 App Paths，强制直指 System32 经典记事本
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,00,00
+
+; 5. 抹除 Default 用户中 UWP 留下的损坏关联
+[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
+[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
+"txtfilelegacy"=hex(0):
+"txtfile"=hex(0):
+
+[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\UserChoice]
 "@)
 
 # ==============================================================================
-#  E. 系统基础优化与隐私遥测剥离
+#  E. 核心修复：彻底根治“打开方式 -> 选择其他应用”无反应的死锁
+# ==============================================================================
+$null = $reg.AppendLine(@"
+; 1. 彻底删除导致 Win11 XAML OpenWith 按钮路由断裂的策略
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
+[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
+
+; 2. 【核心修复】：为 openas 与 opendlg 注入原生 COM DelegateExecute 代理契约
+; 严禁裸调 OpenWith.exe，必须由 Shell 代理调度器托管拉起
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas]
+@=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,73,00,68,00,65,00,6c,00,6c,00,33,00,32,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,35,00,33,00,37,00,36,00,00,00
+"MultiSelectModel"="Single"
+"Position"="Bottom"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
+"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Unknown\shell\opendlg\command]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
+"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
+"@)
+# ==============================================================================
+#  F. 系统基础优化与隐私遥测剥离
 # ==============================================================================
 $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\DataCollection]
@@ -201,13 +253,10 @@ $null = $reg.AppendLine(@"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer]
 "SmartScreenEnabled"="Off"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\AppHost]
-"EnableWebContentEvaluation"=dword:00000000
 "@)
 
 # ==============================================================================
-#  F. 硬件检测全量绕过与 OOBE 免联网
+#  G. 硬件检测全量绕过与 OOBE 免联网
 # ==============================================================================
 $labConfigKeys = @("BypassCPUCheck", "BypassRAMCheck", "BypassSecureBootCheck", "BypassStorageCheck", "BypassTPMCheck", "BypassDiskCheck")
 $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\Setup\LabConfig]")
@@ -228,7 +277,7 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  G. 经典 Windows 照片查看器关联激活
+#  H. 经典 Windows 照片查看器关联激活
 # ==============================================================================
 $photoExts = @(".jpg", ".jpeg", ".png", ".bmp", ".gif", ".ico", ".tiff", ".tif", ".jfif")
 $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSOFTWARE\RegisteredApplications]")
@@ -250,7 +299,12 @@ Write-Host "   正在通过 Windows 原生注册表引擎导入 Unicode 策略�
 & reg.exe import "$tempRegFile" 2>&1 | Out-Null
 Remove-Item -LiteralPath $tempRegFile -Force -ErrorAction SilentlyContinue
 
-# 4. 安全卸载配置单元 (防句柄残留死锁)
+# 4. 彻底物理粉碎 Explorer 僵尸缓存 (强制唤醒文本文档与新建菜单项)
+Write-Host "   正在粉碎 Explorer 新建菜单僵尸缓存 (强制刷新菜单索引)..." -ForegroundColor DarkGray
+cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
+cmd.exe /c "reg delete `"HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
+
+# 5. 安全卸载配置单元 (防句柄残留死锁)
 Write-Host "   正在安全卸载配置单元 (GC 垃圾回收防锁死机制推进)..." -ForegroundColor Green
 [System.GC]::Collect()
 [System.GC]::WaitForPendingFinalizers()
@@ -259,4 +313,4 @@ Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
 
-Write-Host "[完成] 离线注册表加固优化全部完毕 (官方标准契约已固化，死锁隐患全部扫除)。" -ForegroundColor Green
+Write-Host "[完成] 离线注册表加固优化全部完毕 (文本文档已三重加固，SearchHost 已内核拦截，打开方式死锁已排除)。" -ForegroundColor Green

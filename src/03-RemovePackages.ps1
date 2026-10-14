@@ -1,9 +1,9 @@
 # ==============================================================================
 #  win11 Builder - [模块 4/11] UWP 应用与可选功能包精简 (src/03-RemovePackages.ps1)
-#  [架构重构]：标准 DISM 原生卸载体系 + 保护底层 ACL 与框架签名 + 杜绝暴力夺权
+#  [重构加固]：动态语言感知 + 属性页 COM 架构保护 + 生产力组件保留
 # ==============================================================================
 
-# ----------------- 0. 动态环境感知与主语言探测 -----------------
+# ----------------- 0. 动态环境感知与主语言探测 (彻底杜绝外语 ISO 报废) -----------------
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并清理冗余 UWP 预装应用..." -ForegroundColor Cyan
 
 $imageIntl = & dism.exe /English /Image:$scratchDir /Get-Intl
@@ -13,95 +13,79 @@ if ([string]::IsNullOrWhiteSpace($defaultLang)) {
 }
 Write-Host "   [母盘语言检测] 锁定系统原生核心语言为: $defaultLang" -ForegroundColor Green
 
-# ----------------- 1. 加载 Appslist.txt 黑名单规则 -----------------
-$appsListCandidates = @(
-    (Join-Path $scriptDir "Appslist.txt"),
-    (Join-Path (Split-Path -Parent $scriptDir) "Appslist.txt"),
-    (Join-Path (Get-Location) "Appslist.txt")
+# ----------------- 1. UWP 卸载 + 定向物理粉碎 -----------------
+# 核心基础白名单（绝不能删除的底层基础框架与高频终端环境）
+$preservedPackages = @(
+    "*VCLibs*",
+    "*UI.Xaml*",
+    "*NET.Native*",
+    "*Client.CBS*",
+    "*ShellExperience*",
+    "*AccountsControl*",
+    "*CloudExperienceHost*",
+    "*BioEnrollment*",
+    "*WindowsTerminal*",        # 保留终端：彻底杜绝右键“在终端中打开”报找不到应用
+    "*DesktopAppInstaller*"     # 保留应用安装程序：保留 Winget 与离线 MSIX/APPX 安装能力
 )
 
-$appsListPath = $null
-foreach ($path in $appsListCandidates) {
-    if (Test-Path -LiteralPath $path) {
-        $appsListPath = $path
-        break
-    }
-}
-
-$blacklistPatterns = New-Object System.Collections.Generic.List[string]
-
-if ($appsListPath) {
-    Write-Host "   [黑名单加载] 正在读取黑名单配置: $appsListPath" -ForegroundColor Green
-    Get-Content -LiteralPath $appsListPath -Encoding UTF8 | ForEach-Object {
-        $line = $_.Trim()
-        if (-not [string]::IsNullOrWhiteSpace($line) -and -not $line.StartsWith("#")) {
-            $appId = ($line -split '#')[0].Trim()
-            if (-not [string]::IsNullOrWhiteSpace($appId)) {
-                $blacklistPatterns.Add("*$appId*")
-            }
-        }
-    }
-    Write-Host "   [黑名单加载] 成功加载 $($blacklistPatterns.Count) 条待卸载应用规则。" -ForegroundColor DarkGray
-} else {
-    Write-Host "   [警告] 未找到 Appslist.txt 文件！跳过 UWP 黑名单删除流程。" -ForegroundColor Yellow
-}
-
-# ----------------- 2. UWP 规范级 DISM 卸载 (严禁暴力夺权 WindowsApps) -----------------
 $appxPackages = Get-AppxProvisionedPackage -Path $scratchDir
 $totalAppx = $appxPackages.Count
 $currentAppx = 0
+$deletedAppxList = New-Object System.Collections.Generic.List[string]
 
 foreach ($app in $appxPackages) {
     $currentAppx++
-    $shouldDelete = $false
-
-    # 绝对核心保护白名单 (即便黑名单手误写入也坚决不删)
-    if ($app.PackageName -like "*WindowsStore*" -or 
-        $app.PackageName -like "*VCLibs*" -or 
-        $app.PackageName -like "*UI.Xaml*" -or
-        $app.PackageName -like "*Appinstaller*") {
-        Write-Host "   [$currentAppx/$totalAppx] [底层框架免疫保护] $($app.DisplayName)" -ForegroundColor Green
-        continue
-    }
-
-    # 匹配黑名单规则
-    foreach ($pattern in $blacklistPatterns) {
+    $shouldKeep = $false
+    foreach ($pattern in $preservedPackages) {
         if ($app.PackageName -like $pattern -or $app.DisplayName -like $pattern) {
-            $shouldDelete = $true
+            $shouldKeep = $true
             break
         }
     }
 
     $pct = [math]::Round(($currentAppx / [math]::Max(1, $totalAppx)) * 100)
-    Write-Progress -Activity "正在通过官方 DISM API 规范卸载 UWP" -Status "[$currentAppx/$totalAppx] 比对: $($app.DisplayName)" -PercentComplete $pct
+    Write-Progress -Activity "正在清理 UWP 预装应用" -Status "[$currentAppx/$totalAppx] 正在处理: $($app.DisplayName)" -PercentComplete $pct
 
-    if (-not $shouldDelete) {
-        Write-Host "   [$currentAppx/$totalAppx] [保留组件] $($app.DisplayName)" -ForegroundColor DarkGray
+    if ($shouldKeep) {
+        Write-Host "   [$currentAppx/$totalAppx] [保留核心] $($app.DisplayName)" -ForegroundColor DarkGray
         continue
     }
 
-    Write-Host "   [$currentAppx/$totalAppx] [DISM 卸载] $($app.PackageName)" -ForegroundColor Yellow
-    # 严格使用官方 DISM 命令脱机注销，由系统自动维护 StateRepository 数据库一致性
+    Write-Host "   [$currentAppx/$totalAppx] [删除应用] $($app.PackageName)" -ForegroundColor Yellow
     & dism.exe /English /Image:$scratchDir /Remove-ProvisionedAppxPackage "/PackageName:$($app.PackageName)" 2>$null | Out-Null
+    $deletedAppxList.Add($app.PackageName)
 }
-Write-Progress -Activity "正在通过官方 DISM API 规范卸载 UWP" -Completed
+Write-Progress -Activity "正在清理 UWP 预装应用" -Completed
 
-# 确保父目录具备标准沙箱安全只读权限
+# 精准定向物理粉碎已卸载的应用实体 (绝不污染父目录 SDDL，彻底释放磁盘空间)
 $winAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
 if (Test-Path -LiteralPath $winAppsDir) {
+    Write-Host "   正在执行 WindowsApps 废弃应用实体定向物理粉碎..." -ForegroundColor DarkGray
+
+    foreach ($pkgName in $deletedAppxList) {
+        $targetFolder = Join-Path $winAppsDir $pkgName
+        if (Test-Path -LiteralPath $targetFolder) {
+            Force-NukeFolderOrFile $targetFolder
+        }
+    }
+
+    # 关键安全加固：确保父目录具备 ALL APPLICATION PACKAGES 只读权限，彻底杜绝沙箱进程闪退
     & icacls.exe "$winAppsDir" /grant "*S-1-15-2-1:(OI)(CI)RX" /C /Q 2>$null | Out-Null
     & icacls.exe "$winAppsDir" /grant "*S-1-5-32-545:(OI)(CI)RX" /C /Q 2>$null | Out-Null
 }
-Write-Host "[完成] UWP 预装应用官方标准精简完毕 (框架契约完好)。" -ForegroundColor Green
+Write-Host "[完成] UWP 应用清理与实体定向粉碎完毕。" -ForegroundColor Green
 
-# ----------------- 3. 功能包清理 (严格保留核心属性扩展底层) -----------------
+# ----------------- 2. 功能包清理 (严格保留 Search-Engine-Client 以固化属性页) -----------------
 Write-Host "`n[步骤 5/11] 正在检索系统组件包并执行深度可选功能精简..." -ForegroundColor Cyan
 
 $installedPackages = & dism.exe /English /Image:$scratchDir /Get-Packages /Format:Table
 $pkgLines = $installedPackages -split '\r?\n' | Select-Object -Skip 1
 
+# 基础需要剥离的无用功能包列表
+# 【底层架构警示】：绝对不能删除 Microsoft-Windows-Search-Engine-Client-Package，
+#  否则盘符属性页底部的索引复选框和文件高级属性 COM 结构会彻底暴毙，导致右键属性无反应！
 $basePackagesToRemove = @(
-    "Microsoft-Windows-InternetExplorer-Optional-Package~",
+    "Microsoft-Windows-InternetExplorer-Optional-Package~", # IE 基础可选组件彻底剔除
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
@@ -116,6 +100,7 @@ $basePackagesToRemove = @(
     "Microsoft-Windows-WebcamExperience-Package~"
 )
 
+# 动态筛选需剔除的目标列表
 $targetPkgs = New-Object System.Collections.Generic.List[string]
 
 foreach ($line in $pkgLines) {
@@ -130,12 +115,13 @@ foreach ($line in $pkgLines) {
         }
     }
 
-    # 动态外语包与输入法清理 (严格保护母盘核心主语言)
+    # 动态外语包判定：严格保护母盘核心主语言，非主语言组件包全量剔除
     if (-not $shouldDelete) {
         $isLangRelated = ($pkgId -match "LanguageFeatures" -or $pkgId -match "LanguagePack" -or $pkgId -match "TextToSpeech" -or $pkgId -match "Speech-" -or $pkgId -match "Handwriting-" -or $pkgId -match "OCR-")
         if ($isLangRelated) {
             $isCurrentLang = ($pkgId -like "*$defaultLang*")
             if ($defaultLang -match "^zh-") {
+                # 中文环境下，额外保留简体中文 Hans 标识
                 if ($pkgId -match "zh-CN|zh-cn|Hans") { $isCurrentLang = $true }
             }
             if (-not $isCurrentLang) {
@@ -144,6 +130,7 @@ foreach ($line in $pkgLines) {
         }
     }
 
+    # 冗余非主语言输入法包判定 (仅在当前环境非对应语系时剔除)
     if (-not $shouldDelete) {
         if ($defaultLang -ne "ja-JP" -and $pkgId -match "IME-ja-jp") { $shouldDelete = $true }
         if ($defaultLang -ne "ko-KR" -and $pkgId -match "IME-ko-kr") { $shouldDelete = $true }
@@ -165,4 +152,4 @@ foreach ($pkgId in $targetPkgs) {
     & dism.exe /English /Image:$scratchDir /Remove-Package "/PackageName:$pkgId" /NoRestart 2>$null | Out-Null
 }
 Write-Progress -Activity "正在剔除组件与外语包" -Completed
-Write-Host "[完成] 系统可选功能包精炼完毕。" -ForegroundColor Green
+Write-Host "[完成] 系统可选功能包精炼完毕 (Search-Engine-Client 核心属性底层接口已受保护保留)。" -ForegroundColor Green

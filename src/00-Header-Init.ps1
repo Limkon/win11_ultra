@@ -3,11 +3,8 @@
 # ==============================================================================
 
 # ----------------- 全局特性静态开关 (后期需要时可直接在此修改) -----------------
-# 1. 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，直接打包 install.wim；改为 $true 则开启转换)
+# 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，直接打包 install.wim；改为 $true 则开启转换)
 $enableEsdConversion = $false
-
-# 2. 默认无人值守模式 ("Semi" = 半无人值守[默认]；"Full" = 全无人值守)
-$defaultUnattendMode = "Semi"
 # ------------------------------------------------------------------------------
 
 # 1. 确保正确的执行策略
@@ -90,7 +87,7 @@ Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 # 7. 用户模式选择交互
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " [选择 1/2] 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
+Write-Host " 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
 Write-Host " [1] 普通精简 (推荐: 极速流畅、稳定平衡、保留组件服务架构)" -ForegroundColor Green
 Write-Host " [2] 极限压榨 (全版本自适应 WinSxS 瘦身 + 注册表物理抹杀服务)" -ForegroundColor Red
 Write-Host "==========================================================" -ForegroundColor Magenta
@@ -101,21 +98,6 @@ if ($trimModeChoice -ne "2") {
 } else {
     $trimMode = "2"
     Write-Host ">>> 已选择: [2] 极限压榨模式 (物理强删文件 + 物理抹杀服务 + 自适应组件换头)" -ForegroundColor Red
-}
-
-Write-Host ""
-Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " [选择 2/2] 请选择无人值守安装模式 (Unattend Mode):" -ForegroundColor Magenta
-Write-Host " [1] 半无人值守 (默认推荐: 绕过硬件/免联网/跳过协议，装机时自主输入用户名与密码)" -ForegroundColor Green
-Write-Host " [2] 全无人值守 (全自动装机: 制作时预设账号与密码，装机全程零干预直达桌面)" -ForegroundColor Cyan
-Write-Host "==========================================================" -ForegroundColor Magenta
-$unattendChoice = Read-Host "请输入对应数字 [1 或 2] (直接回车默认 1: 半无人值守)"
-if ($unattendChoice -eq "2") {
-    $unattendMode = "Full"
-    Write-Host ">>> 已选择: [2] 全无人值守模式 (将在制作时配置预设账户密码)" -ForegroundColor Cyan
-} else {
-    $unattendMode = "Semi"
-    Write-Host ">>> 已选择: [1] 半无人值守模式 (将在装机 OOBE 阶段提示设置自定义账户)" -ForegroundColor Green
 }
 
 # 输出 ESD 静态开关状态
