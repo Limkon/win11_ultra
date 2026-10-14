@@ -1,6 +1,6 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表原生 Unicode 导入引擎 (src/06-RegistryTweaks.ps1)
-#  [终极重构加固]：彻底根治打开方式“更多应用”死锁 + IFEO 内核绝杀 SearchHost
+#  [架构优化]：恢复官方打开方式契约 + 拔除 NoUseStoreOpenWith + 纯策略禁用搜索
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -34,10 +34,13 @@ $null = $reg.AppendLine(@"
 ; 2. 彻底拔除导致盘符属性瘫痪的 BitLocker 幽灵扩展
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\PropertySheetHandlers\{D9DE8B79-CE8A-421A-98C3-5F17A9EB2269}]
 
-; 3. 彻底抹杀导致右键菜单卡死 1~3 秒的 Defender EPP 幽灵扩展
+; 3. 彻底抹杀导致右键菜单卡死 1~3 秒的 Defender EPP 幽灵扩展与协议残留
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shellex\ContextMenuHandlers\EPP]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Directory\shellex\ContextMenuHandlers\EPP]
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\ContextMenuHandlers\EPP]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\windowsdefender]
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\windowsdefender]
+@=""
 
 ; 4. 固化盘符与文件标准属性页 COM 挂载
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\PropertySheetHandlers\Sharing]
@@ -58,9 +61,14 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  B. 组策略安全禁用 SearchHost / Cortana 联网与后台 (移除危险的 IFEO 劫持)
+#  B. 纯策略安全禁用 Windows Search / Cortana (彻底移除危险的 IFEO 劫持)
 # ==============================================================================
 $null = $reg.AppendLine(@"
+; 清除任何潜在的 IFEO 进程劫持残留
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchHost.exe]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchApp.exe]
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchIndexer.exe]
+
 ; 关闭任务栏搜索图标展示
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Search]
 "SearchboxTaskbarMode"=dword:00000000
@@ -110,27 +118,28 @@ if ($trimMode -eq "2") {
 }
 
 # ==============================================================================
-#  D. 终极修复：回归纯净 Win32 打开方式，彻底杜绝 COM 死锁与记事本冲突
+#  D. 核心修复：还原打开方式官方标准契约 + 固化 .txt 基准关联
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 全域禁用打开方式向应用商店查询推荐应用（提升秒开速度）
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
-"NoUseStoreOpenWith"=dword:00000001
+; 1. 恢复官方原厂 DelegateExecute 调度器，确保“更多应用”正常展开与本地查找无阻
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas]
+@="@shell32.dll,-5376"
+"MultiSelectModel"="Single"
+"Position"="Bottom"
 
-[HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer]
-"NoUseStoreOpenWith"=dword:00000001
-
-; 2. 【核心修复】：彻底移除 DelegateExecute 键值（用负号 - 拔除）
-; 让 OpenWith 直接执行纯正的 Win32 OpenWith.exe 进程，永不假死，永不依赖任何损坏的 UWP
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
 @="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
-"DelegateExecute"=-
+"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Unknown\shell\opendlg\command]
 @="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
-"DelegateExecute"=-
+"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
 
-; 3. 【核心固化】：强制将 .txt 关联锁定到本地 Win32 记事本，彻底根治“包无法验证”报错
+; 2. 拔除破坏 XAML 打开方式展开容器的 NoUseStoreOpenWith 键值
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer\NoUseStoreOpenWith]
+[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer\NoUseStoreOpenWith]
+
+; 3. 稳固 .txt 基础关联体系
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
 @="txtfile"
 "Content Type"="text/plain"
@@ -192,6 +201,9 @@ $null = $reg.AppendLine(@"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer]
 "SmartScreenEnabled"="Off"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\AppHost]
+"EnableWebContentEvaluation"=dword:00000000
 "@)
 
 # ==============================================================================
@@ -247,4 +259,4 @@ Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
 
-Write-Host "[完成] 离线注册表加固优化全部完毕 (记事本保持原生系统配置，打开方式“更多应用”死锁已排除)。" -ForegroundColor Green
+Write-Host "[完成] 离线注册表加固优化全部完毕 (打开方式官方标准契约已还原，有害策略已彻底拔除)。" -ForegroundColor Green
