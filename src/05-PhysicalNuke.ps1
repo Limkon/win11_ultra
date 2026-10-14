@@ -120,13 +120,11 @@ if (Test-Path -LiteralPath $mediaDir) {
 #     }
 # }
 
-# ----------------- 11. 修复记事本物理执行实体 (消灭 Windows 目录下的 UWP 幽灵桩) -----------------
-Write-Host "   -> 正在使用 System32 经典记事本覆盖根目录 UWP 跳转死桩..." -ForegroundColor DarkGray
-$winDir = Join-Path $scratchDir "Windows"
-$sys32Notepad = Join-Path $winDir "System32\notepad.exe"
-$rootNotepad  = Join-Path $winDir "notepad.exe"
-
-if (Test-Path -LiteralPath $sys32Notepad) {
-    Force-NukeFolderOrFile $rootNotepad
-    Copy-Item -LiteralPath $sys32Notepad -Destination $rootNotepad -Force
-}
+# ----------------- 11. 修复记事本物理执行实体 (已由注册表标准接管，此处无需重复覆盖) -----------------
+# $winDir = Join-Path $scratchDir "Windows"
+# $sys32Notepad = Join-Path $winDir "System32\notepad.exe"
+# $rootNotepad  = Join-Path $winDir "notepad.exe"
+# if (Test-Path -LiteralPath $sys32Notepad) {
+#     Force-NukeFolderOrFile $rootNotepad
+#     Copy-Item -LiteralPath $sys32Notepad -Destination $rootNotepad -Force
+# }
