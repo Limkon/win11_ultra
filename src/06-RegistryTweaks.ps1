@@ -58,19 +58,9 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  B. 内核级绝对拦截 SearchHost / SearchIndexer (彻底杜绝后台常驻拉起)
+#  B. 组策略安全禁用 SearchHost / Cortana 联网与后台 (移除危险的 IFEO 劫持)
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 使用系统内核级 IFEO 机制：任何拉起 SearchHost/SearchApp 的行为直接在 0 毫秒内退出
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchHost.exe]
-"Debugger"="systray.exe"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchApp.exe]
-"Debugger"="systray.exe"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchIndexer.exe]
-"Debugger"="systray.exe"
-
 ; 关闭任务栏搜索图标展示
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Search]
 "SearchboxTaskbarMode"=dword:00000000
