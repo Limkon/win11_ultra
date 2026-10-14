@@ -139,15 +139,12 @@ WinZipUniversal                                # WinZip UWP 压缩工具
 Wunderlist                                     # 奇妙清单 (服务已终止)
 XING                                           # 职场社交应用
 
-
-
-
 # ============================================================================================================== #
 #  [分区 5/5] 系统核心基础设施与必备工具 (默认加 '#' 保留，若无特殊需求切勿解除注释！)                            #
 # ============================================================================================================== #
 
 # 1. 核心底层与商店 (删除会导致系统运行异常或无法安装应用)
-Microsoft.WindowsStore                        # 微软应用商店 (绝对不可删除，否则后续无法补充任何 UWP)
+#Microsoft.WindowsStore                        # 微软应用商店 (绝对不可删除，否则会导致 UWP 应用部署与授权验证彻底损坏)
 #Microsoft.WindowsTerminal                     # Windows 终端 (保留以防止右键“在终端中打开”报错)
 #Microsoft.DesktopAppInstaller                 # 应用安装程序 (包含 Winget 命令行包管理器)
 
@@ -157,7 +154,7 @@ Microsoft.WindowsStore                        # 微软应用商店 (绝对不可
 #Microsoft.WindowsCalculator                   # 原生科学计算器
 #Microsoft.Windows.Photos                      # 原生照片查看与编辑工具
 #Microsoft.ScreenSketch                        # 截图和草图 / 截屏工具 (按下 Win+Shift+S 核心依赖)
-Microsoft.WindowsCamera                       # 相机应用 (笔记本/外接摄像头必备)
+#Microsoft.WindowsCamera                       # 相机应用 (笔记本/外接摄像头必备)
 
 # 3. 游戏生态与 Xbox 认证依赖 (若完全不玩微软商店/XGP游戏，可解除注释删除)
 Microsoft.GamingApp                           # 现代 Xbox 游戏中心主程序
