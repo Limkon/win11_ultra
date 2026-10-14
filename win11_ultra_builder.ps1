@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-14 08:38:23 UTC
+#  生成时间: 2026-10-14 08:43:38 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -1345,7 +1345,7 @@ Write-Host "[完成] 离线注册表加固优化全部完毕 (文本文档已三
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
-#  [企业级重构]：消费前置全局配置 + 零中途阻断 + 双模自适应动态渲染 + 稳定性自检
+#  [终极加固]：单引号纯字面量模板 + 锚点占位原子替换 (彻底根治 ParserError 语法解析冲突)
 # ==============================================================================
 
 Write-Host "`n[步骤 9/11] 正在加载全局配置并注入 Windows 安装引导应答文件..." -ForegroundColor Cyan
@@ -1407,8 +1407,8 @@ if ($mode -eq "1") {
     $hideLocalAccountScreenValue = "false"
 }
 
-# ----------------- 2. 构建 100% 完整无损应答模板 -----------------
-$unattendTemplate = @"
+# ----------------- 2. 纯字面量无损模板 (单引号包裹，杜绝子表达式解析冲突) -----------------
+$unattendTemplate = @'
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
 	<settings pass="offlineServicing"></settings>
@@ -1465,7 +1465,7 @@ $unattendTemplate = @"
 			<RunSynchronous>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>1</Order>
-					<Path>powershell.exe -WindowStyle Normal -NoProfile -Command "`$xml = [xml]::new(); `$xml.Load('C:\Windows\Panther\unattend.xml'); `$sb = [scriptblock]::Create( `$xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock `$sb -ArgumentList `$xml;"</Path>
+					<Path>powershell.exe -WindowStyle Normal -NoProfile -Command "$xml = [xml]::new(); $xml.Load('C:\Windows\Panther\unattend.xml'); $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml;"</Path>
 				</RunSynchronousCommand>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>2</Order>
@@ -1497,14 +1497,14 @@ $unattendTemplate = @"
 			<UserLocale>zh-CN</UserLocale>
 		</component>
 		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-$userAccountsXmlFragment
-$autoLogonXmlFragment
+__USER_ACCOUNTS__
+__AUTO_LOGON__
 			<OOBE>
 				<ProtectYourPC>3</ProtectYourPC>
 				<HideEULAPage>true</HideEULAPage>
 				<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
 				<HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-				<HideLocalAccountScreen>$hideLocalAccountScreenValue</HideLocalAccountScreen>
+				<HideLocalAccountScreen>__HIDE_LOCAL_ACCOUNT_SCREEN__</HideLocalAccountScreen>
 			</OOBE>
 			<FirstLogonCommands>
 				<SynchronousCommand wcm:action="add">
@@ -1517,23 +1517,23 @@ $autoLogonXmlFragment
 	<Extensions xmlns="https://schneegans.de/windows/unattend-generator/">
 		<ExtractScript>
 param(
-    [xml] `$Document
+    [xml] $Document
 );
 
-foreach( `$file in `$Document.unattend.Extensions.File ) {
-    `$path = [System.Environment]::ExpandEnvironmentVariables( `$file.GetAttribute( 'path' ) );
-    mkdir -Path( `$path | Split-Path -Parent ) -ErrorAction 'SilentlyContinue';
-    `$encoding = switch( [System.IO.Path]::GetExtension( `$path ) ) {
-        { `$_ -in '.ps1', '.xml' } { [System.Text.Encoding]::UTF8; }
-        { `$_ -in '.reg', '.vbs', '.js' } { [System.Text.UnicodeEncoding]::new( `$false, `$true ); }
+foreach( $file in $Document.unattend.Extensions.File ) {
+    $path = [System.Environment]::ExpandEnvironmentVariables( $file.GetAttribute( 'path' ) );
+    mkdir -Path( $path | Split-Path -Parent ) -ErrorAction 'SilentlyContinue';
+    $encoding = switch( [System.IO.Path]::GetExtension( $path ) ) {
+        { $_ -in '.ps1', '.xml' } { [System.Text.Encoding]::UTF8; }
+        { $_ -in '.reg', '.vbs', '.js' } { [System.Text.UnicodeEncoding]::new( $false, $true ); }
         default { [System.Text.Encoding]::Default; }
     };
-    `$bytes = `$encoding.GetPreamble() + `$encoding.GetBytes( `$file.InnerText.Trim() );
-    [System.IO.File]::WriteAllBytes( `$path, `$bytes );
+    $bytes = $encoding.GetPreamble() + $encoding.GetBytes( $file.InnerText.Trim() );
+    [System.IO.File]::WriteAllBytes( $path, $bytes );
 }
 		</ExtractScript>
 		<File path="C:\Windows\Setup\Scripts\Specialize.ps1">
-`$scripts = @(
+$scripts = @(
 	{
 		net.exe accounts /maxpwage:UNLIMITED;
 	};
@@ -1552,29 +1552,29 @@ foreach( `$file in `$Document.unattend.Extensions.File ) {
 );
 
 &amp; {
-  [float] `$complete = 0;
-  [float] `$increment = 100 / `$scripts.Count;
-  foreach( `$script in `$scripts ) {
-    Write-Progress -Activity 'Running scripts to customize your Windows installation. Do not close this window.' -PercentComplete `$complete;
+  [float] $complete = 0;
+  [float] $increment = 100 / $scripts.Count;
+  foreach( $script in $scripts ) {
+    Write-Progress -Activity 'Running scripts to customize your Windows installation. Do not close this window.' -PercentComplete $complete;
     '*** Will now execute command &#xAB;{0}&#xBB;.' -f $(
-      `$str = `$script.ToString().Trim() -replace '\s+', ' ';
-      `$max = 100;
-      if( `$str.Length -le `$max ) {
-        `$str;
+      $str = $script.ToString().Trim() -replace '\s+', ' ';
+      $max = 100;
+      if( $str.Length -le $max ) {
+        $str;
       } else {
-        `$str.Substring( 0, `$max - 1 ) + '&#x2026;';
+        $str.Substring( 0, $max - 1 ) + '&#x2026;';
       }
     );
-    `$start = [datetime]::Now;
-    &amp; `$script;
-    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( `$start ).TotalMilliseconds;
+    $start = [datetime]::Now;
+    &amp; $script;
+    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( $start ).TotalMilliseconds;
     "`r`n" * 3;
-    `$complete += `$increment;
+    $complete += $increment;
   }
-} *&gt;&amp;1 &gt;&gt; "`$env:TEMP\Specialize.log";
+} *&gt;&amp;1 &gt;&gt; "$env:TEMP\Specialize.log";
 		</File>
 		<File path="C:\Windows\Setup\Scripts\UserOnce.ps1">
-`$scripts = @(
+$scripts = @(
 	{
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'SearchboxTaskbarMode' -Type 'DWord' -Value 0;
 	};
@@ -1583,36 +1583,36 @@ foreach( `$file in `$Document.unattend.Extensions.File ) {
 	};
 	{
 		Get-Process -Name 'explorer' -ErrorAction 'SilentlyContinue' | Where-Object -FilterScript {
-			`$_.SessionId -eq ( Get-Process -Id `$PID ).SessionId;
+			$_.SessionId -eq ( Get-Process -Id $PID ).SessionId;
 		} | Stop-Process -Force;
 	};
 );
 &amp; {
-  [float] `$complete = 0;
-  [float] `$increment = 100 / `$scripts.Count;
-  foreach( `$script in `$scripts ) {
-    Write-Progress -Activity 'Running scripts to configure this user account. Do not close this window.' -PercentComplete `$complete;
+  [float] $complete = 0;
+  [float] $increment = 100 / $scripts.Count;
+  foreach( $script in $scripts ) {
+    Write-Progress -Activity 'Running scripts to configure this user account. Do not close this window.' -PercentComplete $complete;
     '*** Will now execute command &#xAB;{0}&#xBB;.' -f $(
-      `$str = `$script.ToString().Trim() -replace '\s+', ' ';
-      `$max = 100;
-      if( `$str.Length -le `$max ) {
-        `$str;
+      $str = $script.ToString().Trim() -replace '\s+', ' ';
+      $max = 100;
+      if( $str.Length -le $max ) {
+        $str;
       } else {
-        `$str.Substring( 0, `$max - 1 ) + '&#x2026;';
+        $str.Substring( 0, $max - 1 ) + '&#x2026;';
       }
     );
-    `$start = [datetime]::Now;
-    &amp; `$script;
-    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( `$start ).TotalMilliseconds;
+    $start = [datetime]::Now;
+    &amp; $script;
+    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( $start ).TotalMilliseconds;
     "`r`n" * 3;
-    `$complete += `$increment;
+    $complete += $increment;
   }
-} *&gt;&amp;1 &gt;&gt; "`$env:TEMP\UserOnce.log";
+} *&gt;&amp;1 &gt;&gt; "$env:TEMP\UserOnce.log";
 		</File>
 		<File path="C:\Windows\Setup\Scripts\DefaultUser.ps1">
-`$scripts = @(
+$scripts = @(
 	{
-		`$names = @(
+		$names = @(
 		  'ContentDeliveryAllowed';
 		  'FeatureManagementEnabled';
 		  'OEMPreInstalledAppsEnabled';
@@ -1632,8 +1632,8 @@ foreach( `$file in `$Document.unattend.Extensions.File ) {
 		  'SystemPaneSuggestionsEnabled';
 		);
 		
-		foreach( `$name in `$names ) {
-		  reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v `$name /t REG_DWORD /d 0 /f;
+		foreach( $name in $names ) {
+		  reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v $name /t REG_DWORD /d 0 /f;
 		}
 	};
 	{
@@ -1642,29 +1642,29 @@ foreach( `$file in `$Document.unattend.Extensions.File ) {
 );
 
 &amp; {
-  [float] `$complete = 0;
-  [float] `$increment = 100 / `$scripts.Count;
-  foreach( `$script in `$scripts ) {
-    Write-Progress -Activity 'Running scripts to modify the default user&#x2019;&#x2019;s registry hive. Do not close this window.' -PercentComplete `$complete;
+  [float] $complete = 0;
+  [float] $increment = 100 / $scripts.Count;
+  foreach( $script in $scripts ) {
+    Write-Progress -Activity 'Running scripts to modify the default user&#x2019;&#x2019;s registry hive. Do not close this window.' -PercentComplete $complete;
     '*** Will now execute command &#xAB;{0}&#xBB;.' -f $(
-      `$str = `$script.ToString().Trim() -replace '\s+', ' ';
-      `$max = 100;
-      if( `$str.Length -le `$max ) {
-        `$str;
+      $str = $script.ToString().Trim() -replace '\s+', ' ';
+      $max = 100;
+      if( $str.Length -le $max ) {
+        $str;
       } else {
-        `$str.Substring( 0, `$max - 1 ) + '&#x2026;';
+        $str.Substring( 0, $max - 1 ) + '&#x2026;';
       }
     );
-    `$start = [datetime]::Now;
-    &amp; `$script;
-    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( `$start ).TotalMilliseconds;
+    $start = [datetime]::Now;
+    &amp; $script;
+    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( $start ).TotalMilliseconds;
     "`r`n" * 3;
-    `$complete += `$increment;
+    $complete += $increment;
   }
-} *&gt;&amp;1 &gt;&gt; "`$env:TEMP\DefaultUser.log";
+} *&gt;&amp;1 &gt;&gt; "$env:TEMP\DefaultUser.log";
 		</File>
 		<File path="C:\Windows\Setup\Scripts\FirstLogon.ps1">
-`$scripts = @(
+$scripts = @(
 	{
 		Set-ItemProperty -LiteralPath 'Registry::HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'AutoLogonCount' -Type 'DWord' -Force -Value 0;
 	};
@@ -1676,54 +1676,54 @@ foreach( `$file in `$Document.unattend.Extensions.File ) {
 	};
 	{
 		# 自动化稳定性测试探针
-		`$report = New-Object System.Collections.Generic.List[string];
-		`$report.Add("==================================================================");
-		`$report.Add(" Windows 11 精简母盘 - 首次登录系统健康与稳定性自检审计报告");
-		`$report.Add(" 生成时间: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'));
-		`$report.Add(" 部署模式: " + "$($modeText)");
-		`$report.Add("==================================================================");
+		$report = New-Object System.Collections.Generic.List[string];
+		$report.Add("==================================================================");
+		$report.Add(" Windows 11 精简母盘 - 首次登录系统健康与稳定性自检审计报告");
+		$report.Add(" 生成时间: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'));
+		$report.Add(" 部署模式: __DEPLOY_MODE_TEXT__");
+		$report.Add("==================================================================");
 
-		`$wtPkg = Get-AppxPackage -Name "*WindowsTerminal*" -ErrorAction SilentlyContinue;
-		`$wtStatus = if (`$wtPkg) { "正常部署 (版本: `$(`$wtPkg.Version))" } else { "未安装或已被剔除" };
-		`$report.Add("[组件测试] Windows 终端 (Terminal): `$wtStatus");
+		$wtPkg = Get-AppxPackage -Name "*WindowsTerminal*" -ErrorAction SilentlyContinue;
+		$wtStatus = if ($wtPkg) { "正常部署 (版本: $($wtPkg.Version))" } else { "未安装或已被剔除" };
+		$report.Add("[组件测试] Windows 终端 (Terminal): $wtStatus");
 
-		`$wingetPkg = Get-AppxPackage -Name "*DesktopAppInstaller*" -ErrorAction SilentlyContinue;
-		`$wingetStatus = if (`$wingetPkg) { "正常可用 (支持 Winget/离线安装)" } else { "未安装" };
-		`$report.Add("[组件测试] 应用安装程序 (Winget): `$wingetStatus");
+		$wingetPkg = Get-AppxPackage -Name "*DesktopAppInstaller*" -ErrorAction SilentlyContinue;
+		$wingetStatus = if ($wingetPkg) { "正常可用 (支持 Winget/离线安装)" } else { "未安装" };
+		$report.Add("[组件测试] 应用安装程序 (Winget): $wingetStatus");
 
-		`$txtAssoc = (cmd.exe /c "assoc .txt 2>nul");
-		`$report.Add("[关联测试] .txt 扩展名关联项: `$txtAssoc");
+		$txtAssoc = (cmd.exe /c "assoc .txt 2>nul");
+		$report.Add("[关联测试] .txt 扩展名关联项: $txtAssoc");
 
 		try {
-			`$appCrashes = Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
-			`$crashCount = if (`$appCrashes) { `$appCrashes.Count } else { 0 };
-			`$report.Add("[事件测试] 应用程序核心崩溃事件数 (Level=Error): `$crashCount");
+			$appCrashes = Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
+			$crashCount = if ($appCrashes) { $appCrashes.Count } else { 0 };
+			$report.Add("[事件测试] 应用程序核心崩溃事件数 (Level=Error): $crashCount");
 
-			`$dcomErrors = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-DistributedCOM'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
-			`$dcomCount = if (`$dcomErrors) { `$dcomErrors.Count } else { 0 };
-			`$report.Add("[事件测试] DCOM 幽灵调用异常事件数: `$dcomCount");
+			$dcomErrors = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-DistributedCOM'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
+			$dcomCount = if ($dcomErrors) { $dcomErrors.Count } else { 0 };
+			$report.Add("[事件测试] DCOM 幽灵调用异常事件数: $dcomCount");
 		} catch {
-			`$report.Add("[事件测试] 事件日志扫描已安全旁路。");
+			$report.Add("[事件测试] 事件日志扫描已安全旁路。");
 		}
 
-		`$report.Add("------------------------------------------------------------------");
-		`$verdict = if (`$crashCount -eq 0 -and `$dcomCount -eq 0) { "【优秀】系统底层核心零异常，运行极度稳定！" } else { "【良好】已自动记录轻微事件，系统运行正常。" };
-		`$report.Add("总体稳定性裁定: `$verdict");
-		`$report.Add("==================================================================");
+		$report.Add("------------------------------------------------------------------");
+		$verdict = if ($crashCount -eq 0 -and $dcomCount -eq 0) { "【优秀】系统底层核心零异常，运行极度稳定！" } else { "【良好】已自动记录轻微事件，系统运行正常。" };
+		$report.Add("总体稳定性裁定: $verdict");
+		$report.Add("==================================================================");
 
-		`$reportPath = "C:\Windows\Temp\Trim_Stability_Report.log";
-		[System.IO.File]::WriteAllLines(`$reportPath, `$report, [System.Text.Encoding]::UTF8);
+		$reportPath = "C:\Windows\Temp\Trim_Stability_Report.log";
+		[System.IO.File]::WriteAllLines($reportPath, $report, [System.Text.Encoding]::UTF8);
 	};
 	{
 		# 1. 彻底销毁包含配置的应答文件
-		`$xmlFiles = @(
+		$xmlFiles = @(
 			'C:\Windows\Panther\unattend.xml',
 			'C:\Windows\Panther\Unattend\unattend.xml',
 			'C:\Windows\System32\Sysprep\autounattend.xml',
 			'C:\Windows\System32\Sysprep\unattend.xml'
 		);
-		foreach (`$f in `$xmlFiles) {
-			if (Test-Path `$f) { Remove-Item -LiteralPath `$f -Force -ErrorAction SilentlyContinue; }
+		foreach ($f in $xmlFiles) {
+			if (Test-Path $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; }
 		}
 
 		# 2. 异步粉碎自毁 Setup Scripts 目录
@@ -1732,32 +1732,38 @@ foreach( `$file in `$Document.unattend.Extensions.File ) {
 );
 
 &amp; {
-  [float] `$complete = 0;
-  [float] `$increment = 100 / `$scripts.Count;
-  foreach( `$script in `$scripts ) {
-    Write-Progress -Activity 'Running scripts to finalize your Windows installation. Do not close this window.' -PercentComplete `$complete;
+  [float] $complete = 0;
+  [float] $increment = 100 / $scripts.Count;
+  foreach( $script in $scripts ) {
+    Write-Progress -Activity 'Running scripts to finalize your Windows installation. Do not close this window.' -PercentComplete $complete;
     '*** Will now execute command &#xAB;{0}&#xBB;.' -f $(
-      `$str = `$script.ToString().Trim() -replace '\s+', ' ';
-      `$max = 100;
-      if( `$str.Length -le `$max ) {
-        `$str;
+      $str = $script.ToString().Trim() -replace '\s+', ' ';
+      $max = 100;
+      if( $str.Length -le $max ) {
+        $str;
       } else {
-        `$str.Substring( 0, `$max - 1 ) + '&#x2026;';
+        $str.Substring( 0, $max - 1 ) + '&#x2026;';
       }
     );
-    `$start = [datetime]::Now;
-    &amp; `$script;
-    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( `$start ).TotalMilliseconds;
+    $start = [datetime]::Now;
+    &amp; $script;
+    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( $start ).TotalMilliseconds;
     "`r`n" * 3;
-    `$complete += `$increment;
+    $complete += $increment;
   }
-} *&gt;&amp;1 &gt;&gt; "`$env:TEMP\FirstLogon.log";
+} *&gt;&amp;1 &gt;&gt; "$env:TEMP\FirstLogon.log";
 		</File>
 	</Extensions>
 </unattend>
-"@
+'@
 
-# ----------------- 3. 多通道合规注入 -----------------
+# ----------------- 3. 稳健的占位符原子替换 (无任何解析冲突) -----------------
+$finalXml = $unattendTemplate.Replace('__USER_ACCOUNTS__', $userAccountsXmlFragment) `
+                             .Replace('__AUTO_LOGON__', $autoLogonXmlFragment) `
+                             .Replace('__HIDE_LOCAL_ACCOUNT_SCREEN__', $hideLocalAccountScreenValue) `
+                             .Replace('__DEPLOY_MODE_TEXT__', $modeText)
+
+# ----------------- 4. 多通道合规注入 -----------------
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
@@ -1766,14 +1772,14 @@ if (-not (Test-Path -LiteralPath $pantherDir)) { New-Item -ItemType Directory -P
 $utf8Encoding = [System.Text.Encoding]::UTF8
 
 # Sysprep 核心规范通道
-[System.IO.File]::WriteAllText((Join-Path $sysprepDir "unattend.xml"), $unattendTemplate, $utf8Encoding)
-[System.IO.File]::WriteAllText((Join-Path $sysprepDir "autounattend.xml"), $unattendTemplate, $utf8Encoding)
+[System.IO.File]::WriteAllText((Join-Path $sysprepDir "unattend.xml"), $finalXml, $utf8Encoding)
+[System.IO.File]::WriteAllText((Join-Path $sysprepDir "autounattend.xml"), $finalXml, $utf8Encoding)
 
 # Panther 初始化通道
-[System.IO.File]::WriteAllText((Join-Path $pantherDir "unattend.xml"), $unattendTemplate, $utf8Encoding)
+[System.IO.File]::WriteAllText((Join-Path $pantherDir "unattend.xml"), $finalXml, $utf8Encoding)
 
 # ISO 可移动介质根目录自启动通道
-[System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $unattendTemplate, $utf8Encoding)
+[System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $finalXml, $utf8Encoding)
 
 Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (全自动运行，无需人工干预)。" -ForegroundColor Green
 
