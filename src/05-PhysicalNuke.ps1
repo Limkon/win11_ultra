@@ -57,10 +57,8 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\CHT"
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\JPN")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\KOR")
 
-# ----------------- 6. 独立 Cortana 专属残留包 (保护 Client.CBS 核心) -----------------
-# 【关键修复说明】：
-# 严禁递归粉碎 Client.CBS 内的 SearchHost.exe，否则直接损坏 Windows 核心体验包数字签名，
-# 导致“打开方式”等现代 XAML 弹窗无法初始化！停止搜索应完全交由注册表服务策略控制。
+# ----------------- 6. 独立 Cortana 专属残留包 (严格保护 Client.CBS 核心) -----------------
+# 【关键】：绝对不能递归粉碎 Client.CBS 内的 SearchHost.exe，否则 XAML 打开方式弹窗必崩！
 Write-Host "   -> 正在物理清理独立 Cortana 专属残留应用包..." -ForegroundColor DarkGray
 if (Test-Path -LiteralPath $systemApps) {
     Get-ChildItem -Path $systemApps -Directory | Where-Object { 
@@ -69,6 +67,7 @@ if (Test-Path -LiteralPath $systemApps) {
         Force-NukeFolderOrFile $_.FullName
     }
 }
+# 注意：原脚本下方删除 SearchIndexer.exe / SearchFilterHost.exe 的语句必须全部删掉！
 
 # ----------------- 7. 语音引擎与离线帮助文档 -----------------
 Write-Host "   -> 正在物理粉碎语音引擎与帮助文档..." -ForegroundColor DarkGray
