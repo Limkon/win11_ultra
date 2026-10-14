@@ -111,16 +111,14 @@ if (Test-Path -LiteralPath $mediaDir) {
     }
 }
 
-# 10. 中文字体库深度精炼 (保护保留常见中文字体与核心 UI 字体)
-$fontsPath = Join-Path $scratchDir "Windows\Fonts"
-if (Test-Path -LiteralPath $fontsPath) {
-    Write-Host "   -> 正在精炼中文字体库..." -ForegroundColor DarkGray
-    Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "calibri*.*", "arial*.*", "times*.*", "msyh*.*", "simsun*.*", "simhei*.*", "kaiu*.*", "mingliu*.*" | ForEach-Object {
-        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
-    }
-}
-
-Write-Host "[完成] 大文件实体物理粉碎完毕 (SearchHost 物理实体已全面歼灭)。" -ForegroundColor Green
+# 10. 中文字体库深度精炼 (注：只删物理文件不删注册表会导致 Office/PS 闪退，建议整段注释跳过)
+# $fontsPath = Join-Path $scratchDir "Windows\Fonts"
+# if (Test-Path -LiteralPath $fontsPath) {
+#     Write-Host "   -> 正在精炼中文字体库..." -ForegroundColor DarkGray
+#     Get-ChildItem -Path $fontsPath -Exclude ... | ForEach-Object {
+#         Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+#     }
+# }
 
 # ----------------- 11. 修复记事本物理执行实体 (消灭 Windows 目录下的 UWP 幽灵桩) -----------------
 Write-Host "   -> 正在使用 System32 经典记事本覆盖根目录 UWP 跳转死桩..." -ForegroundColor DarkGray
