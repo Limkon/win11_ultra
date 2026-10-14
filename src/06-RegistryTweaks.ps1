@@ -119,29 +119,44 @@ if ($trimMode -eq "2") {
     }
 }
 
+
 # ==============================================================================
-#  D. 核心修复：新建文本文档 100% 唤醒机制 (规范化 Win11 字符串间接资源与双 ProgID)
+#  D. 核心修复：新建文本文档 100% 唤醒与经典记事本原生关联 (杜绝哈希校验破损与崩溃)
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 扩展名 .txt 基础关联 (主指 txtfilelegacy)
+; 1. 扩展名 .txt 基础关联 (主指原生 txtfile，保持标准 ProgID 树形结构)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
-@="txtfilelegacy"
+@="txtfile"
 "Content Type"="text/plain"
 "PerceivedType"="text"
 
-; 【关键修复】：必须写入间接字符串资源 @%SystemRoot%\system32\notepad.exe,-470，否则 Win11 判定名称为空直接隐藏
+; 唤醒右键【新建 -> 文本文档】(规范间接字符串资源 @notepad.exe,-470)
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
 "ItemName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,37,00,30,00,00,00
 "NullFile"=""
 
-; 清空可能干扰的 OpenWithProgids
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
+; 规范化 OpenWithProgids 候选池 (采用标准空字符串，严禁写入破坏类型的 hex(0))
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
-"txtfilelegacy"=hex(0):
-"txtfile"=hex(0):
+"txtfile"=""
+"txtfilelegacy"=""
 
-; 2. Win11 核心实体 txtfilelegacy 深度补全
+; 2. 核心实体 txtfile 原生参数全量固化 (直接挂载经典记事本)
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
+@="文本文档"
+"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\DefaultIcon]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
+@="open"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
+
+; 3. Win11 兼容实体 txtfilelegacy 同步映射 (防部分 Win11 进程硬编码寻址)
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
 @="文本文档"
@@ -156,44 +171,22 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\shell\open\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 3. 经典 txtfile 回退兼容实体
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
-@="文本文档"
-"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\DefaultIcon]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
-@="open"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-
-; 4. 彻底修正 App Paths，强制直指 System32 经典记事本
+; 4. 固化 App Paths，确保运行窗口与命令行直达
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,00,00
-
-; 5. 抹除 Default 用户中 UWP 留下的损坏关联
-[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
-[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
-"txtfilelegacy"=hex(0):
-"txtfile"=hex(0):
-
-[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\UserChoice]
 "@)
 
 # ==============================================================================
-#  E. 核心修复：彻底根治“打开方式 -> 选择其他应用”无反应的死锁
+#  E. 核心修复：彻底根治“打开方式 -> 选择其他应用”无反应的死锁 (物理剔除 DelegateExecute 劫持)
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 彻底删除导致 Win11 XAML OpenWith 按钮路由断裂的策略
+; 1. 彻底删除导致 Win11 打开方式联网探针死锁的策略
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
 [-HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
 
-; 2. 【核心修复】：为 openas 与 opendlg 注入原生 COM DelegateExecute 代理契约
-; 严禁裸调 OpenWith.exe，必须由 Shell 代理调度器托管拉起
+; 2. 【核心修复】：物理拔除已断裂的旧版 COM DelegateExecute 代理契约！
+;    注：使用 -"DelegateExecute"=- 语法强制将其从 command 节点彻底抹杀！
+;    让 Explorer 直接回退到命令行调用原生 OpenWith.exe 进程，彻底杜绝点击吞噬死锁！
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas]
 @=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,73,00,68,00,65,00,6c,00,6c,00,33,00,32,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,35,00,33,00,37,00,36,00,00,00
 "MultiSelectModel"="Single"
@@ -201,12 +194,13 @@ $null = $reg.AppendLine(@"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
+"DelegateExecute"=-
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Unknown\shell\opendlg\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
+"DelegateExecute"=-
 "@)
+
 # ==============================================================================
 #  F. 系统基础优化与隐私遥测剥离
 # ==============================================================================
