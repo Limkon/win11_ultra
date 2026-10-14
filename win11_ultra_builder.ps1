@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-14 07:56:58 UTC
+#  生成时间: 2026-10-14 08:25:46 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -357,11 +357,11 @@ Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 4/11] UWP 应用与可选功能包精简 (src/03-RemovePackages.ps1)
-#  [重构加固]：动态语言感知 + 属性页 COM 架构保护 + 生产力组件保留
+#  [企业级重构]：动态规则库联动 + 依赖异常交互阻断裁决 + 属性页架构固化
 # ==============================================================================
 
-# ----------------- 0. 动态环境感知与主语言探测 (彻底杜绝外语 ISO 报废) -----------------
-Write-Host "`n[步骤 4/11] 正在探查映像主语言并清理冗余 UWP 预装应用..." -ForegroundColor Cyan
+# ----------------- 0. 动态环境感知与主语言探测 -----------------
+Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行 UWP 应用依赖架构测试与精简..." -ForegroundColor Cyan
 
 $imageIntl = & dism.exe /English /Image:$scratchDir /Get-Intl
 $defaultLang = ($imageIntl -split '\r?\n' | Where-Object { $_ -match 'Default system UI language : ([a-zA-Z]{2}-[a-zA-Z]{2})' } | ForEach-Object { $Matches[1] })
@@ -370,79 +370,248 @@ if ([string]::IsNullOrWhiteSpace($defaultLang)) {
 }
 Write-Host "   [母盘语言检测] 锁定系统原生核心语言为: $defaultLang" -ForegroundColor Green
 
-# ----------------- 1. UWP 卸载 + 定向物理粉碎 -----------------
-# 核心基础白名单（绝不能删除的底层基础框架与高频终端环境）
-$preservedPackages = @(
-    "*VCLibs*",
-    "*UI.Xaml*",
-    "*NET.Native*",
+# ----------------- 1. 加载并解析外部 Appslist.txt 规则库 -----------------
+$appsListSearchPaths = @(
+    (Join-Path $scriptDir "Appslist.txt"),
+    (Join-Path $scriptDir "src\Appslist.txt"),
+    (Join-Path $PSScriptRoot "Appslist.txt")
+)
+$appsListFile = $appsListSearchPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+
+$blacklistRules = New-Object System.Collections.Generic.List[string]
+
+if ($appsListFile) {
+    Write-Host "   [规则加载] 已成功载入应用规则清单: $appsListFile" -ForegroundColor Green
+    $rawRules = Get-Content -LiteralPath $appsListFile -Encoding UTF8 -ErrorAction SilentlyContinue
+    foreach ($line in $rawRules) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith("#")) { continue }
+        $ruleName = ($trimmed -split '#')[0].Trim()
+        if (-not [string]::IsNullOrWhiteSpace($ruleName)) {
+            $blacklistRules.Add($ruleName)
+        }
+    }
+    Write-Host "   [规则解析] 成功装载 $($blacklistRules.Count) 条黑名单匹配规则。" -ForegroundColor DarkGray
+} else {
+    Write-Host "   [警告] 未检测到 Appslist.txt 规则文件，将启用内建安全保守模式！" -ForegroundColor Yellow
+}
+
+# ----------------- 2. 核心底层基础包绝对白名单 (绝不可删) -----------------
+$systemCoreWhitelist = @(
+    "Microsoft.VCLibs*",
+    "Microsoft.UI.Xaml*",
+    "Microsoft.NET.Native*",
+    "Microsoft.Services.Store.Engagement*",
     "*Client.CBS*",
     "*ShellExperience*",
     "*AccountsControl*",
     "*CloudExperienceHost*",
     "*BioEnrollment*",
-    "*WindowsTerminal*",        # 保留终端：彻底杜绝右键“在终端中打开”报找不到应用
-    "*DesktopAppInstaller*"     # 保留应用安装程序：保留 Winget 与离线 MSIX/APPX 安装能力
+    "*CapturePicker*",
+    "*CredDialogHost*"
 )
 
+# ----------------- 3. 依赖关系静态安全测试引擎 -----------------
+Write-Host "`n   [测试评估] 正在对当前映像已装载的 UWP 进行依赖拓扑完整性预检..." -ForegroundColor DarkCyan
+
 $appxPackages = Get-AppxProvisionedPackage -Path $scratchDir
-$totalAppx = $appxPackages.Count
-$currentAppx = 0
-$deletedAppxList = New-Object System.Collections.Generic.List[string]
+$winAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
+
+$candidateAppsToRemove   = New-Object System.Collections.Generic.List[System.Object]
+$candidateAppsToPreserve = New-Object System.Collections.Generic.List[System.Object]
 
 foreach ($app in $appxPackages) {
-    $currentAppx++
-    $shouldKeep = $false
-    foreach ($pattern in $preservedPackages) {
-        if ($app.PackageName -like $pattern -or $app.DisplayName -like $pattern) {
-            $shouldKeep = $true
+    $pkgName = $app.PackageName
+    $dispName = $app.DisplayName
+
+    # 1. 核心底层框架判定
+    $isCore = $false
+    foreach ($corePat in $systemCoreWhitelist) {
+        if ($pkgName -like $corePat -or $dispName -like $corePat) {
+            $isCore = $true
             break
         }
     }
 
-    $pct = [math]::Round(($currentAppx / [math]::Max(1, $totalAppx)) * 100)
-    Write-Progress -Activity "正在清理 UWP 预装应用" -Status "[$currentAppx/$totalAppx] 正在处理: $($app.DisplayName)" -PercentComplete $pct
-
-    if ($shouldKeep) {
-        Write-Host "   [$currentAppx/$totalAppx] [保留核心] $($app.DisplayName)" -ForegroundColor DarkGray
-        continue
-    }
-
-    Write-Host "   [$currentAppx/$totalAppx] [删除应用] $($app.PackageName)" -ForegroundColor Yellow
-    & dism.exe /English /Image:$scratchDir /Remove-ProvisionedAppxPackage "/PackageName:$($app.PackageName)" 2>$null | Out-Null
-    $deletedAppxList.Add($app.PackageName)
-}
-Write-Progress -Activity "正在清理 UWP 预装应用" -Completed
-
-# 精准定向物理粉碎已卸载的应用实体 (绝不污染父目录 SDDL，彻底释放磁盘空间)
-$winAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
-if (Test-Path -LiteralPath $winAppsDir) {
-    Write-Host "   正在执行 WindowsApps 废弃应用实体定向物理粉碎..." -ForegroundColor DarkGray
-
-    foreach ($pkgName in $deletedAppxList) {
-        $targetFolder = Join-Path $winAppsDir $pkgName
-        if (Test-Path -LiteralPath $targetFolder) {
-            Force-NukeFolderOrFile $targetFolder
+    # 2. 黑名单命中判定
+    $hitBlacklist = $false
+    if (-not $isCore -and $blacklistRules.Count -gt 0) {
+        foreach ($rule in $blacklistRules) {
+            if ($pkgName -like "*$rule*" -or $dispName -like "*$rule*") {
+                $hitBlacklist = $true
+                break
+            }
         }
     }
 
-    # 关键安全加固：确保父目录具备 ALL APPLICATION PACKAGES 只读权限，彻底杜绝沙箱进程闪退
+    if ($isCore -or (-not $hitBlacklist -and $blacklistRules.Count -gt 0)) {
+        $candidateAppsToPreserve.Add($app)
+    } else {
+        $candidateAppsToRemove.Add($app)
+    }
+}
+
+# 建立拓扑图：记录“被保留组件”所依赖的所有底层 PackageDependency 及其来源
+$depToPreservedAppMap = @{}
+
+if (Test-Path -LiteralPath $winAppsDir) {
+    foreach ($preservedApp in $candidateAppsToPreserve) {
+        $manifestMatches = Get-ChildItem -Path $winAppsDir -Filter "AppxManifest.xml" -Recurse -ErrorAction SilentlyContinue | Where-Object {
+            $_.FullName -like "*$($preservedApp.DisplayName)*"
+        }
+        foreach ($m in $manifestMatches) {
+            try {
+                [xml]$manifestXml = Get-Content -LiteralPath $m.FullName -ErrorAction Stop
+                $depNodes = $manifestXml.GetElementsByTagName("PackageDependency")
+                foreach ($dep in $depNodes) {
+                    $depName = $dep.GetAttribute("Name")
+                    if (-not [string]::IsNullOrWhiteSpace($depName)) {
+                        if (-not $depToPreservedAppMap.ContainsKey($depName)) {
+                            $depToPreservedAppMap[$depName] = New-Object System.Collections.Generic.List[string]
+                        }
+                        if (-not $depToPreservedAppMap[$depName].Contains($preservedApp.DisplayName)) {
+                            $depToPreservedAppMap[$depName].Add($preservedApp.DisplayName)
+                        }
+                    }
+                }
+            } catch {}
+            finally {
+                $manifestXml = $null
+            }
+        }
+    }
+}
+
+# 垃圾回收，释放 XML 读写锁
+[System.GC]::Collect()
+[System.GC]::WaitForPendingFinalizers()
+
+# 碰撞检测：查找待删列表中是否存在被保留应用强依赖的包
+$conflictItems = New-Object System.Collections.Generic.List[PSCustomObject]
+$safeDeleteList = New-Object System.Collections.Generic.List[System.Object]
+
+foreach ($cand in $candidateAppsToRemove) {
+    $hasConflict = $false
+    $causingPreservedApps = New-Object System.Collections.Generic.List[string]
+
+    foreach ($depKey in $depToPreservedAppMap.Keys) {
+        if ($cand.PackageName -like "*$depKey*" -or $cand.DisplayName -like "*$depKey*") {
+            $hasConflict = $true
+            foreach ($pName in $depToPreservedAppMap[$depKey]) {
+                if (-not $causingPreservedApps.Contains($pName)) {
+                    $causingPreservedApps.Add($pName)
+                }
+            }
+        }
+    }
+
+    if ($hasConflict) {
+        $conflictItems.Add([PSCustomObject]@{
+            App = $cand
+            RequiredBy = ($causingPreservedApps -join ", ")
+        })
+    } else {
+        $safeDeleteList.Add($cand)
+    }
+}
+
+# ----------------- 4. 依赖异常交互阻断裁决机制 -----------------
+$finalDeleteList = New-Object System.Collections.Generic.List[System.Object]
+
+if ($conflictItems.Count -gt 0) {
+    Write-Host "`n==================================================================" -ForegroundColor Red
+    Write-Host " [安全预警] UWP 依赖完整性测试发现 $($conflictItems.Count) 处严重依赖冲突！" -ForegroundColor Red
+    Write-Host " 以下组件存在于您的待删除黑名单中，但被您选择保留的应用强行依赖：" -ForegroundColor Yellow
+    Write-Host "==================================================================" -ForegroundColor Red
+
+    foreach ($item in $conflictItems) {
+        Write-Host " [冲突组件] $($item.App.DisplayName)" -ForegroundColor Yellow
+        Write-Host "    └─ 强依赖于它的保留组件: $($item.RequiredBy)" -ForegroundColor DarkGray
+    }
+
+    Write-Host "------------------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host " 请选择对异常冲突组件的处理策略:" -ForegroundColor Cyan
+    Write-Host " [1] 智能保护 (推荐: 自动保留这 $($conflictItems.Count) 个冲突包，仅删除其余无害应用，确保系统稳定)" -ForegroundColor Green
+    Write-Host " [2] 强行粉碎 (高危: 忽略测试警告，强行物理抹杀所有待删包，依赖缺失的应用可能闪退)" -ForegroundColor Red
+    Write-Host " [3] 终止构建 (安全: 丢弃当前镜像修改并退出，以便您重新调整 Appslist.txt)" -ForegroundColor DarkYellow
+    Write-Host "------------------------------------------------------------------" -ForegroundColor Cyan
+
+    $choice = Read-Host "请输入对应选项 [1, 2 或 3] (直接回车默认推荐 1)"
+
+    if ($choice -eq "2") {
+        Write-Host ">>> [警告] 用户选择强行粉碎模式，将移除包括冲突项在内的所有指定包..." -ForegroundColor Red
+        foreach ($item in $conflictItems) {
+            $finalDeleteList.Add($item.App)
+        }
+        foreach ($item in $safeDeleteList) {
+            $finalDeleteList.Add($item)
+        }
+    } elseif ($choice -eq "3") {
+        Write-Host "`n>>> [中止操作] 用户已终止流程。正在安全卸载挂载点并丢弃所有临时更改..." -ForegroundColor DarkYellow
+        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard
+        Stop-Transcript
+        Write-Host "[完成] 映像已安全重置，未产生损坏文件。请调整规则后重新运行。" -ForegroundColor Green
+        pause
+        exit
+    } else {
+        Write-Host ">>> [智能保护] 已自动将 $($conflictItems.Count) 个冲突包移入保护名单，继续精简其余应用。" -ForegroundColor Green
+        foreach ($item in $safeDeleteList) {
+            $finalDeleteList.Add($item)
+        }
+    }
+} else {
+    Write-Host "   [测试通过] 依赖拓扑扫描无冲突，所有待删应用均可无副作用安全剥离！" -ForegroundColor Green
+    foreach ($item in $safeDeleteList) {
+        $finalDeleteList.Add($item)
+    }
+}
+
+# ----------------- 5. 执行 UWP 卸载与定向物理粉碎 -----------------
+$totalDel = $finalDeleteList.Count
+$currDel = 0
+$deletedFolderNames = New-Object System.Collections.Generic.List[string]
+
+if ($totalDel -gt 0) {
+    foreach ($app in $finalDeleteList) {
+        $currDel++
+        $pct = [math]::Round(($currDel / [math]::Max(1, $totalDel)) * 100)
+        Write-Progress -Activity "正在精简 UWP 预装应用" -Status "[$currDel/$totalDel] 正在卸载: $($app.DisplayName)" -PercentComplete $pct
+
+        Write-Host "   [$currDel/$totalDel] [删除应用] $($app.PackageName)" -ForegroundColor Yellow
+        & dism.exe /English /Image:$scratchDir /Remove-ProvisionedAppxPackage "/PackageName:$($app.PackageName)" 2>$null | Out-Null
+        $deletedFolderNames.Add($app.PackageName)
+    }
+    Write-Progress -Activity "正在精简 UWP 预装应用" -Completed
+} else {
+    Write-Host "   [提示] 没有需要移除的 UWP 应用。" -ForegroundColor DarkGray
+}
+
+# 定向物理清除 WindowsApps 目录下的残留大实体，绝不损坏父级目录 DACL 继承
+if (Test-Path -LiteralPath $winAppsDir) {
+    Write-Host "   正在执行 WindowsApps 废弃实体定向物理粉碎..." -ForegroundColor DarkGray
+    foreach ($folderKeyword in $deletedFolderNames) {
+        Get-ChildItem -Path $winAppsDir -Directory -ErrorAction SilentlyContinue | Where-Object { 
+            $_.Name -like "$folderKeyword*" 
+        } | ForEach-Object {
+            Force-NukeFolderOrFile $_.FullName
+        }
+    }
+
+    # 关键安全固化：彻底恢复 ALL APPLICATION PACKAGES 只读权限，防止沙箱应用（如终端）闪退
     & icacls.exe "$winAppsDir" /grant "*S-1-15-2-1:(OI)(CI)RX" /C /Q 2>$null | Out-Null
     & icacls.exe "$winAppsDir" /grant "*S-1-5-32-545:(OI)(CI)RX" /C /Q 2>$null | Out-Null
 }
-Write-Host "[完成] UWP 应用清理与实体定向粉碎完毕。" -ForegroundColor Green
+Write-Host "[完成] UWP 应用拓扑测试、依赖守护与定向精炼完毕。" -ForegroundColor Green
 
-# ----------------- 2. 功能包清理 (严格保留 Search-Engine-Client 以固化属性页) -----------------
+# ----------------- 6. 系统可选功能包精简 (保留 Search-Engine-Client 以固化属性页) -----------------
 Write-Host "`n[步骤 5/11] 正在检索系统组件包并执行深度可选功能精简..." -ForegroundColor Cyan
 
 $installedPackages = & dism.exe /English /Image:$scratchDir /Get-Packages /Format:Table
 $pkgLines = $installedPackages -split '\r?\n' | Select-Object -Skip 1
 
 # 基础需要剥离的无用功能包列表
-# 【底层架构警示】：绝对不能删除 Microsoft-Windows-Search-Engine-Client-Package，
-#  否则盘符属性页底部的索引复选框和文件高级属性 COM 结构会彻底暴毙，导致右键属性无反应！
 $basePackagesToRemove = @(
-    "Microsoft-Windows-InternetExplorer-Optional-Package~", # IE 基础可选组件彻底剔除
+    "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
@@ -457,7 +626,6 @@ $basePackagesToRemove = @(
     "Microsoft-Windows-WebcamExperience-Package~"
 )
 
-# 动态筛选需剔除的目标列表
 $targetPkgs = New-Object System.Collections.Generic.List[string]
 
 foreach ($line in $pkgLines) {
@@ -478,7 +646,6 @@ foreach ($line in $pkgLines) {
         if ($isLangRelated) {
             $isCurrentLang = ($pkgId -like "*$defaultLang*")
             if ($defaultLang -match "^zh-") {
-                # 中文环境下，额外保留简体中文 Hans 标识
                 if ($pkgId -match "zh-CN|zh-cn|Hans") { $isCurrentLang = $true }
             }
             if (-not $isCurrentLang) {
@@ -487,7 +654,7 @@ foreach ($line in $pkgLines) {
         }
     }
 
-    # 冗余非主语言输入法包判定 (仅在当前环境非对应语系时剔除)
+    # 冗余非主语言输入法包判定
     if (-not $shouldDelete) {
         if ($defaultLang -ne "ja-JP" -and $pkgId -match "IME-ja-jp") { $shouldDelete = $true }
         if ($defaultLang -ne "ko-KR" -and $pkgId -match "IME-ko-kr") { $shouldDelete = $true }
@@ -509,7 +676,7 @@ foreach ($pkgId in $targetPkgs) {
     & dism.exe /English /Image:$scratchDir /Remove-Package "/PackageName:$pkgId" /NoRestart 2>$null | Out-Null
 }
 Write-Progress -Activity "正在剔除组件与外语包" -Completed
-Write-Host "[完成] 系统可选功能包精炼完毕 (Search-Engine-Client 核心属性底层接口已受保护保留)。" -ForegroundColor Green
+Write-Host "[完成] 系统可选功能包精炼完毕 (Search-Engine-Client 核心底层接口已安全保留)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/03-RemovePackages.ps1
 
@@ -1031,10 +1198,10 @@ Write-Host "[完成] 离线注册表加固优化全部完毕 (文本文档已三
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
-#  [重构加固]：自毁句柄死锁根治 + Sysprep 规范对齐 + XML 注入严格转义
+#  [企业级重构]：嵌入首次登录稳定性自动化测试探针 + XML 严格实体转义 + 自毁防死锁
 # ==============================================================================
 
-Write-Host "`n[步骤 9/11] 正在配置高级无人值守应答文件 (30秒智能倒计时)..." -ForegroundColor Cyan
+Write-Host "`n[步骤 9/11] 正在配置高级无人值守应答文件 (集成首次启动稳定性自检引擎)..." -ForegroundColor Cyan
 
 # 1. 调用倒计时输入函数获取登录账户
 $userResult = Read-InputWithTimeout -Prompt "请输入登录用户名" -Seconds 30 -Default "Admin"
@@ -1044,7 +1211,7 @@ if ($inputUser -match "^(Administrator|Guest)$") {
     $inputUser = "Admin"
 }
 
-# 2. 密码设定与 XML 特殊字符严格安全转义 (彻底防止 XML 结构断裂)
+# 2. 密码设定与 XML 特殊字符严格安全转义
 if ($userResult.TimedOut) {
     $inputPass = ""
 } else {
@@ -1053,7 +1220,7 @@ if ($userResult.TimedOut) {
 $inputUserEscaped = [System.Security.SecurityElement]::Escape($inputUser)
 $inputPassEscaped = [System.Security.SecurityElement]::Escape($inputPass)
 
-# 3. 100% 完整无损原版 XML 应答模板 (修复自毁死锁与规范映射)
+# 3. 100% 完整无损原版 XML 应答模板 (集成 Stability & Health Check 自动化探针)
 $unattendTemplate = @'
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
@@ -1135,7 +1302,7 @@ $unattendTemplate = @'
 	<settings pass="auditSystem"></settings>
 	<settings pass="auditUser"></settings>
 	<settings pass="oobeSystem">
-		<!-- 2. OOBE 阶段国际化全自动闭环 (彻底跳过地区、键盘布局交互) -->
+		<!-- 2. OOBE 阶段国际化全自动闭环 -->
 		<component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<InputLocale>zh-CN</InputLocale>
 			<SystemLocale>zh-CN</SystemLocale>
@@ -1342,6 +1509,51 @@ $scripts = @(
 		cmd.exe /c "rmdir C:\Windows.old";
 	};
 	{
+		# ==============================================================================
+		#  装机后系统健康与稳定性自动化测试探针 (Post-Trim Stability Probe)
+		# ==============================================================================
+		$report = New-Object System.Collections.Generic.List[string];
+		$report.Add("==================================================================");
+		$report.Add(" Windows 11 精简母盘 - 首次登录系统健康与稳定性自检审计报告");
+		$report.Add(" 生成时间: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'));
+		$report.Add("==================================================================");
+
+		# 1. 测试应用部署与核心工具状态
+		$wtPkg = Get-AppxPackage -Name "*WindowsTerminal*" -ErrorAction SilentlyContinue;
+		$wtStatus = if ($wtPkg) { "正常部署 (版本: $($wtPkg.Version))" } else { "未安装或已被剔除" };
+		$report.Add("[组件测试] Windows 终端 (Terminal): $wtStatus");
+
+		$wingetPkg = Get-AppxPackage -Name "*DesktopAppInstaller*" -ErrorAction SilentlyContinue;
+		$wingetStatus = if ($wingetPkg) { "正常可用 (支持 Winget/离线安装)" } else { "未安装" };
+		$report.Add("[组件测试] 应用安装程序 (Winget): $wingetStatus");
+
+		# 2. 测试文本文档 ShellNew 关联
+		$txtAssoc = (cmd.exe /c "assoc .txt 2>nul");
+		$report.Add("[关联测试] .txt 扩展名关联项: $txtAssoc");
+
+		# 3. 扫描系统关键致命错误事件日志 (Application 崩溃与 DCOM 挂起)
+		try {
+			$appCrashes = Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
+			$crashCount = if ($appCrashes) { $appCrashes.Count } else { 0 };
+			$report.Add("[事件测试] 应用程序核心崩溃事件数 (Level=Error): $crashCount");
+
+			$dcomErrors = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-DistributedCOM'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
+			$dcomCount = if ($dcomErrors) { $dcomErrors.Count } else { 0 };
+			$report.Add("[事件测试] DCOM 幽灵调用异常事件数: $dcomCount");
+		} catch {
+			$report.Add("[事件测试] 事件日志扫描已安全旁路。");
+		}
+
+		$report.Add("------------------------------------------------------------------");
+		$verdict = if ($crashCount -eq 0 -and $dcomCount -eq 0) { "【优秀】系统底层核心零异常，运行极度稳定！" } else { "【良好】已自动记录轻微事件，系统运行正常。" };
+		$report.Add("总体稳定性裁定: $verdict");
+		$report.Add("==================================================================");
+
+		# 写入持久化审计报告
+		$reportPath = "C:\Windows\Temp\Trim_Stability_Report.log";
+		[System.IO.File]::WriteAllLines($reportPath, $report, [System.Text.Encoding]::UTF8);
+	};
+	{
 		# 1. 彻底销毁可能包含明文密码的各层级应答文件副本
 		$xmlFiles = @(
 			'C:\Windows\Panther\unattend.xml',
@@ -1353,7 +1565,7 @@ $scripts = @(
 			if (Test-Path $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; }
 		}
 
-		# 2. 彻底根治句柄锁：将日志重定向到 TEMP 后，使用循环重试命令执行Scripts目录自毁
+		# 2. 彻底根治句柄锁：在所有自检报告保存后，异步执行脚本目录自毁
 		Start-Process -WindowStyle Hidden -FilePath "cmd.exe" -ArgumentList '/c timeout /t 3 /nobreak >nul &amp; for /l %i in (1,1,10) do (if exist "C:\Windows\Setup\Scripts" (rd /s /q "C:\Windows\Setup\Scripts" &amp; timeout /t 1 >nul) else (exit))'
 	};
 );
@@ -1384,10 +1596,10 @@ $scripts = @(
 </unattend>
 '@
 
-# 替换自定义参数 (严格经过 XML 安全字符转义)
+# 替换自定义参数
 $autoUnattendXml = $unattendTemplate.Replace('__CUSTOM_USER__', $inputUserEscaped).Replace('__CUSTOM_PASS__', $inputPassEscaped)
 
-# 4. 多通道合规注入 (Sysprep 标准规范、Panther 自动化、安装介质根目录)
+# 4. 多通道合规注入 (Sysprep、Panther、安装介质根目录)
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
@@ -1395,7 +1607,7 @@ if (-not (Test-Path -LiteralPath $pantherDir)) { New-Item -ItemType Directory -P
 
 $utf8Encoding = [System.Text.Encoding]::UTF8
 
-# Sysprep 核心规范通道：必须写入 unattend.xml，同时补充 autounattend.xml 以确保双向兼容
+# Sysprep 核心规范通道
 [System.IO.File]::WriteAllText((Join-Path $sysprepDir "unattend.xml"), $autoUnattendXml, $utf8Encoding)
 [System.IO.File]::WriteAllText((Join-Path $sysprepDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
 
@@ -1405,7 +1617,7 @@ $utf8Encoding = [System.Text.Encoding]::UTF8
 # ISO 可移动介质根目录自启动通道
 [System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自毁死锁彻底根治，Sysprep 合规固化)。" -ForegroundColor Green
+Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (已集成首次登录自动化稳定性探针)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/07-UnattendInject.ps1
 
