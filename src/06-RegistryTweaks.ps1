@@ -120,11 +120,10 @@ if ($trimMode -eq "2") {
 }
 
 # ==============================================================================
-#  D. 终极修复：彻底根治“打开方式 -> 更多应用”点击无反应、无法展开的死锁
+#  D. 终极修复：彻底根治“打开方式 -> 更多应用”死锁 与 记事本 UWP 验证报错
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 【核心救砖策略】：全域禁用 OpenWith 对 Microsoft Store 的网络/组件依赖探测
-; 彻底切断无应用商店时点击“更多应用”引发的 COM 异常与线程假死，直接同步展开本地程序并调出“在这台电脑上查找其他应用”
+; 1. 禁用 OpenWith 探测 Microsoft Store 推荐
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
 "NoUseStoreOpenWith"=dword:00000001
 
@@ -137,20 +136,35 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer]
 "NoUseStoreOpenWith"=dword:00000001
 
-; 2. 【核心修复】：为 openas 与 opendlg 注入原生正确的 DelegateExecute COM 代理契约
-; 采用正牌 Windows Storage Open With Handler: {1fbae463-61f3-4442-bc96-61512d68d8ed}
+; 2. 【核心修复】：注入正确的 Windows 官方 DelegateExecute GUID ({e44e9428-bdbc-4987-a099-40dc8fd255e7})
+; 彻底解决“更多应用”点击无反应、无法弹出“在这台电脑上查找其他应用”
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas]
-@=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,73,00,68,00,65,00,6c,00,6c,00,33,00,32,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,35,00,33,00,37,00,36,00,00,00
+@="@shell32.dll,-5376"
 "MultiSelectModel"="Single"
 "Position"="Bottom"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"="{1fbae463-61f3-4442-bc96-61512d68d8ed}"
+@="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
+"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Unknown\shell\opendlg\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"="{1fbae463-61f3-4442-bc96-61512d68d8ed}"
+@="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
+"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
+
+; 3. 【核心加固】：强行将 .txt 文件绑定到本地 Win32 稳定架构，彻底阻断任何 UWP 依赖冲突验证报错
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
+@="txtfile"
+"Content Type"="text/plain"
+"PerceivedType"="text"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
+@="文本文档"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
+@="open"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
+@="\"%SystemRoot%\\System32\\notepad.exe\" \"%1\""
 "@)
 
 # ==============================================================================
