@@ -1,12 +1,12 @@
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
-#  [架构优化]：彻底清除 Specialize / DefaultUser 中的 NoUseStoreOpenWith 污染
+#  [架构重构]：彻底清除 NoUseStoreOpenWith + 集成 FirstLogon 原生自愈流水线
 # ==============================================================================
 
 # 0. 变量作用域安全兜底
 if (-not $unattendMode) { $unattendMode = "Semi" }
 
-Write-Host "`n[步骤 9/11] 正在配置高级无人值守应答文件..." -ForegroundColor Cyan
+Write-Host "`n[步骤 9/11] 正在配置高级无人值守应答文件与首次登入优化引擎..." -ForegroundColor Cyan
 
 # 1. 根据模式动态生成账户配置块
 if ($unattendMode -eq "Full") {
@@ -77,7 +77,7 @@ $unattendTemplate = @'
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
 	<settings pass="offlineServicing"></settings>
 	<settings pass="windowsPE">
-		<!-- 1. WinPE 安装环境国际化 (跳过安装初始语言/键盘选择) -->
+		<!-- 1. WinPE 安装环境国际化 (跳过初始语言与键盘选择) -->
 		<component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<SetupUILanguage>
 				<UILanguage>zh-CN</UILanguage>
@@ -153,7 +153,7 @@ $unattendTemplate = @'
 	<settings pass="auditSystem"></settings>
 	<settings pass="auditUser"></settings>
 	<settings pass="oobeSystem">
-		<!-- 2. OOBE 阶段国际化全自动闭环 (彻底跳过地区、键盘布局交互) -->
+		<!-- 2. OOBE 阶段国际化全自动闭环 -->
 		<component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<InputLocale>zh-CN</InputLocale>
 			<SystemLocale>zh-CN</SystemLocale>
@@ -328,10 +328,25 @@ $scripts = @(
 		Disable-ComputerRestore -Drive 'C:\';
 	};
 	{
-		cmd.exe /c "rmdir C:\Windows.old";
+		cmd.exe /c "rmdir C:\Windows.old" 2>$null;
 	};
 	{
-		# 1. 彻底销毁可能包含部署残留的各层级应答文件副本
+		# 【Win11Debloat 级活体自愈】：为首登用户注入记事本正规注册，彻底消灭“包无法验证”报错
+		try {
+			$notepadManifest = Get-ChildItem -Path "C:\Program Files\WindowsApps" -Filter "AppxManifest.xml" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*WindowsNotepad*" } | Select-Object -First 1
+			if ($notepadManifest) {
+				Add-AppxPackage -DisableDevelopmentMode -Register $notepadManifest.FullName -ErrorAction SilentlyContinue
+			}
+		} catch {}
+	};
+	{
+		# 清除潜在的 UserChoice 残留冲突，确保 txtfile 基础关联生效
+		cmd.exe /c "reg delete `"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\UserChoice`" /f" 2>$null;
+		cmd.exe /c "assoc .txt=txtfile" 2>$null;
+		cmd.exe /c 'ftype txtfile="%SystemRoot%\System32\notepad.exe" "%1"' 2>$null;
+	};
+	{
+		# 彻底销毁应答文件副本 (防信息泄露)
 		$xmlFiles = @(
 			'C:\Windows\Panther\unattend.xml',
 			'C:\Windows\Panther\Unattend\unattend.xml',
@@ -342,8 +357,8 @@ $scripts = @(
 			if (Test-Path $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; }
 		}
 
-		# 2. 彻底根治句柄锁：将日志重定向到 TEMP 后，使用循环重试命令执行 Scripts 目录自毁
-		Start-Process -WindowStyle Hidden -FilePath "cmd.exe" -ArgumentList '/c timeout /t 3 /nobreak >nul &amp; for /l %i in (1,1,10) do (if exist "C:\Windows\Setup\Scripts" (rd /s /q "C:\Windows\Setup\Scripts" &amp; timeout /t 1 >nul) else (exit))'
+		# 异步延时平滑自毁临时 Scripts 目录
+		Start-Process -WindowStyle Hidden -FilePath "cmd.exe" -ArgumentList '/c timeout /t 5 /nobreak >nul &amp; rd /s /q "C:\Windows\Setup\Scripts"'
 	};
 );
 
@@ -351,20 +366,9 @@ $scripts = @(
   [float] $complete = 0;
   [float] $increment = 100 / $scripts.Count;
   foreach( $script in $scripts ) {
-    Write-Progress -Activity 'Running scripts to finalize your Windows installation. Do not close this window.' -PercentComplete $complete;
-    '*** Will now execute command &#xAB;{0}&#xBB;.' -f $(
-      $str = $script.ToString().Trim() -replace '\s+', ' ';
-      $max = 100;
-      if( $str.Length -le $max ) {
-        $str;
-      } else {
-        $str.Substring( 0, $max - 1 ) + '&#x2026;';
-      }
-    );
+    Write-Progress -Activity 'Finalizing Windows deployment...' -PercentComplete $complete;
     $start = [datetime]::Now;
     &amp; $script;
-    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( $start ).TotalMilliseconds;
-    "`r`n" * 3;
     $complete += $increment;
   }
 } *&gt;&amp;1 &gt;&gt; "$env:TEMP\FirstLogon.log";
@@ -394,4 +398,4 @@ $utf8Encoding = [System.Text.Encoding]::UTF8
 # ISO 可移动介质根目录自启动通道
 [System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (模式: $unattendMode，有害策略已彻底清理)。" -ForegroundColor Green
+Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (有害策略已清零，首登自愈流水线已就绪)。" -ForegroundColor Green
