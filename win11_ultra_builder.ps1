@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-14 08:43:38 UTC
+#  生成时间: 2026-10-14 08:47:19 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -1345,7 +1345,7 @@ Write-Host "[完成] 离线注册表加固优化全部完毕 (文本文档已三
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
-#  [终极加固]：单引号纯字面量模板 + 锚点占位原子替换 (彻底根治 ParserError 语法解析冲突)
+#  [终极稳固]：消除反引号跨行隐患 + 单语句顺序安全替换 + 杜绝 ParserError
 # ==============================================================================
 
 Write-Host "`n[步骤 9/11] 正在加载全局配置并注入 Windows 安装引导应答文件..." -ForegroundColor Cyan
@@ -1407,7 +1407,7 @@ if ($mode -eq "1") {
     $hideLocalAccountScreenValue = "false"
 }
 
-# ----------------- 2. 纯字面量无损模板 (单引号包裹，杜绝子表达式解析冲突) -----------------
+# ----------------- 2. 纯字面量无损模板 -----------------
 $unattendTemplate = @'
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
@@ -1757,11 +1757,12 @@ $scripts = @(
 </unattend>
 '@
 
-# ----------------- 3. 稳健的占位符原子替换 (无任何解析冲突) -----------------
-$finalXml = $unattendTemplate.Replace('__USER_ACCOUNTS__', $userAccountsXmlFragment) `
-                             .Replace('__AUTO_LOGON__', $autoLogonXmlFragment) `
-                             .Replace('__HIDE_LOCAL_ACCOUNT_SCREEN__', $hideLocalAccountScreenValue) `
-                             .Replace('__DEPLOY_MODE_TEXT__', $modeText)
+# ----------------- 3. 单语句独立安全替换 (彻底免疫空格与反引号陷阱) -----------------
+$finalXml = $unattendTemplate
+$finalXml = $finalXml.Replace('__USER_ACCOUNTS__', $userAccountsXmlFragment)
+$finalXml = $finalXml.Replace('__AUTO_LOGON__', $autoLogonXmlFragment)
+$finalXml = $finalXml.Replace('__HIDE_LOCAL_ACCOUNT_SCREEN__', $hideLocalAccountScreenValue)
+$finalXml = $finalXml.Replace('__DEPLOY_MODE_TEXT__', $modeText)
 
 # ----------------- 4. 多通道合规注入 -----------------
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
