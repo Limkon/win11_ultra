@@ -107,9 +107,4 @@ if (Test-Path -LiteralPath $fontsPath) {
     }
 }
 
-# 【关键修复说明】：
-# 原第 11 节【修复记事本物理执行实体】已被彻底移除！
-# 严禁用 System32\notepad.exe 强行覆盖 C:\Windows\notepad.exe。
-# 移除该节后，系统原生硬链接及其 TrustedInstaller/Users 组的安全 ACL 得到 100% 完整保留。
-
 Write-Host "[完成] 大文件实体物理粉碎完毕 (底层核心框架完整性已得到妥善保护)。" -ForegroundColor Green
