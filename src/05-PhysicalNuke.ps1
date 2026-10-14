@@ -1,110 +1,58 @@
 # ==============================================================================
-#  win11 Builder - [模块 6/11] 大文件实体深度物理粉碎 (src/05-PhysicalNuke.ps1)
-#  [终极修复加固版]：剔除 Client.CBS 破损隐患 + 保护记事本原生硬链接与安全 ACL
+#  win11 Builder - [模块 6/11] 物理实体精简 (src/05-PhysicalNuke.ps1)
+#  [100% 像素级对齐 nano11 物理删除逻辑]：绝不破坏系统核心组件与 SmartScreen
 # ==============================================================================
 
-Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/Defender/OneDrive/Speech)..." -ForegroundColor Cyan
-Write-Host "   [模式说明] 普通模式与极限模式均完整执行以下实体物理粉碎：" -ForegroundColor DarkCyan
+Write-Host "`n[步骤 7/11] 正在同步 nano11 执行非必要实体文件清理..." -ForegroundColor Cyan
+$winDir = Join-Path $scratchDir "Windows"
 
-# ----------------- 1. 恢复环境 (WinRE) -----------------
-$recoveryDir = Join-Path $scratchDir "Windows\System32\Recovery"
-Write-Host "   -> 正在物理粉碎 WinRE 恢复环境文件..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $recoveryDir "winre.wim")
-Force-NukeFolderOrFile (Join-Path $recoveryDir "ReAgent.xml")
+# 1. 彻底移除 Edge 浏览器与 WebView
+Write-Host "   -> 正在清理 Edge 与 WebView..." -ForegroundColor DarkGray
+Remove-Item -Path "$scratchDir\Program Files (x86)\Microsoft\Edge*" -Recurse -Force -ErrorAction SilentlyContinue
+$arch = if ((Get-CimInstance Win32_OperatingSystem).OSArchitecture -match 'ARM') { "arm64" } else { "amd64" }
+if ($arch -eq 'amd64') {
+    $folderPath = Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "amd64_microsoft-edge-webview_31bf3856ad364e35*" -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+    if ($folderPath) { Remove-Item -Path $folderPath -Recurse -Force -ErrorAction SilentlyContinue }
+}
+Remove-Item -Path "$scratchDir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force -ErrorAction SilentlyContinue
 
-# ----------------- 2. Microsoft Edge 完整生态 -----------------
-Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整生态 (Chromium 本体 + WebView + UWP 桩程序)..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\Edge")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\EdgeUpdate")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\Microsoft-Edge-Webview")
+# 2. 移除 WinRE 恢复环境并建立 nano11 占位桩 (防止 Setup 报错)
+Write-Host "   -> 正在清理 WinRE (保留 nano11 占位空文件)..." -ForegroundColor DarkGray
+$winreFile = "$scratchDir\Windows\System32\Recovery\winre.wim"
+Remove-Item -Path $winreFile -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -Path $winreFile -ItemType File -Force -ErrorAction SilentlyContinue | Out-Null
 
-$systemApps = Join-Path $scratchDir "Windows\SystemApps"
-if (Test-Path -LiteralPath $systemApps) {
-    Get-ChildItem -Path $systemApps -Directory | Where-Object { 
-        $_.Name -like "*MicrosoftEdge*" 
-    } | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
+# 3. 移除 OneDrive 安装引导实体
+Write-Host "   -> 正在清理 OneDrive 安装包..." -ForegroundColor DarkGray
+Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
+
+# 4. 清理 Defender 病毒库更新残留 (绝不强删 smartscreen 和核心驱动，保持 Shell 完好)
+Write-Host "   -> 正在清理 Defender 历史残留..." -ForegroundColor DarkGray
+Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
+
+# 5. 清理语音引擎 TTS
+Write-Host "   -> 正在清理语音引擎 TTS..." -ForegroundColor DarkGray
+Remove-Item -Path (Join-Path $winDir "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
+
+# 6. 输入法清理：严格按 nano11 仅剔除繁体、日语、韩语
+Write-Host "   -> 正在清理日韩繁输入法实体..." -ForegroundColor DarkGray
+Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHT" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\JPN" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force -ErrorAction SilentlyContinue
+
+# 7. 临时目录、帮助、壁纸、光标清理 (完全对齐 nano11)
+Write-Host "   -> 正在清理临时文件、Web、帮助与光标..." -ForegroundColor DarkGray
+Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $winDir "Web") -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $winDir "Help") -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $winDir "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
+
+# 8. 字体库精炼 (100% 对齐 nano11 白名单与剔除规则)
+Write-Host "   -> 正在精炼字体库..." -ForegroundColor DarkGray
+$fontsPath = Join-Path $winDir "Fonts"
+if (Test-Path $fontsPath) { 
+    Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "lucon*.*", "calibri*.*", "arial*.*", "times*.*", "cou*.*", "8*.*", "msyh*.*", "simsun*.*", "simhei*.*" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $fontsPath -Include "mingli*", "msjh*", "malgun*", "meiryo*", "yugoth*", "segoeuihistoric.ttf" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue 
 }
 
-# ----------------- 3. Microsoft OneDrive -----------------
-Write-Host "   -> 正在物理粉碎 OneDrive 各层级安装与运行实体..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\OneDriveSetup.exe")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\SysWOW64\OneDriveSetup.exe")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files\Microsoft OneDrive")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft OneDrive")
-Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft OneDrive")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Users\Default\AppData\Local\Microsoft\OneDrive")
-
-# ----------------- 4. Windows Defender 全栈驱动与服务组件 -----------------
-Write-Host "   -> 正在物理粉碎 Windows Defender 全栈驱动与服务组件实体..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft\Windows Defender")
-Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft\Windows Defender Advanced Threat Protection")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files\Windows Defender")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Windows Defender")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files\Windows Defender Advanced Threat Protection")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\SecurityHealthSystray.exe")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\SecurityHealthService.exe")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\smartscreen.exe")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\wd")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\WdFilter.sys")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\WdNisDrv.sys")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\wdboot.sys")
-
-# ----------------- 5. 日语、韩语、繁体中文输入法字库实体 -----------------
-Write-Host "   -> 正在物理粉碎繁体/日语/韩语输入法实体..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\CHT")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\JPN")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\KOR")
-
-# ----------------- 6. 独立 Cortana 专属残留包 (严格保护 Client.CBS 核心) -----------------
-# 【关键】：绝对不能递归粉碎 Client.CBS 内的 SearchHost.exe，否则 XAML 打开方式弹窗必崩！
-Write-Host "   -> 正在物理清理独立 Cortana 专属残留应用包..." -ForegroundColor DarkGray
-if (Test-Path -LiteralPath $systemApps) {
-    Get-ChildItem -Path $systemApps -Directory | Where-Object { 
-        $_.Name -like "*Cortana*" 
-    } | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
-}
-# 注意：原脚本下方删除 SearchIndexer.exe / SearchFilterHost.exe 的语句必须全部删掉！
-
-# ----------------- 7. 语音引擎与离线帮助文档 -----------------
-Write-Host "   -> 正在物理粉碎语音引擎与帮助文档..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Speech\Engines\SR")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Speech\Engines\TTS\en-US")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\Speech\Engines\SR")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Help")
-
-# ----------------- 8. 冗余壁纸 (严格保护保留默认 img0.jpg) -----------------
-$wallpapers = Join-Path $scratchDir "Windows\Web\Wallpaper"
-if (Test-Path -LiteralPath $wallpapers) {
-    Write-Host "   -> 正在清理多余壁纸 (严格保留默认 img0.jpg)..." -ForegroundColor DarkGray
-    Get-ChildItem -Path $wallpapers -Recurse -File | Where-Object { $_.Name -ne "img0.jpg" } | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
-}
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Web\Screen")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Web\TouchKeyboard")
-
-# ----------------- 9. 系统提示音 (严格保护保留核心事件声音) -----------------
-$mediaDir = Join-Path $scratchDir "Windows\Media"
-if (Test-Path -LiteralPath $mediaDir) {
-    Write-Host "   -> 正在精炼系统提示音 (保留核心事件声音)..." -ForegroundColor DarkGray
-    Get-ChildItem -Path $mediaDir -Filter "*.wav" | Where-Object { 
-        $_.Name -notmatch "Windows (Background|Foreground|Error|Ding|Default)\.wav" 
-    } | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
-}
-
-# ----------------- 10. 中文字体库深度精炼 -----------------
-$fontsPath = Join-Path $scratchDir "Windows\Fonts"
-if (Test-Path -LiteralPath $fontsPath) {
-    Write-Host "   -> 正在精炼中文字体库..." -ForegroundColor DarkGray
-    Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "calibri*.*", "arial*.*", "times*.*", "msyh*.*", "simsun*.*", "simhei*.*", "kaiu*.*", "mingliu*.*" | ForEach-Object {
-        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
-    }
-}
-
-Write-Host "[完成] 大文件实体物理粉碎完毕 (底层核心框架完整性已得到妥善保护)。" -ForegroundColor Green
+Write-Host "[完成] 实体文件精简完毕 (完全符合 nano11 稳定基准)。" -ForegroundColor Green
