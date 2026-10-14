@@ -1,9 +1,9 @@
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 大文件实体深度物理粉碎 (src/05-PhysicalNuke.ps1)
-#  [重构加固]：全盘彻底剿灭 SearchHost 实体 + 杜绝后台拉起 + 核心框架保护
+#  [架构优化]：杜绝破坏 Client.CBS 核心外壳 + 保护字体注册完整性 + 保持稳定
 # ==============================================================================
 
-Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/Search/Defender/OneDrive/Speech)..." -ForegroundColor Cyan
+Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/Defender/OneDrive/Speech)..." -ForegroundColor Cyan
 Write-Host "   [模式说明] 普通模式与极限模式均完整执行以下实体物理粉碎：" -ForegroundColor DarkCyan
 
 # 1. 恢复环境 (WinRE)
@@ -57,21 +57,13 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\CHT"
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\JPN")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\KOR")
 
-# 6. Cortana 与 Windows Search 前后台全套引擎实体 (深度清除 Client.CBS 内部残留)
-Write-Host "   -> 正在物理粉碎 Cortana 与 Windows Search (包含 SearchHost/SearchApp)..." -ForegroundColor DarkGray
+# 6. Cortana 与 Windows Search 独立组件清理 (严格保护 Client.CBS 核心外壳完整性)
+Write-Host "   -> 正在物理粉碎独立 Cortana 与传统 Windows Search 索引实体..." -ForegroundColor DarkGray
 if (Test-Path -LiteralPath $systemApps) {
-    # 清理明确的 Cortana 与 Search 专属包
+    # 仅清理独立的 Cortana 与旧版 Search 专属目录，严禁进入 Client.CBS 内部强删以免破坏 XAML 宿主
     Get-ChildItem -Path $systemApps -Directory | Where-Object { 
-        $_.Name -like "*Cortana*" -or $_.Name -like "*Microsoft.Windows.Search*" 
+        $_.Name -like "*Cortana*" -or $_.Name -like "*Microsoft.Windows.Search_*" 
     } | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
-
-    # 【深度修复】：全盘递归粉碎隐藏在 CBS 或其他宿主目录中的 SearchHost 执行实体
-    Get-ChildItem -Path $systemApps -Recurse -Filter "SearchHost.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
-    Get-ChildItem -Path $systemApps -Recurse -Filter "SearchApp.exe" -ErrorAction SilentlyContinue | ForEach-Object {
         Force-NukeFolderOrFile $_.FullName
     }
 }
@@ -111,20 +103,4 @@ if (Test-Path -LiteralPath $mediaDir) {
     }
 }
 
-# 10. 中文字体库深度精炼 (注：只删物理文件不删注册表会导致 Office/PS 闪退，建议整段注释跳过)
-# $fontsPath = Join-Path $scratchDir "Windows\Fonts"
-# if (Test-Path -LiteralPath $fontsPath) {
-#     Write-Host "   -> 正在精炼中文字体库..." -ForegroundColor DarkGray
-#     Get-ChildItem -Path $fontsPath -Exclude ... | ForEach-Object {
-#         Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
-#     }
-# }
-
-# ----------------- 11. 修复记事本物理执行实体 (已由注册表标准接管，此处无需重复覆盖) -----------------
-# $winDir = Join-Path $scratchDir "Windows"
-# $sys32Notepad = Join-Path $winDir "System32\notepad.exe"
-# $rootNotepad  = Join-Path $winDir "notepad.exe"
-# if (Test-Path -LiteralPath $sys32Notepad) {
-#     Force-NukeFolderOrFile $rootNotepad
-#     Copy-Item -LiteralPath $sys32Notepad -Destination $rootNotepad -Force
-# }
+Write-Host "[完成] 大文件实体物理粉碎完毕 (Client.CBS 核心外壳完整性已受保护)。" -ForegroundColor Green
