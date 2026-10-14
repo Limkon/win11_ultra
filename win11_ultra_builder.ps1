@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-14 08:47:19 UTC
+#  生成时间: 2026-10-14 09:47:03 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -9,13 +9,13 @@
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
-#  [重构加固]：配置决策全量前置 + 双模式智能倒计时选择 + 账户密码前置初始化
+#  [企业级重构]：全局交互三合一集中前置 + 倒计时防挂起 + 全流程静默流水线
 # ==============================================================================
 
-# ----------------- 全局特性静态开关 (后期需要时可直接在此修改) -----------------
-# 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，直接打包 install.wim；改为 $true 则开启转换)
+# ----------------- 全局特性静态开关 -----------------
+# 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，直接打包 install.wim)
 $enableEsdConversion = $false
-# ------------------------------------------------------------------------------
+# ----------------------------------------------------
 
 # 1. 确保正确的执行策略
 if ((Get-ExecutionPolicy) -eq 'Restricted') {
@@ -47,7 +47,7 @@ if (-not $myWindowsPrincipal.IsInRole($adminRole)) {
     exit
 }
 
-# 4. 内核级关闭控制台快速编辑模式 (彻底解决鼠标误点击黑框导致的线程冻结挂起)
+# 4. 内核级关闭控制台快速编辑模式 (防误触黑框导致线程挂起)
 try {
     $consoleHelper = Add-Type -MemberDefinition @"
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -61,7 +61,6 @@ try {
     $stdInHandle = $consoleHelper::GetStdHandle(-10) # STD_INPUT_HANDLE
     $consoleMode = 0
     if ($consoleHelper::GetConsoleMode($stdInHandle, [ref]$consoleMode)) {
-        # 移除 ENABLE_QUICK_EDIT_MODE (0x0040), 启用 ENABLE_EXTENDED_FLAGS (0x0080)
         $newMode = ($consoleMode -band -bnot 0x0040) -bor 0x0080
         $null = $consoleHelper::SetConsoleMode($stdInHandle, $newMode)
     }
@@ -131,7 +130,7 @@ function Read-ChoiceWithTimeout {
             if ($key.Key -eq [ConsoleKey]::Enter) {
                 Write-Host ""
                 return $DefaultChoice
-            } elseif ($key.KeyChar -ge 49 -and $key.KeyChar -le 57) { # 数字键 1-9
+            } elseif ($key.KeyChar -ge 49 -and $key.KeyChar -le 57) {
                 Write-Host $key.KeyChar
                 return ([string]$key.KeyChar)
             }
@@ -201,10 +200,10 @@ function Read-StringWithTimeout {
     }
 }
 
-# ----------------- 8. 前置配置 1：选择精简制作模式 (含倒计时) -----------------
+# ----------------- 8. 前置配置 1：选择精简制作模式 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " [配置 1/2] 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
+Write-Host " [配置 1/3] 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
 Write-Host " [1] 普通精简 (推荐: 极速流畅、稳定平衡、保留组件服务架构)" -ForegroundColor Green
 Write-Host " [2] 极限压榨 (全版本自适应 WinSxS 瘦身 + 注册表物理抹杀服务)" -ForegroundColor Red
 Write-Host "==========================================================" -ForegroundColor Magenta
@@ -212,18 +211,18 @@ Write-Host "==========================================================" -Foregro
 $trimChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2]" -Seconds 15 -DefaultChoice "1"
 if ($trimChoice -eq "2") {
     $global:trimMode = "2"
-    Write-Host ">>> 已确认: [2] 极限压榨模式 (物理强删文件 + 物理抹杀服务 + 自适应组件换头)" -ForegroundColor Red
+    Write-Host ">>> 已确认: [2] 极限压榨模式" -ForegroundColor Red
 } else {
     $global:trimMode = "1"
-    Write-Host ">>> 已确认: [1] 普通精简模式 (物理强删文件 + 服务安全停用 + 官方组件清理)" -ForegroundColor Green
+    Write-Host ">>> 已确认: [1] 普通精简模式" -ForegroundColor Green
 }
 
-# ----------------- 9. 前置配置 2：选择无人值守引导模式 (含倒计时) -----------------
+# ----------------- 9. 前置配置 2：选择无人值守引导模式 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " [配置 2/2] 请选择 Windows 安装引导模式 (Unattend Mode):" -ForegroundColor Magenta
-Write-Host " [1] 全无人值守 (全自动安装、自动创建指定账户并自动登录，跳过一切交互)" -ForegroundColor Green
-Write-Host " [2] 半无人值守 (跳过硬件检测与联网限制，在 OOBE 阶段由用户手动输入用户名/密码)" -ForegroundColor Yellow
+Write-Host " [配置 2/3] 请选择 Windows 安装引导模式 (Unattend Mode):" -ForegroundColor Magenta
+Write-Host " [1] 全无人值守 (全自动安装、自动创建指定账户并自动登录)" -ForegroundColor Green
+Write-Host " [2] 半无人值守 (跳过硬件检测限制，在 OOBE 阶段手动输入用户名/密码)" -ForegroundColor Yellow
 Write-Host "==========================================================" -ForegroundColor Magenta
 
 $unattendChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2]" -Seconds 15 -DefaultChoice "1"
@@ -231,12 +230,11 @@ if ($unattendChoice -eq "2") {
     $global:unattendMode = "2"
     $global:customUser   = ""
     $global:customPass   = ""
-    Write-Host ">>> 已确认: [2] 半无人值守模式 (保留原生手动设置用户名和密码向导)" -ForegroundColor Yellow
+    Write-Host ">>> 已确认: [2] 半无人值守模式 (保留原生手动设置用户名/密码向导)" -ForegroundColor Yellow
 } else {
     $global:unattendMode = "1"
     Write-Host ">>> 已确认: [1] 全无人值守模式" -ForegroundColor Green
 
-    # 全无人值守前置录入账户信息 (倒计时)
     $userResult = Read-StringWithTimeout -Prompt "请输入自动登录用户名" -Seconds 15 -Default "Admin"
     $inputUser = $userResult.Value
     if ($inputUser -match "^(Administrator|Guest)$") {
@@ -255,16 +253,41 @@ if ($unattendChoice -eq "2") {
     Write-Host ">>> [账户锁定] 用户名: $global:customUser | 密码: $(if ([string]::IsNullOrEmpty($global:customPass)) { '(留空)' } else { '******' })" -ForegroundColor DarkGray
 }
 
-# 输出 ESD 静态开关状态
+# ----------------- 10. 前置配置 3：UWP 依赖稳定性冲突处置策略 -----------------
+Write-Host ""
+Write-Host "==========================================================" -ForegroundColor Magenta
+Write-Host " [配置 3/3] 若 UWP 依赖测试发现稳定性风险时的处置策略:" -ForegroundColor Magenta
+Write-Host " [1] 全部删除 (高危: 强行抹杀所有冲突依赖，追求极限体积)" -ForegroundColor Red
+Write-Host " [2] 不删除   (推荐: 默认，自动保护所有冲突依赖包，确保系统绝对稳定)" -ForegroundColor Green
+Write-Host " [3] 手动选择 (仅在后续检测到异常时，暂停由人工逐项裁决)" -ForegroundColor Yellow
+Write-Host "==========================================================" -ForegroundColor Magenta
+
+$conflictChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1, 2 或 3]" -Seconds 15 -DefaultChoice "2"
+switch ($conflictChoice) {
+    "1" {
+        $global:uwpConflictPolicy = "1"
+        Write-Host ">>> 已确认: [1] 全部删除 (后续遇到冲突将自动强行粉碎，不暂停)" -ForegroundColor Red
+    }
+    "3" {
+        $global:uwpConflictPolicy = "3"
+        Write-Host ">>> 已确认: [3] 手动选择 (后续若检测到冲突将暂停供逐项确认)" -ForegroundColor Yellow
+    }
+    default {
+        $global:uwpConflictPolicy = "2"
+        Write-Host ">>> 已确认: [2] 不删除 (后续遇到冲突将自动保护保留，不暂停)" -ForegroundColor Green
+    }
+}
+
+# 输出 ESD 开关状态
 Write-Host ""
 if ($enableEsdConversion) {
-    Write-Host ">>> [配置状态] ESD 高压转换: 开启 (将在打包前转换为 install.esd)" -ForegroundColor Yellow
+    Write-Host ">>> [配置状态] ESD 高压转换: 开启 (打包前转换为 install.esd)" -ForegroundColor Yellow
 } else {
-    Write-Host ">>> [配置状态] ESD 高压转换: 关闭 (直接使用 install.wim 极速打包)" -ForegroundColor DarkGray
+    Write-Host ">>> [配置状态] ESD 高压转换: 关闭 (直接使用 install.wim 打包)" -ForegroundColor DarkGray
 }
-Write-Host "`n[就绪] 前置配置已全部锁定，后续流程将进入全自动运行，无需人工干预。`n" -ForegroundColor Green
+Write-Host "`n[就绪] 前置配置已全部锁定，后续构建流程将完全静默自动化运行！`n" -ForegroundColor Green
 
-# 10. 初始化清理 (安全预检并卸载残留)
+# 11. 初始化清理 (安全预检并卸载残留)
 Write-Host "[初始化] 清理历史残留挂载点并重置环境..." -ForegroundColor DarkGray
 if (Test-Path "HKLM:\zSOFTWARE") { cmd.exe /c "reg.exe unload HKLM\zSOFTWARE 2>nul" | Out-Null }
 if (Test-Path "HKLM:\zSYSTEM")   { cmd.exe /c "reg.exe unload HKLM\zSYSTEM 2>nul" | Out-Null }
@@ -504,7 +527,7 @@ Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 4/11] UWP 应用与可选功能包精简 (src/03-RemovePackages.ps1)
-#  [企业级重构]：动态规则库联动 + 依赖异常交互阻断裁决 + 属性页架构固化
+#  [企业级重构]：消费前置全局处置策略 + 零中途挂起 + 依赖稳定性测试与自动分流
 # ==============================================================================
 
 # ----------------- 0. 动态环境感知与主语言探测 -----------------
@@ -516,6 +539,15 @@ if ([string]::IsNullOrWhiteSpace($defaultLang)) {
     $defaultLang = "zh-CN"
 }
 Write-Host "   [母盘语言检测] 锁定系统原生核心语言为: $defaultLang" -ForegroundColor Green
+
+# 承接前置冲突处置策略 (默认策略 2: 不删除)
+$conflictPolicy = if ($global:uwpConflictPolicy) { $global:uwpConflictPolicy } else { "2" }
+$policyText = switch ($conflictPolicy) {
+    "1" { "全部删除 (遇到冲突强行粉碎)" }
+    "3" { "手动选择 (遇到冲突时现场确认)" }
+    default { "不删除 (遇到冲突自动保护保留)" }
+}
+Write-Host "   [策略承接] 当前激活的冲突处置策略: $policyText" -ForegroundColor DarkCyan
 
 # ----------------- 1. 加载并解析外部 Appslist.txt 规则库 -----------------
 $appsListSearchPaths = @(
@@ -662,48 +694,55 @@ foreach ($cand in $candidateAppsToRemove) {
     }
 }
 
-# ----------------- 4. 依赖异常交互阻断裁决机制 -----------------
+# ----------------- 4. 消费前置策略，自动化执行分流 -----------------
 $finalDeleteList = New-Object System.Collections.Generic.List[System.Object]
 
 if ($conflictItems.Count -gt 0) {
-    Write-Host "`n==================================================================" -ForegroundColor Red
-    Write-Host " [安全预警] UWP 依赖完整性测试发现 $($conflictItems.Count) 处严重依赖冲突！" -ForegroundColor Red
-    Write-Host " 以下组件存在于您的待删除黑名单中，但被您选择保留的应用强行依赖：" -ForegroundColor Yellow
-    Write-Host "==================================================================" -ForegroundColor Red
-
+    Write-Host "`n   --------------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "   [安全审计] UWP 依赖测试发现 $($conflictItems.Count) 处潜在风险组件:" -ForegroundColor Yellow
     foreach ($item in $conflictItems) {
-        Write-Host " [冲突组件] $($item.App.DisplayName)" -ForegroundColor Yellow
-        Write-Host "    └─ 强依赖于它的保留组件: $($item.RequiredBy)" -ForegroundColor DarkGray
+        Write-Host "    * 冲突组件: $($item.App.DisplayName) (依赖方: $($item.RequiredBy))" -ForegroundColor DarkGray
     }
+    Write-Host "   --------------------------------------------------------------" -ForegroundColor Yellow
 
-    Write-Host "------------------------------------------------------------------" -ForegroundColor Cyan
-    Write-Host " 请选择对异常冲突组件的处理策略:" -ForegroundColor Cyan
-    Write-Host " [1] 智能保护 (推荐: 自动保留这 $($conflictItems.Count) 个冲突包，仅删除其余无害应用，确保系统稳定)" -ForegroundColor Green
-    Write-Host " [2] 强行粉碎 (高危: 忽略测试警告，强行物理抹杀所有待删包，依赖缺失的应用可能闪退)" -ForegroundColor Red
-    Write-Host " [3] 终止构建 (安全: 丢弃当前镜像修改并退出，以便您重新调整 Appslist.txt)" -ForegroundColor DarkYellow
-    Write-Host "------------------------------------------------------------------" -ForegroundColor Cyan
-
-    $choice = Read-Host "请输入对应选项 [1, 2 或 3] (直接回车默认推荐 1)"
-
-    if ($choice -eq "2") {
-        Write-Host ">>> [警告] 用户选择强行粉碎模式，将移除包括冲突项在内的所有指定包..." -ForegroundColor Red
-        foreach ($item in $conflictItems) {
-            $finalDeleteList.Add($item.App)
+    switch ($conflictPolicy) {
+        "1" {
+            Write-Host "   >>> [自动执行前置策略: 全部删除] 忽略警告，强行移除所有冲突包..." -ForegroundColor Red
+            foreach ($item in $conflictItems) {
+                $finalDeleteList.Add($item.App)
+            }
+            foreach ($item in $safeDeleteList) {
+                $finalDeleteList.Add($item)
+            }
         }
-        foreach ($item in $safeDeleteList) {
-            $finalDeleteList.Add($item)
+        "3" {
+            Write-Host "`n   >>> [执行前置策略: 手动选择] 正在逐项确认冲突组件处置方案:" -ForegroundColor Yellow
+            $manualIdx = 0
+            foreach ($item in $conflictItems) {
+                $manualIdx++
+                Write-Host "`n   [$manualIdx/$($conflictItems.Count)] 待裁决组件: $($item.App.DisplayName)" -ForegroundColor Cyan
+                Write-Host "      └─ 被依赖来源: $($item.RequiredBy)" -ForegroundColor DarkGray
+                $ans = Read-Host "      是否删除该组件？[Y: 强行删除 / N: 安全保留] (直接回车默认 N)"
+                if ($ans -eq "Y" -or $ans -eq "y") {
+                    Write-Host "      -> 标记为: [强行删除]" -ForegroundColor Red
+                    $finalDeleteList.Add($item.App)
+                } else {
+                    Write-Host "      -> 标记为: [安全保留]" -ForegroundColor Green
+                    $candidateAppsToPreserve.Add($item.App)
+                }
+            }
+            foreach ($item in $safeDeleteList) {
+                $finalDeleteList.Add($item)
+            }
         }
-    } elseif ($choice -eq "3") {
-        Write-Host "`n>>> [中止操作] 用户已终止流程。正在安全卸载挂载点并丢弃所有临时更改..." -ForegroundColor DarkYellow
-        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard
-        Stop-Transcript
-        Write-Host "[完成] 映像已安全重置，未产生损坏文件。请调整规则后重新运行。" -ForegroundColor Green
-        pause
-        exit
-    } else {
-        Write-Host ">>> [智能保护] 已自动将 $($conflictItems.Count) 个冲突包移入保护名单，继续精简其余应用。" -ForegroundColor Green
-        foreach ($item in $safeDeleteList) {
-            $finalDeleteList.Add($item)
+        default {
+            Write-Host "   >>> [自动执行前置策略: 不删除] 自动保护全部冲突包，继续移除其余无害应用。" -ForegroundColor Green
+            foreach ($item in $conflictItems) {
+                $candidateAppsToPreserve.Add($item.App)
+            }
+            foreach ($item in $safeDeleteList) {
+                $finalDeleteList.Add($item)
+            }
         }
     }
 } else {
