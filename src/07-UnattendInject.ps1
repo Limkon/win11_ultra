@@ -1,47 +1,29 @@
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
-#  [重构加固]：支持【全无人值守】与【半无人值守】双模切换 + 离线账户安全唤醒
+#  [企业级重构]：消费前置全局配置 + 零中途阻断 + 双模自适应动态渲染 + 稳定性自检
 # ==============================================================================
 
-Write-Host "`n[步骤 9/11] 正在配置 Windows 安装引导应答文件 (Unattend Engine)..." -ForegroundColor Cyan
+Write-Host "`n[步骤 9/11] 正在加载全局配置并注入 Windows 安装引导应答文件..." -ForegroundColor Cyan
 
-# ----------------- 1. 选择无人值守部署模式 -----------------
-Write-Host "==================================================================" -ForegroundColor Magenta
-Write-Host " 请选择 Windows 安装引导模式:" -ForegroundColor Magenta
-Write-Host " [1] 全无人值守 (全自动安装、自动创建指定账户并自动登录，跳过一切交互)" -ForegroundColor Green
-Write-Host " [2] 半无人值守 (跳过硬件检测与联网限制，在 OOBE 阶段由用户手动输入用户名/密码)" -ForegroundColor Yellow
-Write-Host "==================================================================" -ForegroundColor Magenta
+# ----------------- 0. 承接前置配置与安全兜底 -----------------
+$mode = if ($global:unattendMode) { $global:unattendMode } else { "1" }
+$user = if ($global:customUser)   { $global:customUser }   else { "Admin" }
+$pass = if ($global:customPass)   { $global:customPass }   else { "" }
 
-$unattendModeChoice = Read-Host "请输入对应选项 [1 或 2] (直接回车默认 1)"
-if ($unattendModeChoice -ne "2") {
-    $unattendMode = "1"
-    Write-Host ">>> 已选择: [1] 全无人值守模式" -ForegroundColor Green
-} else {
-    $unattendMode = "2"
-    Write-Host ">>> 已选择: [2] 半无人值守模式 (保留原生手动设置用户名和密码向导)" -ForegroundColor Yellow
-}
+$modeText = if ($mode -eq "2") { "半无人值守 (手动设置账户向导)" } else { "全无人值守 (自动配置并登录)" }
+Write-Host "   [配置承接] 当前激活模式: $modeText" -ForegroundColor Green
 
-# ----------------- 2. 模式参数准备与 XML 节点动态生成 -----------------
+# ----------------- 1. 动态生成应答 XML 架构片段 -----------------
 $userAccountsXmlFragment = ""
 $autoLogonXmlFragment    = ""
 $hideLocalAccountScreenValue = "true"
 
-if ($unattendMode -eq "1") {
-    # 全无人值守模式：倒计时录入预设账户
-    $userResult = Read-InputWithTimeout -Prompt "请输入自动登录用户名" -Seconds 30 -Default "Admin"
-    $inputUser = $userResult.Value
-    if ($inputUser -match "^(Administrator|Guest)$") {
-        Write-Host "[警告] 输入了系统保留账户名 $inputUser，自动重置为 Admin！" -ForegroundColor Yellow
-        $inputUser = "Admin"
-    }
+if ($mode -eq "1") {
+    # 全无人值守：注入预设账户与自动登录节点
+    $inputUserEscaped = [System.Security.SecurityElement]::Escape($user)
+    $inputPassEscaped = [System.Security.SecurityElement]::Escape($pass)
 
-    if ($userResult.TimedOut) {
-        $inputPass = ""
-    } else {
-        $inputPass = Read-Host "请输入登录密码 (直接回车表示留空无密码)"
-    }
-    $inputUserEscaped = [System.Security.SecurityElement]::Escape($inputUser)
-    $inputPassEscaped = [System.Security.SecurityElement]::Escape($inputPass)
+    Write-Host "   [账户预设] 用户名: $user | 密码: $(if ([string]::IsNullOrEmpty($pass)) { '(留空)' } else { '******' })" -ForegroundColor DarkGray
 
     $userAccountsXmlFragment = @"
 			<UserAccounts>
@@ -73,14 +55,14 @@ if ($unattendMode -eq "1") {
 "@
     $hideLocalAccountScreenValue = "true"
 } else {
-    # 半无人值守模式：不生成内置账户，不开启自动登录，显式唤醒本地账户输入屏
-    Write-Host "   [配置就绪] 已移除预设账户与自动登录，安装结束后将直接呈现 Windows 原生账户设置屏。" -ForegroundColor DarkGray
+    # 半无人值守：剥离内置账户，开启本地账户输入屏
+    Write-Host "   [账户策略] 已剥离预置账户，装机后将由用户在 OOBE 原生界面自定用户名与密码。" -ForegroundColor DarkGray
     $userAccountsXmlFragment = ""
     $autoLogonXmlFragment    = ""
     $hideLocalAccountScreenValue = "false"
 }
 
-# ----------------- 3. 构建完整 XML 应答文档 -----------------
+# ----------------- 2. 构建 100% 完整无损应答模板 -----------------
 $unattendTemplate = @"
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
@@ -353,7 +335,7 @@ foreach( `$file in `$Document.unattend.Extensions.File ) {
 		`$report.Add("==================================================================");
 		`$report.Add(" Windows 11 精简母盘 - 首次登录系统健康与稳定性自检审计报告");
 		`$report.Add(" 生成时间: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'));
-		`$report.Add(" 部署模式: " + "$($unattendMode -replace '1','全无人值守' -replace '2','半无人值守')");
+		`$report.Add(" 部署模式: " + "$($modeText)");
 		`$report.Add("==================================================================");
 
 		`$wtPkg = Get-AppxPackage -Name "*WindowsTerminal*" -ErrorAction SilentlyContinue;
@@ -430,7 +412,7 @@ foreach( `$file in `$Document.unattend.Extensions.File ) {
 </unattend>
 "@
 
-# 4. 多通道合规注入 (Sysprep、Panther、安装介质根目录)
+# ----------------- 3. 多通道合规注入 -----------------
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
@@ -448,4 +430,4 @@ $utf8Encoding = [System.Text.Encoding]::UTF8
 # ISO 可移动介质根目录自启动通道
 [System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $unattendTemplate, $utf8Encoding)
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (当前模式: $($unattendMode -replace '1','全无人值守' -replace '2','半无人值守'))。" -ForegroundColor Green
+Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (全自动运行，无需人工干预)。" -ForegroundColor Green
