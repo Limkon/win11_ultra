@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-14 04:25:09 UTC
+#  生成时间: 2026-10-14 04:35:20 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -870,48 +870,31 @@ if ($trimMode -eq "2") {
 }
 
 # ==============================================================================
-#  D. 终极修复：彻底根治“打开方式 -> 更多应用”死锁 与 记事本 UWP 验证报错
+#  D. 终极修复：回归纯净 Win32 打开方式，彻底杜绝 COM 死锁
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 禁用 OpenWith 探测 Microsoft Store 推荐
+; 1. 全域禁用打开方式向应用商店查询推荐应用（提升速度）
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
-"NoUseStoreOpenWith"=dword:00000001
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer]
 "NoUseStoreOpenWith"=dword:00000001
 
 [HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer]
 "NoUseStoreOpenWith"=dword:00000001
 
-[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer]
-"NoUseStoreOpenWith"=dword:00000001
-
-; 2. 【核心修复】：注入正确的 Windows 官方 DelegateExecute GUID ({e44e9428-bdbc-4987-a099-40dc8fd255e7})
-; 彻底解决“更多应用”点击无反应、无法弹出“在这台电脑上查找其他应用”
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas]
-@="@shell32.dll,-5376"
-"MultiSelectModel"="Single"
-"Position"="Bottom"
-
+; 2. 【核心策略】：彻底移除 DelegateExecute 键值（用负号 - 拔除）
+; 让 OpenWith 直接执行纯正的 Win32 OpenWith.exe 进程，永不假死，永不依赖任何损坏的 UWP
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
 @="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
-"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
+"DelegateExecute"=-
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Unknown\shell\opendlg\command]
 @="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
-"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
+"DelegateExecute"=-
 
-; 3. 【核心加固】：强行将 .txt 文件绑定到本地 Win32 稳定架构，彻底阻断任何 UWP 依赖冲突验证报错
+; 3. 稳固 .txt 文件的原生 Win32 记事本关联（阻断包验证报错）
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
 @="txtfile"
 "Content Type"="text/plain"
 "PerceivedType"="text"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
-@="文本文档"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
-@="open"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
 @="\"%SystemRoot%\\System32\\notepad.exe\" \"%1\""
