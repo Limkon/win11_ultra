@@ -1,5 +1,6 @@
 # ==============================================================================
 #  win11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
+#  [重构加固]：配置决策全量前置 + 双模式智能倒计时选择 + 账户密码前置初始化
 # ==============================================================================
 
 # ----------------- 全局特性静态开关 (后期需要时可直接在此修改) -----------------
@@ -84,31 +85,177 @@ $sourcesDir  = Join-Path $workDir "sources"
 Write-Host "工作目录锁定在: $workDir" -ForegroundColor Green
 Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 
-# 7. 用户模式选择交互
+# ----------------- 7. 前置倒计时交互引擎函数 -----------------
+function Read-ChoiceWithTimeout {
+    param (
+        [string]$PromptText = "请输入选项",
+        [int]$Seconds = 15,
+        [string]$DefaultChoice = "1"
+    )
+
+    try {
+        $null = [Console]::KeyAvailable
+    } catch {
+        $fallback = Read-Host "$PromptText (回车默认: $DefaultChoice)"
+        if ([string]::IsNullOrWhiteSpace($fallback)) { return $DefaultChoice }
+        return $fallback.Trim()
+    }
+
+    $startTime = [DateTime]::Now
+    $lastPrinted = -1
+
+    while ($true) {
+        $remaining = $Seconds - [int]([DateTime]::Now - $startTime).TotalSeconds
+        if ($remaining -le 0) {
+            Write-Host "`n>>> [超时] 倒计时结束，自动采用默认项: [$DefaultChoice]" -ForegroundColor Yellow
+            return $DefaultChoice
+        }
+
+        if ($remaining -ne $lastPrinted) {
+            $lastPrinted = $remaining
+            $statusLine = "`r$PromptText (默认: $DefaultChoice) [倒计时 $remaining 秒]: "
+            Write-Host -NoNewline ($statusLine.PadRight(70)) -ForegroundColor Cyan
+        }
+
+        if ([Console]::KeyAvailable) {
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq [ConsoleKey]::Enter) {
+                Write-Host ""
+                return $DefaultChoice
+            } elseif ($key.KeyChar -ge 49 -and $key.KeyChar -le 57) { # 数字键 1-9
+                Write-Host $key.KeyChar
+                return ([string]$key.KeyChar)
+            }
+        }
+        Start-Sleep -Milliseconds 50
+    }
+}
+
+function Read-StringWithTimeout {
+    param (
+        [string]$Prompt = "请输入自定义用户名",
+        [int]$Seconds = 15,
+        [string]$Default = "Admin"
+    )
+
+    try {
+        $null = [Console]::KeyAvailable
+    } catch {
+        $fallback = Read-Host "$Prompt (回车默认: $Default)"
+        if ([string]::IsNullOrWhiteSpace($fallback)) { return @{ TimedOut = $false; Value = $Default } }
+        return @{ TimedOut = $false; Value = $fallback.Trim() }
+    }
+
+    $inputStr = New-Object System.Text.StringBuilder
+    $startTime = [DateTime]::Now
+    $lastPrinted = -1
+
+    while ($true) {
+        $remaining = $Seconds - [int]([DateTime]::Now - $startTime).TotalSeconds
+        if ($remaining -le 0 -and $inputStr.Length -eq 0) {
+            Write-Host "`n>>> [超时] 未输入，已自动采用默认用户名: $Default (密码自动留空)" -ForegroundColor Yellow
+            return @{ TimedOut = $true; Value = $Default }
+        }
+
+        if ($inputStr.Length -eq 0 -and $remaining -ne $lastPrinted) {
+            $lastPrinted = $remaining
+            $statusLine = "`r$Prompt (默认: $Default) [剩余 $remaining 秒]: "
+            Write-Host -NoNewline ($statusLine.PadRight(70)) -ForegroundColor Cyan
+        }
+
+        if ([Console]::KeyAvailable) {
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq [ConsoleKey]::Enter) {
+                Write-Host ""
+                $finalText = $inputStr.ToString().Trim()
+                if ([string]::IsNullOrWhiteSpace($finalText)) {
+                    return @{ TimedOut = $false; Value = $Default }
+                }
+                return @{ TimedOut = $false; Value = $finalText }
+            }
+            elseif ($key.Key -eq [ConsoleKey]::Backspace) {
+                if ($inputStr.Length -gt 0) {
+                    $inputStr.Remove($inputStr.Length - 1, 1) | Out-Null
+                    Write-Host -NoNewline "`b `b"
+                }
+            }
+            elseif ($key.KeyChar -ge 32) {
+                if ($inputStr.Length -eq 0) {
+                    Write-Host -NoNewline ("`r" + (" " * 75) + "`r")
+                    Write-Host -NoNewline "${Prompt}: " -ForegroundColor Cyan
+                }
+                $inputStr.Append($key.KeyChar) | Out-Null
+                Write-Host -NoNewline $key.KeyChar
+            }
+        }
+        Start-Sleep -Milliseconds 50
+    }
+}
+
+# ----------------- 8. 前置配置 1：选择精简制作模式 (含倒计时) -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
+Write-Host " [配置 1/2] 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
 Write-Host " [1] 普通精简 (推荐: 极速流畅、稳定平衡、保留组件服务架构)" -ForegroundColor Green
 Write-Host " [2] 极限压榨 (全版本自适应 WinSxS 瘦身 + 注册表物理抹杀服务)" -ForegroundColor Red
 Write-Host "==========================================================" -ForegroundColor Magenta
-$trimModeChoice = Read-Host "请输入对应数字 [1 或 2] (直接回车默认 1)"
-if ($trimModeChoice -ne "2") {
-    $trimMode = "1"
-    Write-Host ">>> 已选择: [1] 普通精简模式 (物理强删文件 + 服务安全停用 + 官方组件清理)" -ForegroundColor Green
+
+$trimChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2]" -Seconds 15 -DefaultChoice "1"
+if ($trimChoice -eq "2") {
+    $global:trimMode = "2"
+    Write-Host ">>> 已确认: [2] 极限压榨模式 (物理强删文件 + 物理抹杀服务 + 自适应组件换头)" -ForegroundColor Red
 } else {
-    $trimMode = "2"
-    Write-Host ">>> 已选择: [2] 极限压榨模式 (物理强删文件 + 物理抹杀服务 + 自适应组件换头)" -ForegroundColor Red
+    $global:trimMode = "1"
+    Write-Host ">>> 已确认: [1] 普通精简模式 (物理强删文件 + 服务安全停用 + 官方组件清理)" -ForegroundColor Green
+}
+
+# ----------------- 9. 前置配置 2：选择无人值守引导模式 (含倒计时) -----------------
+Write-Host ""
+Write-Host "==========================================================" -ForegroundColor Magenta
+Write-Host " [配置 2/2] 请选择 Windows 安装引导模式 (Unattend Mode):" -ForegroundColor Magenta
+Write-Host " [1] 全无人值守 (全自动安装、自动创建指定账户并自动登录，跳过一切交互)" -ForegroundColor Green
+Write-Host " [2] 半无人值守 (跳过硬件检测与联网限制，在 OOBE 阶段由用户手动输入用户名/密码)" -ForegroundColor Yellow
+Write-Host "==========================================================" -ForegroundColor Magenta
+
+$unattendChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2]" -Seconds 15 -DefaultChoice "1"
+if ($unattendChoice -eq "2") {
+    $global:unattendMode = "2"
+    $global:customUser   = ""
+    $global:customPass   = ""
+    Write-Host ">>> 已确认: [2] 半无人值守模式 (保留原生手动设置用户名和密码向导)" -ForegroundColor Yellow
+} else {
+    $global:unattendMode = "1"
+    Write-Host ">>> 已确认: [1] 全无人值守模式" -ForegroundColor Green
+
+    # 全无人值守前置录入账户信息 (倒计时)
+    $userResult = Read-StringWithTimeout -Prompt "请输入自动登录用户名" -Seconds 15 -Default "Admin"
+    $inputUser = $userResult.Value
+    if ($inputUser -match "^(Administrator|Guest)$") {
+        Write-Host "[警告] 输入了系统保留账户名 $inputUser，自动重置为 Admin！" -ForegroundColor Yellow
+        $inputUser = "Admin"
+    }
+
+    if ($userResult.TimedOut) {
+        $inputPass = ""
+    } else {
+        $inputPass = Read-Host "请输入登录密码 (直接回车表示留空无密码)"
+    }
+
+    $global:customUser = $inputUser
+    $global:customPass = $inputPass
+    Write-Host ">>> [账户锁定] 用户名: $global:customUser | 密码: $(if ([string]::IsNullOrEmpty($global:customPass)) { '(留空)' } else { '******' })" -ForegroundColor DarkGray
 }
 
 # 输出 ESD 静态开关状态
-if ($enableEsdConversion) {
-    Write-Host ">>> [配置已启用] ESD 高压转换: 开启 (将在打包前转换为 install.esd)" -ForegroundColor Yellow
-} else {
-    Write-Host ">>> [配置默认值] ESD 高压转换: 关闭 (跳过耗时转换，直接使用 install.wim 打包)" -ForegroundColor DarkGray
-}
 Write-Host ""
+if ($enableEsdConversion) {
+    Write-Host ">>> [配置状态] ESD 高压转换: 开启 (将在打包前转换为 install.esd)" -ForegroundColor Yellow
+} else {
+    Write-Host ">>> [配置状态] ESD 高压转换: 关闭 (直接使用 install.wim 极速打包)" -ForegroundColor DarkGray
+}
+Write-Host "`n[就绪] 前置配置已全部锁定，后续流程将进入全自动运行，无需人工干预。`n" -ForegroundColor Green
 
-# 8. 初始化清理 (安全预检并卸载残留，彻底杜绝 NativeCommandError 误报红字)
+# 10. 初始化清理 (安全预检并卸载残留)
 Write-Host "[初始化] 清理历史残留挂载点并重置环境..." -ForegroundColor DarkGray
 if (Test-Path "HKLM:\zSOFTWARE") { cmd.exe /c "reg.exe unload HKLM\zSOFTWARE 2>nul" | Out-Null }
 if (Test-Path "HKLM:\zSYSTEM")   { cmd.exe /c "reg.exe unload HKLM\zSYSTEM 2>nul" | Out-Null }
