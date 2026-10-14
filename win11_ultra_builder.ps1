@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-14 08:25:46 UTC
+#  生成时间: 2026-10-14 08:38:23 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -9,6 +9,7 @@
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
+#  [重构加固]：配置决策全量前置 + 双模式智能倒计时选择 + 账户密码前置初始化
 # ==============================================================================
 
 # ----------------- 全局特性静态开关 (后期需要时可直接在此修改) -----------------
@@ -93,31 +94,177 @@ $sourcesDir  = Join-Path $workDir "sources"
 Write-Host "工作目录锁定在: $workDir" -ForegroundColor Green
 Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 
-# 7. 用户模式选择交互
+# ----------------- 7. 前置倒计时交互引擎函数 -----------------
+function Read-ChoiceWithTimeout {
+    param (
+        [string]$PromptText = "请输入选项",
+        [int]$Seconds = 15,
+        [string]$DefaultChoice = "1"
+    )
+
+    try {
+        $null = [Console]::KeyAvailable
+    } catch {
+        $fallback = Read-Host "$PromptText (回车默认: $DefaultChoice)"
+        if ([string]::IsNullOrWhiteSpace($fallback)) { return $DefaultChoice }
+        return $fallback.Trim()
+    }
+
+    $startTime = [DateTime]::Now
+    $lastPrinted = -1
+
+    while ($true) {
+        $remaining = $Seconds - [int]([DateTime]::Now - $startTime).TotalSeconds
+        if ($remaining -le 0) {
+            Write-Host "`n>>> [超时] 倒计时结束，自动采用默认项: [$DefaultChoice]" -ForegroundColor Yellow
+            return $DefaultChoice
+        }
+
+        if ($remaining -ne $lastPrinted) {
+            $lastPrinted = $remaining
+            $statusLine = "`r$PromptText (默认: $DefaultChoice) [倒计时 $remaining 秒]: "
+            Write-Host -NoNewline ($statusLine.PadRight(70)) -ForegroundColor Cyan
+        }
+
+        if ([Console]::KeyAvailable) {
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq [ConsoleKey]::Enter) {
+                Write-Host ""
+                return $DefaultChoice
+            } elseif ($key.KeyChar -ge 49 -and $key.KeyChar -le 57) { # 数字键 1-9
+                Write-Host $key.KeyChar
+                return ([string]$key.KeyChar)
+            }
+        }
+        Start-Sleep -Milliseconds 50
+    }
+}
+
+function Read-StringWithTimeout {
+    param (
+        [string]$Prompt = "请输入自定义用户名",
+        [int]$Seconds = 15,
+        [string]$Default = "Admin"
+    )
+
+    try {
+        $null = [Console]::KeyAvailable
+    } catch {
+        $fallback = Read-Host "$Prompt (回车默认: $Default)"
+        if ([string]::IsNullOrWhiteSpace($fallback)) { return @{ TimedOut = $false; Value = $Default } }
+        return @{ TimedOut = $false; Value = $fallback.Trim() }
+    }
+
+    $inputStr = New-Object System.Text.StringBuilder
+    $startTime = [DateTime]::Now
+    $lastPrinted = -1
+
+    while ($true) {
+        $remaining = $Seconds - [int]([DateTime]::Now - $startTime).TotalSeconds
+        if ($remaining -le 0 -and $inputStr.Length -eq 0) {
+            Write-Host "`n>>> [超时] 未输入，已自动采用默认用户名: $Default (密码自动留空)" -ForegroundColor Yellow
+            return @{ TimedOut = $true; Value = $Default }
+        }
+
+        if ($inputStr.Length -eq 0 -and $remaining -ne $lastPrinted) {
+            $lastPrinted = $remaining
+            $statusLine = "`r$Prompt (默认: $Default) [剩余 $remaining 秒]: "
+            Write-Host -NoNewline ($statusLine.PadRight(70)) -ForegroundColor Cyan
+        }
+
+        if ([Console]::KeyAvailable) {
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq [ConsoleKey]::Enter) {
+                Write-Host ""
+                $finalText = $inputStr.ToString().Trim()
+                if ([string]::IsNullOrWhiteSpace($finalText)) {
+                    return @{ TimedOut = $false; Value = $Default }
+                }
+                return @{ TimedOut = $false; Value = $finalText }
+            }
+            elseif ($key.Key -eq [ConsoleKey]::Backspace) {
+                if ($inputStr.Length -gt 0) {
+                    $inputStr.Remove($inputStr.Length - 1, 1) | Out-Null
+                    Write-Host -NoNewline "`b `b"
+                }
+            }
+            elseif ($key.KeyChar -ge 32) {
+                if ($inputStr.Length -eq 0) {
+                    Write-Host -NoNewline ("`r" + (" " * 75) + "`r")
+                    Write-Host -NoNewline "${Prompt}: " -ForegroundColor Cyan
+                }
+                $inputStr.Append($key.KeyChar) | Out-Null
+                Write-Host -NoNewline $key.KeyChar
+            }
+        }
+        Start-Sleep -Milliseconds 50
+    }
+}
+
+# ----------------- 8. 前置配置 1：选择精简制作模式 (含倒计时) -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
+Write-Host " [配置 1/2] 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
 Write-Host " [1] 普通精简 (推荐: 极速流畅、稳定平衡、保留组件服务架构)" -ForegroundColor Green
 Write-Host " [2] 极限压榨 (全版本自适应 WinSxS 瘦身 + 注册表物理抹杀服务)" -ForegroundColor Red
 Write-Host "==========================================================" -ForegroundColor Magenta
-$trimModeChoice = Read-Host "请输入对应数字 [1 或 2] (直接回车默认 1)"
-if ($trimModeChoice -ne "2") {
-    $trimMode = "1"
-    Write-Host ">>> 已选择: [1] 普通精简模式 (物理强删文件 + 服务安全停用 + 官方组件清理)" -ForegroundColor Green
+
+$trimChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2]" -Seconds 15 -DefaultChoice "1"
+if ($trimChoice -eq "2") {
+    $global:trimMode = "2"
+    Write-Host ">>> 已确认: [2] 极限压榨模式 (物理强删文件 + 物理抹杀服务 + 自适应组件换头)" -ForegroundColor Red
 } else {
-    $trimMode = "2"
-    Write-Host ">>> 已选择: [2] 极限压榨模式 (物理强删文件 + 物理抹杀服务 + 自适应组件换头)" -ForegroundColor Red
+    $global:trimMode = "1"
+    Write-Host ">>> 已确认: [1] 普通精简模式 (物理强删文件 + 服务安全停用 + 官方组件清理)" -ForegroundColor Green
+}
+
+# ----------------- 9. 前置配置 2：选择无人值守引导模式 (含倒计时) -----------------
+Write-Host ""
+Write-Host "==========================================================" -ForegroundColor Magenta
+Write-Host " [配置 2/2] 请选择 Windows 安装引导模式 (Unattend Mode):" -ForegroundColor Magenta
+Write-Host " [1] 全无人值守 (全自动安装、自动创建指定账户并自动登录，跳过一切交互)" -ForegroundColor Green
+Write-Host " [2] 半无人值守 (跳过硬件检测与联网限制，在 OOBE 阶段由用户手动输入用户名/密码)" -ForegroundColor Yellow
+Write-Host "==========================================================" -ForegroundColor Magenta
+
+$unattendChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2]" -Seconds 15 -DefaultChoice "1"
+if ($unattendChoice -eq "2") {
+    $global:unattendMode = "2"
+    $global:customUser   = ""
+    $global:customPass   = ""
+    Write-Host ">>> 已确认: [2] 半无人值守模式 (保留原生手动设置用户名和密码向导)" -ForegroundColor Yellow
+} else {
+    $global:unattendMode = "1"
+    Write-Host ">>> 已确认: [1] 全无人值守模式" -ForegroundColor Green
+
+    # 全无人值守前置录入账户信息 (倒计时)
+    $userResult = Read-StringWithTimeout -Prompt "请输入自动登录用户名" -Seconds 15 -Default "Admin"
+    $inputUser = $userResult.Value
+    if ($inputUser -match "^(Administrator|Guest)$") {
+        Write-Host "[警告] 输入了系统保留账户名 $inputUser，自动重置为 Admin！" -ForegroundColor Yellow
+        $inputUser = "Admin"
+    }
+
+    if ($userResult.TimedOut) {
+        $inputPass = ""
+    } else {
+        $inputPass = Read-Host "请输入登录密码 (直接回车表示留空无密码)"
+    }
+
+    $global:customUser = $inputUser
+    $global:customPass = $inputPass
+    Write-Host ">>> [账户锁定] 用户名: $global:customUser | 密码: $(if ([string]::IsNullOrEmpty($global:customPass)) { '(留空)' } else { '******' })" -ForegroundColor DarkGray
 }
 
 # 输出 ESD 静态开关状态
-if ($enableEsdConversion) {
-    Write-Host ">>> [配置已启用] ESD 高压转换: 开启 (将在打包前转换为 install.esd)" -ForegroundColor Yellow
-} else {
-    Write-Host ">>> [配置默认值] ESD 高压转换: 关闭 (跳过耗时转换，直接使用 install.wim 打包)" -ForegroundColor DarkGray
-}
 Write-Host ""
+if ($enableEsdConversion) {
+    Write-Host ">>> [配置状态] ESD 高压转换: 开启 (将在打包前转换为 install.esd)" -ForegroundColor Yellow
+} else {
+    Write-Host ">>> [配置状态] ESD 高压转换: 关闭 (直接使用 install.wim 极速打包)" -ForegroundColor DarkGray
+}
+Write-Host "`n[就绪] 前置配置已全部锁定，后续流程将进入全自动运行，无需人工干预。`n" -ForegroundColor Green
 
-# 8. 初始化清理 (安全预检并卸载残留，彻底杜绝 NativeCommandError 误报红字)
+# 10. 初始化清理 (安全预检并卸载残留)
 Write-Host "[初始化] 清理历史残留挂载点并重置环境..." -ForegroundColor DarkGray
 if (Test-Path "HKLM:\zSOFTWARE") { cmd.exe /c "reg.exe unload HKLM\zSOFTWARE 2>nul" | Out-Null }
 if (Test-Path "HKLM:\zSYSTEM")   { cmd.exe /c "reg.exe unload HKLM\zSYSTEM 2>nul" | Out-Null }
@@ -1198,30 +1345,70 @@ Write-Host "[完成] 离线注册表加固优化全部完毕 (文本文档已三
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
-#  [企业级重构]：嵌入首次登录稳定性自动化测试探针 + XML 严格实体转义 + 自毁防死锁
+#  [企业级重构]：消费前置全局配置 + 零中途阻断 + 双模自适应动态渲染 + 稳定性自检
 # ==============================================================================
 
-Write-Host "`n[步骤 9/11] 正在配置高级无人值守应答文件 (集成首次启动稳定性自检引擎)..." -ForegroundColor Cyan
+Write-Host "`n[步骤 9/11] 正在加载全局配置并注入 Windows 安装引导应答文件..." -ForegroundColor Cyan
 
-# 1. 调用倒计时输入函数获取登录账户
-$userResult = Read-InputWithTimeout -Prompt "请输入登录用户名" -Seconds 30 -Default "Admin"
-$inputUser = $userResult.Value
-if ($inputUser -match "^(Administrator|Guest)$") {
-    Write-Host "[警告] 输入了系统保留账户名 $inputUser，自动重置为 Admin！" -ForegroundColor Yellow
-    $inputUser = "Admin"
-}
+# ----------------- 0. 承接前置配置与安全兜底 -----------------
+$mode = if ($global:unattendMode) { $global:unattendMode } else { "1" }
+$user = if ($global:customUser)   { $global:customUser }   else { "Admin" }
+$pass = if ($global:customPass)   { $global:customPass }   else { "" }
 
-# 2. 密码设定与 XML 特殊字符严格安全转义
-if ($userResult.TimedOut) {
-    $inputPass = ""
+$modeText = if ($mode -eq "2") { "半无人值守 (手动设置账户向导)" } else { "全无人值守 (自动配置并登录)" }
+Write-Host "   [配置承接] 当前激活模式: $modeText" -ForegroundColor Green
+
+# ----------------- 1. 动态生成应答 XML 架构片段 -----------------
+$userAccountsXmlFragment = ""
+$autoLogonXmlFragment    = ""
+$hideLocalAccountScreenValue = "true"
+
+if ($mode -eq "1") {
+    # 全无人值守：注入预设账户与自动登录节点
+    $inputUserEscaped = [System.Security.SecurityElement]::Escape($user)
+    $inputPassEscaped = [System.Security.SecurityElement]::Escape($pass)
+
+    Write-Host "   [账户预设] 用户名: $user | 密码: $(if ([string]::IsNullOrEmpty($pass)) { '(留空)' } else { '******' })" -ForegroundColor DarkGray
+
+    $userAccountsXmlFragment = @"
+			<UserAccounts>
+				<LocalAccounts>
+					<LocalAccount wcm:action="add">
+						<Description>系统核心管理员账户</Description>
+						<DisplayName>$inputUserEscaped</DisplayName>
+						<Group>Administrators</Group>
+						<Name>$inputUserEscaped</Name>
+						<Password>
+							<Value>$inputPassEscaped</Value>
+							<PlainText>true</PlainText>
+						</Password>
+					</LocalAccount>
+				</LocalAccounts>
+			</UserAccounts>
+"@
+
+    $autoLogonXmlFragment = @"
+			<AutoLogon>
+				<Username>$inputUserEscaped</Username>
+				<Enabled>true</Enabled>
+				<LogonCount>1</LogonCount>
+				<Password>
+					<Value>$inputPassEscaped</Value>
+					<PlainText>true</PlainText>
+				</Password>
+			</AutoLogon>
+"@
+    $hideLocalAccountScreenValue = "true"
 } else {
-    $inputPass = Read-Host "请输入登录密码 (直接回车表示留空无密码)"
+    # 半无人值守：剥离内置账户，开启本地账户输入屏
+    Write-Host "   [账户策略] 已剥离预置账户，装机后将由用户在 OOBE 原生界面自定用户名与密码。" -ForegroundColor DarkGray
+    $userAccountsXmlFragment = ""
+    $autoLogonXmlFragment    = ""
+    $hideLocalAccountScreenValue = "false"
 }
-$inputUserEscaped = [System.Security.SecurityElement]::Escape($inputUser)
-$inputPassEscaped = [System.Security.SecurityElement]::Escape($inputPass)
 
-# 3. 100% 完整无损原版 XML 应答模板 (集成 Stability & Health Check 自动化探针)
-$unattendTemplate = @'
+# ----------------- 2. 构建 100% 完整无损应答模板 -----------------
+$unattendTemplate = @"
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
 	<settings pass="offlineServicing"></settings>
@@ -1278,7 +1465,7 @@ $unattendTemplate = @'
 			<RunSynchronous>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>1</Order>
-					<Path>powershell.exe -WindowStyle Normal -NoProfile -Command "$xml = [xml]::new(); $xml.Load('C:\Windows\Panther\unattend.xml'); $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml;"</Path>
+					<Path>powershell.exe -WindowStyle Normal -NoProfile -Command "`$xml = [xml]::new(); `$xml.Load('C:\Windows\Panther\unattend.xml'); `$sb = [scriptblock]::Create( `$xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock `$sb -ArgumentList `$xml;"</Path>
 				</RunSynchronousCommand>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>2</Order>
@@ -1310,35 +1497,14 @@ $unattendTemplate = @'
 			<UserLocale>zh-CN</UserLocale>
 		</component>
 		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<UserAccounts>
-				<LocalAccounts>
-					<LocalAccount wcm:action="add">
-						<Description>系统核心管理员账户</Description>
-						<DisplayName>__CUSTOM_USER__</DisplayName>
-						<Group>Administrators</Group>
-						<Name>__CUSTOM_USER__</Name>
-						<Password>
-							<Value>__CUSTOM_PASS__</Value>
-							<PlainText>true</PlainText>
-						</Password>
-					</LocalAccount>
-				</LocalAccounts>
-			</UserAccounts>
-			<AutoLogon>
-				<Username>__CUSTOM_USER__</Username>
-				<Enabled>true</Enabled>
-				<LogonCount>1</LogonCount>
-				<Password>
-					<Value>__CUSTOM_PASS__</Value>
-					<PlainText>true</PlainText>
-				</Password>
-			</AutoLogon>
+$userAccountsXmlFragment
+$autoLogonXmlFragment
 			<OOBE>
 				<ProtectYourPC>3</ProtectYourPC>
 				<HideEULAPage>true</HideEULAPage>
 				<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
 				<HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-				<HideLocalAccountScreen>true</HideLocalAccountScreen>
+				<HideLocalAccountScreen>$hideLocalAccountScreenValue</HideLocalAccountScreen>
 			</OOBE>
 			<FirstLogonCommands>
 				<SynchronousCommand wcm:action="add">
@@ -1351,23 +1517,23 @@ $unattendTemplate = @'
 	<Extensions xmlns="https://schneegans.de/windows/unattend-generator/">
 		<ExtractScript>
 param(
-    [xml] $Document
+    [xml] `$Document
 );
 
-foreach( $file in $Document.unattend.Extensions.File ) {
-    $path = [System.Environment]::ExpandEnvironmentVariables( $file.GetAttribute( 'path' ) );
-    mkdir -Path( $path | Split-Path -Parent ) -ErrorAction 'SilentlyContinue';
-    $encoding = switch( [System.IO.Path]::GetExtension( $path ) ) {
-        { $_ -in '.ps1', '.xml' } { [System.Text.Encoding]::UTF8; }
-        { $_ -in '.reg', '.vbs', '.js' } { [System.Text.UnicodeEncoding]::new( $false, $true ); }
+foreach( `$file in `$Document.unattend.Extensions.File ) {
+    `$path = [System.Environment]::ExpandEnvironmentVariables( `$file.GetAttribute( 'path' ) );
+    mkdir -Path( `$path | Split-Path -Parent ) -ErrorAction 'SilentlyContinue';
+    `$encoding = switch( [System.IO.Path]::GetExtension( `$path ) ) {
+        { `$_ -in '.ps1', '.xml' } { [System.Text.Encoding]::UTF8; }
+        { `$_ -in '.reg', '.vbs', '.js' } { [System.Text.UnicodeEncoding]::new( `$false, `$true ); }
         default { [System.Text.Encoding]::Default; }
     };
-    $bytes = $encoding.GetPreamble() + $encoding.GetBytes( $file.InnerText.Trim() );
-    [System.IO.File]::WriteAllBytes( $path, $bytes );
+    `$bytes = `$encoding.GetPreamble() + `$encoding.GetBytes( `$file.InnerText.Trim() );
+    [System.IO.File]::WriteAllBytes( `$path, `$bytes );
 }
 		</ExtractScript>
 		<File path="C:\Windows\Setup\Scripts\Specialize.ps1">
-$scripts = @(
+`$scripts = @(
 	{
 		net.exe accounts /maxpwage:UNLIMITED;
 	};
@@ -1386,29 +1552,29 @@ $scripts = @(
 );
 
 &amp; {
-  [float] $complete = 0;
-  [float] $increment = 100 / $scripts.Count;
-  foreach( $script in $scripts ) {
-    Write-Progress -Activity 'Running scripts to customize your Windows installation. Do not close this window.' -PercentComplete $complete;
+  [float] `$complete = 0;
+  [float] `$increment = 100 / `$scripts.Count;
+  foreach( `$script in `$scripts ) {
+    Write-Progress -Activity 'Running scripts to customize your Windows installation. Do not close this window.' -PercentComplete `$complete;
     '*** Will now execute command &#xAB;{0}&#xBB;.' -f $(
-      $str = $script.ToString().Trim() -replace '\s+', ' ';
-      $max = 100;
-      if( $str.Length -le $max ) {
-        $str;
+      `$str = `$script.ToString().Trim() -replace '\s+', ' ';
+      `$max = 100;
+      if( `$str.Length -le `$max ) {
+        `$str;
       } else {
-        $str.Substring( 0, $max - 1 ) + '&#x2026;';
+        `$str.Substring( 0, `$max - 1 ) + '&#x2026;';
       }
     );
-    $start = [datetime]::Now;
-    &amp; $script;
-    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( $start ).TotalMilliseconds;
+    `$start = [datetime]::Now;
+    &amp; `$script;
+    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( `$start ).TotalMilliseconds;
     "`r`n" * 3;
-    $complete += $increment;
+    `$complete += `$increment;
   }
-} *&gt;&amp;1 &gt;&gt; "$env:TEMP\Specialize.log";
+} *&gt;&amp;1 &gt;&gt; "`$env:TEMP\Specialize.log";
 		</File>
 		<File path="C:\Windows\Setup\Scripts\UserOnce.ps1">
-$scripts = @(
+`$scripts = @(
 	{
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'SearchboxTaskbarMode' -Type 'DWord' -Value 0;
 	};
@@ -1417,36 +1583,36 @@ $scripts = @(
 	};
 	{
 		Get-Process -Name 'explorer' -ErrorAction 'SilentlyContinue' | Where-Object -FilterScript {
-			$_.SessionId -eq ( Get-Process -Id $PID ).SessionId;
+			`$_.SessionId -eq ( Get-Process -Id `$PID ).SessionId;
 		} | Stop-Process -Force;
 	};
 );
 &amp; {
-  [float] $complete = 0;
-  [float] $increment = 100 / $scripts.Count;
-  foreach( $script in $scripts ) {
-    Write-Progress -Activity 'Running scripts to configure this user account. Do not close this window.' -PercentComplete $complete;
+  [float] `$complete = 0;
+  [float] `$increment = 100 / `$scripts.Count;
+  foreach( `$script in `$scripts ) {
+    Write-Progress -Activity 'Running scripts to configure this user account. Do not close this window.' -PercentComplete `$complete;
     '*** Will now execute command &#xAB;{0}&#xBB;.' -f $(
-      $str = $script.ToString().Trim() -replace '\s+', ' ';
-      $max = 100;
-      if( $str.Length -le $max ) {
-        $str;
+      `$str = `$script.ToString().Trim() -replace '\s+', ' ';
+      `$max = 100;
+      if( `$str.Length -le `$max ) {
+        `$str;
       } else {
-        $str.Substring( 0, $max - 1 ) + '&#x2026;';
+        `$str.Substring( 0, `$max - 1 ) + '&#x2026;';
       }
     );
-    $start = [datetime]::Now;
-    &amp; $script;
-    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( $start ).TotalMilliseconds;
+    `$start = [datetime]::Now;
+    &amp; `$script;
+    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( `$start ).TotalMilliseconds;
     "`r`n" * 3;
-    $complete += $increment;
+    `$complete += `$increment;
   }
-} *&gt;&amp;1 &gt;&gt; "$env:TEMP\UserOnce.log";
+} *&gt;&amp;1 &gt;&gt; "`$env:TEMP\UserOnce.log";
 		</File>
 		<File path="C:\Windows\Setup\Scripts\DefaultUser.ps1">
-$scripts = @(
+`$scripts = @(
 	{
-		$names = @(
+		`$names = @(
 		  'ContentDeliveryAllowed';
 		  'FeatureManagementEnabled';
 		  'OEMPreInstalledAppsEnabled';
@@ -1466,8 +1632,8 @@ $scripts = @(
 		  'SystemPaneSuggestionsEnabled';
 		);
 		
-		foreach( $name in $names ) {
-		  reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v $name /t REG_DWORD /d 0 /f;
+		foreach( `$name in `$names ) {
+		  reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v `$name /t REG_DWORD /d 0 /f;
 		}
 	};
 	{
@@ -1476,29 +1642,29 @@ $scripts = @(
 );
 
 &amp; {
-  [float] $complete = 0;
-  [float] $increment = 100 / $scripts.Count;
-  foreach( $script in $scripts ) {
-    Write-Progress -Activity 'Running scripts to modify the default user&#x2019;&#x2019;s registry hive. Do not close this window.' -PercentComplete $complete;
+  [float] `$complete = 0;
+  [float] `$increment = 100 / `$scripts.Count;
+  foreach( `$script in `$scripts ) {
+    Write-Progress -Activity 'Running scripts to modify the default user&#x2019;&#x2019;s registry hive. Do not close this window.' -PercentComplete `$complete;
     '*** Will now execute command &#xAB;{0}&#xBB;.' -f $(
-      $str = $script.ToString().Trim() -replace '\s+', ' ';
-      $max = 100;
-      if( $str.Length -le $max ) {
-        $str;
+      `$str = `$script.ToString().Trim() -replace '\s+', ' ';
+      `$max = 100;
+      if( `$str.Length -le `$max ) {
+        `$str;
       } else {
-        $str.Substring( 0, $max - 1 ) + '&#x2026;';
+        `$str.Substring( 0, `$max - 1 ) + '&#x2026;';
       }
     );
-    $start = [datetime]::Now;
-    &amp; $script;
-    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( $start ).TotalMilliseconds;
+    `$start = [datetime]::Now;
+    &amp; `$script;
+    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( `$start ).TotalMilliseconds;
     "`r`n" * 3;
-    $complete += $increment;
+    `$complete += `$increment;
   }
-} *&gt;&amp;1 &gt;&gt; "$env:TEMP\DefaultUser.log";
+} *&gt;&amp;1 &gt;&gt; "`$env:TEMP\DefaultUser.log";
 		</File>
 		<File path="C:\Windows\Setup\Scripts\FirstLogon.ps1">
-$scripts = @(
+`$scripts = @(
 	{
 		Set-ItemProperty -LiteralPath 'Registry::HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'AutoLogonCount' -Type 'DWord' -Force -Value 0;
 	};
@@ -1509,97 +1675,89 @@ $scripts = @(
 		cmd.exe /c "rmdir C:\Windows.old";
 	};
 	{
-		# ==============================================================================
-		#  装机后系统健康与稳定性自动化测试探针 (Post-Trim Stability Probe)
-		# ==============================================================================
-		$report = New-Object System.Collections.Generic.List[string];
-		$report.Add("==================================================================");
-		$report.Add(" Windows 11 精简母盘 - 首次登录系统健康与稳定性自检审计报告");
-		$report.Add(" 生成时间: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'));
-		$report.Add("==================================================================");
+		# 自动化稳定性测试探针
+		`$report = New-Object System.Collections.Generic.List[string];
+		`$report.Add("==================================================================");
+		`$report.Add(" Windows 11 精简母盘 - 首次登录系统健康与稳定性自检审计报告");
+		`$report.Add(" 生成时间: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'));
+		`$report.Add(" 部署模式: " + "$($modeText)");
+		`$report.Add("==================================================================");
 
-		# 1. 测试应用部署与核心工具状态
-		$wtPkg = Get-AppxPackage -Name "*WindowsTerminal*" -ErrorAction SilentlyContinue;
-		$wtStatus = if ($wtPkg) { "正常部署 (版本: $($wtPkg.Version))" } else { "未安装或已被剔除" };
-		$report.Add("[组件测试] Windows 终端 (Terminal): $wtStatus");
+		`$wtPkg = Get-AppxPackage -Name "*WindowsTerminal*" -ErrorAction SilentlyContinue;
+		`$wtStatus = if (`$wtPkg) { "正常部署 (版本: `$(`$wtPkg.Version))" } else { "未安装或已被剔除" };
+		`$report.Add("[组件测试] Windows 终端 (Terminal): `$wtStatus");
 
-		$wingetPkg = Get-AppxPackage -Name "*DesktopAppInstaller*" -ErrorAction SilentlyContinue;
-		$wingetStatus = if ($wingetPkg) { "正常可用 (支持 Winget/离线安装)" } else { "未安装" };
-		$report.Add("[组件测试] 应用安装程序 (Winget): $wingetStatus");
+		`$wingetPkg = Get-AppxPackage -Name "*DesktopAppInstaller*" -ErrorAction SilentlyContinue;
+		`$wingetStatus = if (`$wingetPkg) { "正常可用 (支持 Winget/离线安装)" } else { "未安装" };
+		`$report.Add("[组件测试] 应用安装程序 (Winget): `$wingetStatus");
 
-		# 2. 测试文本文档 ShellNew 关联
-		$txtAssoc = (cmd.exe /c "assoc .txt 2>nul");
-		$report.Add("[关联测试] .txt 扩展名关联项: $txtAssoc");
+		`$txtAssoc = (cmd.exe /c "assoc .txt 2>nul");
+		`$report.Add("[关联测试] .txt 扩展名关联项: `$txtAssoc");
 
-		# 3. 扫描系统关键致命错误事件日志 (Application 崩溃与 DCOM 挂起)
 		try {
-			$appCrashes = Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
-			$crashCount = if ($appCrashes) { $appCrashes.Count } else { 0 };
-			$report.Add("[事件测试] 应用程序核心崩溃事件数 (Level=Error): $crashCount");
+			`$appCrashes = Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
+			`$crashCount = if (`$appCrashes) { `$appCrashes.Count } else { 0 };
+			`$report.Add("[事件测试] 应用程序核心崩溃事件数 (Level=Error): `$crashCount");
 
-			$dcomErrors = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-DistributedCOM'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
-			$dcomCount = if ($dcomErrors) { $dcomErrors.Count } else { 0 };
-			$report.Add("[事件测试] DCOM 幽灵调用异常事件数: $dcomCount");
+			`$dcomErrors = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-DistributedCOM'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
+			`$dcomCount = if (`$dcomErrors) { `$dcomErrors.Count } else { 0 };
+			`$report.Add("[事件测试] DCOM 幽灵调用异常事件数: `$dcomCount");
 		} catch {
-			$report.Add("[事件测试] 事件日志扫描已安全旁路。");
+			`$report.Add("[事件测试] 事件日志扫描已安全旁路。");
 		}
 
-		$report.Add("------------------------------------------------------------------");
-		$verdict = if ($crashCount -eq 0 -and $dcomCount -eq 0) { "【优秀】系统底层核心零异常，运行极度稳定！" } else { "【良好】已自动记录轻微事件，系统运行正常。" };
-		$report.Add("总体稳定性裁定: $verdict");
-		$report.Add("==================================================================");
+		`$report.Add("------------------------------------------------------------------");
+		`$verdict = if (`$crashCount -eq 0 -and `$dcomCount -eq 0) { "【优秀】系统底层核心零异常，运行极度稳定！" } else { "【良好】已自动记录轻微事件，系统运行正常。" };
+		`$report.Add("总体稳定性裁定: `$verdict");
+		`$report.Add("==================================================================");
 
-		# 写入持久化审计报告
-		$reportPath = "C:\Windows\Temp\Trim_Stability_Report.log";
-		[System.IO.File]::WriteAllLines($reportPath, $report, [System.Text.Encoding]::UTF8);
+		`$reportPath = "C:\Windows\Temp\Trim_Stability_Report.log";
+		[System.IO.File]::WriteAllLines(`$reportPath, `$report, [System.Text.Encoding]::UTF8);
 	};
 	{
-		# 1. 彻底销毁可能包含明文密码的各层级应答文件副本
-		$xmlFiles = @(
+		# 1. 彻底销毁包含配置的应答文件
+		`$xmlFiles = @(
 			'C:\Windows\Panther\unattend.xml',
 			'C:\Windows\Panther\Unattend\unattend.xml',
 			'C:\Windows\System32\Sysprep\autounattend.xml',
 			'C:\Windows\System32\Sysprep\unattend.xml'
 		);
-		foreach ($f in $xmlFiles) {
-			if (Test-Path $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; }
+		foreach (`$f in `$xmlFiles) {
+			if (Test-Path `$f) { Remove-Item -LiteralPath `$f -Force -ErrorAction SilentlyContinue; }
 		}
 
-		# 2. 彻底根治句柄锁：在所有自检报告保存后，异步执行脚本目录自毁
+		# 2. 异步粉碎自毁 Setup Scripts 目录
 		Start-Process -WindowStyle Hidden -FilePath "cmd.exe" -ArgumentList '/c timeout /t 3 /nobreak >nul &amp; for /l %i in (1,1,10) do (if exist "C:\Windows\Setup\Scripts" (rd /s /q "C:\Windows\Setup\Scripts" &amp; timeout /t 1 >nul) else (exit))'
 	};
 );
 
 &amp; {
-  [float] $complete = 0;
-  [float] $increment = 100 / $scripts.Count;
-  foreach( $script in $scripts ) {
-    Write-Progress -Activity 'Running scripts to finalize your Windows installation. Do not close this window.' -PercentComplete $complete;
+  [float] `$complete = 0;
+  [float] `$increment = 100 / `$scripts.Count;
+  foreach( `$script in `$scripts ) {
+    Write-Progress -Activity 'Running scripts to finalize your Windows installation. Do not close this window.' -PercentComplete `$complete;
     '*** Will now execute command &#xAB;{0}&#xBB;.' -f $(
-      $str = $script.ToString().Trim() -replace '\s+', ' ';
-      $max = 100;
-      if( $str.Length -le $max ) {
-        $str;
+      `$str = `$script.ToString().Trim() -replace '\s+', ' ';
+      `$max = 100;
+      if( `$str.Length -le `$max ) {
+        `$str;
       } else {
-        $str.Substring( 0, $max - 1 ) + '&#x2026;';
+        `$str.Substring( 0, `$max - 1 ) + '&#x2026;';
       }
     );
-    $start = [datetime]::Now;
-    &amp; $script;
-    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( $start ).TotalMilliseconds;
+    `$start = [datetime]::Now;
+    &amp; `$script;
+    '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( `$start ).TotalMilliseconds;
     "`r`n" * 3;
-    $complete += $increment;
+    `$complete += `$increment;
   }
-} *&gt;&amp;1 &gt;&gt; "$env:TEMP\FirstLogon.log";
+} *&gt;&amp;1 &gt;&gt; "`$env:TEMP\FirstLogon.log";
 		</File>
 	</Extensions>
 </unattend>
-'@
+"@
 
-# 替换自定义参数
-$autoUnattendXml = $unattendTemplate.Replace('__CUSTOM_USER__', $inputUserEscaped).Replace('__CUSTOM_PASS__', $inputPassEscaped)
-
-# 4. 多通道合规注入 (Sysprep、Panther、安装介质根目录)
+# ----------------- 3. 多通道合规注入 -----------------
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
@@ -1608,16 +1766,16 @@ if (-not (Test-Path -LiteralPath $pantherDir)) { New-Item -ItemType Directory -P
 $utf8Encoding = [System.Text.Encoding]::UTF8
 
 # Sysprep 核心规范通道
-[System.IO.File]::WriteAllText((Join-Path $sysprepDir "unattend.xml"), $autoUnattendXml, $utf8Encoding)
-[System.IO.File]::WriteAllText((Join-Path $sysprepDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
+[System.IO.File]::WriteAllText((Join-Path $sysprepDir "unattend.xml"), $unattendTemplate, $utf8Encoding)
+[System.IO.File]::WriteAllText((Join-Path $sysprepDir "autounattend.xml"), $unattendTemplate, $utf8Encoding)
 
 # Panther 初始化通道
-[System.IO.File]::WriteAllText((Join-Path $pantherDir "unattend.xml"), $autoUnattendXml, $utf8Encoding)
+[System.IO.File]::WriteAllText((Join-Path $pantherDir "unattend.xml"), $unattendTemplate, $utf8Encoding)
 
 # ISO 可移动介质根目录自启动通道
-[System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
+[System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $unattendTemplate, $utf8Encoding)
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (已集成首次登录自动化稳定性探针)。" -ForegroundColor Green
+Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (全自动运行，无需人工干预)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/07-UnattendInject.ps1
 
