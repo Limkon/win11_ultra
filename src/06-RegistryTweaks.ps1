@@ -110,17 +110,17 @@ if ($trimMode -eq "2") {
 }
 
 # ==============================================================================
-#  D. 终极修复：回归纯净 Win32 打开方式，彻底杜绝 COM 死锁
+#  D. 终极修复：回归纯净 Win32 打开方式，彻底杜绝 COM 死锁与记事本冲突
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 全域禁用打开方式向应用商店查询推荐应用（提升速度）
+; 1. 全域禁用打开方式向应用商店查询推荐应用（提升秒开速度）
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
 "NoUseStoreOpenWith"=dword:00000001
 
 [HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer]
 "NoUseStoreOpenWith"=dword:00000001
 
-; 2. 【核心策略】：彻底移除 DelegateExecute 键值（用负号 - 拔除）
+; 2. 【核心修复】：彻底移除 DelegateExecute 键值（用负号 - 拔除）
 ; 让 OpenWith 直接执行纯正的 Win32 OpenWith.exe 进程，永不假死，永不依赖任何损坏的 UWP
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
 @="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
@@ -130,11 +130,17 @@ $null = $reg.AppendLine(@"
 @="%SystemRoot%\\system32\\OpenWith.exe \"%1\""
 "DelegateExecute"=-
 
-; 3. 稳固 .txt 文件的原生 Win32 记事本关联（阻断包验证报错）
+; 3. 【核心固化】：强制将 .txt 关联锁定到本地 Win32 记事本，彻底根治“包无法验证”报错
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
 @="txtfile"
 "Content Type"="text/plain"
 "PerceivedType"="text"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
+@="文本文档"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
+@="open"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
 @="\"%SystemRoot%\\System32\\notepad.exe\" \"%1\""
