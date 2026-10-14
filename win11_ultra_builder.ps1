@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-14 13:14:46 UTC
+#  生成时间: 2026-10-14 14:16:25 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -274,18 +274,6 @@ cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 
 if (Test-Path $workDir) { Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Force -Path $sourcesDir | Out-Null
 
-# 11. 初始化清理 (安全预检并卸载残留)
-Write-Host "[初始化] 清理历史残留挂载点并重置环境..." -ForegroundColor DarkGray
-if (Test-Path "HKLM:\zSOFTWARE") { cmd.exe /c "reg.exe unload HKLM\zSOFTWARE 2>nul" | Out-Null }
-if (Test-Path "HKLM:\zSYSTEM")   { cmd.exe /c "reg.exe unload HKLM\zSYSTEM 2>nul" | Out-Null }
-if (Test-Path "HKLM:\zNTUSER")   { cmd.exe /c "reg.exe unload HKLM\zNTUSER 2>nul" | Out-Null }
-
-& dism.exe /English /Cleanup-Wim 2>$null | Out-Null
-cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
-
-if (Test-Path $workDir) { Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue }
-New-Item -ItemType Directory -Force -Path $sourcesDir | Out-Null
-
 # <<< [分块结束] 文件来源: src/00-Header-Init.ps1
 
 # ==============================================================================
@@ -514,10 +502,10 @@ Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 4/11] UWP 预装应用与可选功能包精简 (src/03-RemovePackages.ps1)
-#  [nano11 逻辑直装重构版]：彻底抛弃脆弱的拓扑解析，采用 nano11 原生安全匹配与极速剥离
+#  [nano11 逻辑直装重构版]：彻底抛弃脆弱的拓扑解析，采用原生安全匹配与极速剥离
 # ==============================================================================
 
-Write-Host "`n[步骤 4/11] 正在同步 nano11 架构执行 UWP 预装应用剥离..." -ForegroundColor Cyan
+Write-Host "`n[步骤 4/11] 正在执行 UWP 预装应用剥离..." -ForegroundColor Cyan
 
 # ----------------- 1. 母盘主语言探测 (严格保护母盘核心语言) -----------------
 $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
@@ -530,8 +518,8 @@ if ($languageLine) {
     Write-Host "   [母盘语言检测] 未探测到主语言，自动锚定默认值: $languageCode" -ForegroundColor Yellow
 }
 
-# ----------------- 2. nano11 原生 UWP 预装应用安全剔除列表 -----------------
-# 继承自 nano11 核心匹配逻辑，仅剔除纯应用层无害臃肿软件，绝不伤及底层框架与 Store 核心
+# ----------------- 2. 原生 UWP 预装应用安全剔除列表 -----------------
+# 核心匹配逻辑，仅剔除纯应用层无害臃肿软件，绝不伤及底层框架与 Store 核心
 $uwpBloatPatterns = @(
     '*Zune*',                          # 媒体播放器旧版
     '*Bing*',                          # 必应天气/资讯
@@ -829,10 +817,8 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\CHT"
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\JPN")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\KOR")
 
-# ----------------- 6. 独立 Cortana 专属残留包 (保护 Client.CBS 核心) -----------------
-# 【关键修复说明】：
-# 严禁递归粉碎 Client.CBS 内的 SearchHost.exe，否则直接损坏 Windows 核心体验包数字签名，
-# 导致“打开方式”等现代 XAML 弹窗无法初始化！停止搜索应完全交由注册表服务策略控制。
+# ----------------- 6. 独立 Cortana 专属残留包 (严格保护 Client.CBS 核心) -----------------
+# 【关键】：绝对不能递归粉碎 Client.CBS 内的 SearchHost.exe，否则 XAML 打开方式弹窗必崩！
 Write-Host "   -> 正在物理清理独立 Cortana 专属残留应用包..." -ForegroundColor DarkGray
 if (Test-Path -LiteralPath $systemApps) {
     Get-ChildItem -Path $systemApps -Directory | Where-Object { 
@@ -841,6 +827,7 @@ if (Test-Path -LiteralPath $systemApps) {
         Force-NukeFolderOrFile $_.FullName
     }
 }
+# 注意：原脚本下方删除 SearchIndexer.exe / SearchFilterHost.exe 的语句必须全部删掉！
 
 # ----------------- 7. 语音引擎与离线帮助文档 -----------------
 Write-Host "   -> 正在物理粉碎语音引擎与帮助文档..." -ForegroundColor DarkGray
@@ -879,11 +866,6 @@ if (Test-Path -LiteralPath $fontsPath) {
         Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
     }
 }
-
-# 【关键修复说明】：
-# 原第 11 节【修复记事本物理执行实体】已被彻底移除！
-# 严禁用 System32\notepad.exe 强行覆盖 C:\Windows\notepad.exe。
-# 移除该节后，系统原生硬链接及其 TrustedInstaller/Users 组的安全 ACL 得到 100% 完整保留。
 
 Write-Host "[完成] 大文件实体物理粉碎完毕 (底层核心框架完整性已得到妥善保护)。" -ForegroundColor Green
 
@@ -955,16 +937,6 @@ $null = $reg.AppendLine(@"
 #  B. 内核级绝对拦截 SearchHost / SearchIndexer (彻底杜绝后台常驻拉起)
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 使用系统内核级 IFEO 机制：任何拉起 SearchHost/SearchApp 的行为直接在 0 毫秒内退出
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchHost.exe]
-"Debugger"="systray.exe"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchApp.exe]
-"Debugger"="systray.exe"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchIndexer.exe]
-"Debugger"="systray.exe"
-
 ; 关闭任务栏搜索图标展示
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Search]
 "SearchboxTaskbarMode"=dword:00000000
@@ -1071,16 +1043,14 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  E. 核心修复：彻底根治“打开方式 -> 选择其他应用”无反应的死锁 (物理剔除 DelegateExecute 劫持)
+#  E. 核心修复：还原 Windows 原生打开方式与 Shell 代理契约
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 彻底删除导致 Win11 打开方式联网探针死锁的策略
+; 1. 清理阻碍网络探针超时的策略
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
 [-HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
 
-; 2. 【核心修复】：物理拔除已断裂的旧版 COM DelegateExecute 代理契约！
-;    注：使用 -"DelegateExecute"=- 语法强制将其从 command 节点彻底抹杀！
-;    让 Explorer 直接回退到命令行调用原生 OpenWith.exe 进程，彻底杜绝点击吞噬死锁！
+; 2. 恢复 Windows 官方原生 Shell32 OpenWithVerbHandler 代理 (确保 HWND 父句柄正常传递)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas]
 @=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,73,00,68,00,65,00,6c,00,6c,00,33,00,32,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,35,00,33,00,37,00,36,00,00,00
 "MultiSelectModel"="Single"
@@ -1088,11 +1058,11 @@ $null = $reg.AppendLine(@"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"=-
+"DelegateExecute"="{1fbae0f7-4ba2-41a4-901b-7733b84b0661}"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Unknown\shell\opendlg\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"=-
+"DelegateExecute"="{1fbae0f7-4ba2-41a4-901b-7733b84b0661}"
 "@)
 
 # ==============================================================================
