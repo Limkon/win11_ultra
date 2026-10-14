@@ -61,16 +61,6 @@ $null = $reg.AppendLine(@"
 #  B. 内核级绝对拦截 SearchHost / SearchIndexer (彻底杜绝后台常驻拉起)
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 使用系统内核级 IFEO 机制：任何拉起 SearchHost/SearchApp 的行为直接在 0 毫秒内退出
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchHost.exe]
-"Debugger"="systray.exe"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchApp.exe]
-"Debugger"="systray.exe"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SearchIndexer.exe]
-"Debugger"="systray.exe"
-
 ; 关闭任务栏搜索图标展示
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Search]
 "SearchboxTaskbarMode"=dword:00000000
@@ -177,16 +167,14 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  E. 核心修复：彻底根治“打开方式 -> 选择其他应用”无反应的死锁 (物理剔除 DelegateExecute 劫持)
+#  E. 核心修复：还原 Windows 原生打开方式与 Shell 代理契约
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 彻底删除导致 Win11 打开方式联网探针死锁的策略
+; 1. 清理阻碍网络探针超时的策略
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
 [-HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
 
-; 2. 【核心修复】：物理拔除已断裂的旧版 COM DelegateExecute 代理契约！
-;    注：使用 -"DelegateExecute"=- 语法强制将其从 command 节点彻底抹杀！
-;    让 Explorer 直接回退到命令行调用原生 OpenWith.exe 进程，彻底杜绝点击吞噬死锁！
+; 2. 恢复 Windows 官方原生 Shell32 OpenWithVerbHandler 代理 (确保 HWND 父句柄正常传递)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas]
 @=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,73,00,68,00,65,00,6c,00,6c,00,33,00,32,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,35,00,33,00,37,00,36,00,00,00
 "MultiSelectModel"="Single"
@@ -194,11 +182,11 @@ $null = $reg.AppendLine(@"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"=-
+"DelegateExecute"="{1fbae0f7-4ba2-41a4-901b-7733b84b0661}"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Unknown\shell\opendlg\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"=-
+"DelegateExecute"="{1fbae0f7-4ba2-41a4-901b-7733b84b0661}"
 "@)
 
 # ==============================================================================
