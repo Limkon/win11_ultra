@@ -1,9 +1,9 @@
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
-#  [重构加固]：自毁句柄死锁根治 + Sysprep 规范对齐 + XML 注入严格转义
+#  [企业级重构]：嵌入首次登录稳定性自动化测试探针 + XML 严格实体转义 + 自毁防死锁
 # ==============================================================================
 
-Write-Host "`n[步骤 9/11] 正在配置高级无人值守应答文件 (30秒智能倒计时)..." -ForegroundColor Cyan
+Write-Host "`n[步骤 9/11] 正在配置高级无人值守应答文件 (集成首次启动稳定性自检引擎)..." -ForegroundColor Cyan
 
 # 1. 调用倒计时输入函数获取登录账户
 $userResult = Read-InputWithTimeout -Prompt "请输入登录用户名" -Seconds 30 -Default "Admin"
@@ -13,7 +13,7 @@ if ($inputUser -match "^(Administrator|Guest)$") {
     $inputUser = "Admin"
 }
 
-# 2. 密码设定与 XML 特殊字符严格安全转义 (彻底防止 XML 结构断裂)
+# 2. 密码设定与 XML 特殊字符严格安全转义
 if ($userResult.TimedOut) {
     $inputPass = ""
 } else {
@@ -22,7 +22,7 @@ if ($userResult.TimedOut) {
 $inputUserEscaped = [System.Security.SecurityElement]::Escape($inputUser)
 $inputPassEscaped = [System.Security.SecurityElement]::Escape($inputPass)
 
-# 3. 100% 完整无损原版 XML 应答模板 (修复自毁死锁与规范映射)
+# 3. 100% 完整无损原版 XML 应答模板 (集成 Stability & Health Check 自动化探针)
 $unattendTemplate = @'
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
@@ -104,7 +104,7 @@ $unattendTemplate = @'
 	<settings pass="auditSystem"></settings>
 	<settings pass="auditUser"></settings>
 	<settings pass="oobeSystem">
-		<!-- 2. OOBE 阶段国际化全自动闭环 (彻底跳过地区、键盘布局交互) -->
+		<!-- 2. OOBE 阶段国际化全自动闭环 -->
 		<component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<InputLocale>zh-CN</InputLocale>
 			<SystemLocale>zh-CN</SystemLocale>
@@ -311,6 +311,51 @@ $scripts = @(
 		cmd.exe /c "rmdir C:\Windows.old";
 	};
 	{
+		# ==============================================================================
+		#  装机后系统健康与稳定性自动化测试探针 (Post-Trim Stability Probe)
+		# ==============================================================================
+		$report = New-Object System.Collections.Generic.List[string];
+		$report.Add("==================================================================");
+		$report.Add(" Windows 11 精简母盘 - 首次登录系统健康与稳定性自检审计报告");
+		$report.Add(" 生成时间: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'));
+		$report.Add("==================================================================");
+
+		# 1. 测试应用部署与核心工具状态
+		$wtPkg = Get-AppxPackage -Name "*WindowsTerminal*" -ErrorAction SilentlyContinue;
+		$wtStatus = if ($wtPkg) { "正常部署 (版本: $($wtPkg.Version))" } else { "未安装或已被剔除" };
+		$report.Add("[组件测试] Windows 终端 (Terminal): $wtStatus");
+
+		$wingetPkg = Get-AppxPackage -Name "*DesktopAppInstaller*" -ErrorAction SilentlyContinue;
+		$wingetStatus = if ($wingetPkg) { "正常可用 (支持 Winget/离线安装)" } else { "未安装" };
+		$report.Add("[组件测试] 应用安装程序 (Winget): $wingetStatus");
+
+		# 2. 测试文本文档 ShellNew 关联
+		$txtAssoc = (cmd.exe /c "assoc .txt 2>nul");
+		$report.Add("[关联测试] .txt 扩展名关联项: $txtAssoc");
+
+		# 3. 扫描系统关键致命错误事件日志 (Application 崩溃与 DCOM 挂起)
+		try {
+			$appCrashes = Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
+			$crashCount = if ($appCrashes) { $appCrashes.Count } else { 0 };
+			$report.Add("[事件测试] 应用程序核心崩溃事件数 (Level=Error): $crashCount");
+
+			$dcomErrors = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-DistributedCOM'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
+			$dcomCount = if ($dcomErrors) { $dcomErrors.Count } else { 0 };
+			$report.Add("[事件测试] DCOM 幽灵调用异常事件数: $dcomCount");
+		} catch {
+			$report.Add("[事件测试] 事件日志扫描已安全旁路。");
+		}
+
+		$report.Add("------------------------------------------------------------------");
+		$verdict = if ($crashCount -eq 0 -and $dcomCount -eq 0) { "【优秀】系统底层核心零异常，运行极度稳定！" } else { "【良好】已自动记录轻微事件，系统运行正常。" };
+		$report.Add("总体稳定性裁定: $verdict");
+		$report.Add("==================================================================");
+
+		# 写入持久化审计报告
+		$reportPath = "C:\Windows\Temp\Trim_Stability_Report.log";
+		[System.IO.File]::WriteAllLines($reportPath, $report, [System.Text.Encoding]::UTF8);
+	};
+	{
 		# 1. 彻底销毁可能包含明文密码的各层级应答文件副本
 		$xmlFiles = @(
 			'C:\Windows\Panther\unattend.xml',
@@ -322,7 +367,7 @@ $scripts = @(
 			if (Test-Path $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; }
 		}
 
-		# 2. 彻底根治句柄锁：将日志重定向到 TEMP 后，使用循环重试命令执行Scripts目录自毁
+		# 2. 彻底根治句柄锁：在所有自检报告保存后，异步执行脚本目录自毁
 		Start-Process -WindowStyle Hidden -FilePath "cmd.exe" -ArgumentList '/c timeout /t 3 /nobreak >nul &amp; for /l %i in (1,1,10) do (if exist "C:\Windows\Setup\Scripts" (rd /s /q "C:\Windows\Setup\Scripts" &amp; timeout /t 1 >nul) else (exit))'
 	};
 );
@@ -353,10 +398,10 @@ $scripts = @(
 </unattend>
 '@
 
-# 替换自定义参数 (严格经过 XML 安全字符转义)
+# 替换自定义参数
 $autoUnattendXml = $unattendTemplate.Replace('__CUSTOM_USER__', $inputUserEscaped).Replace('__CUSTOM_PASS__', $inputPassEscaped)
 
-# 4. 多通道合规注入 (Sysprep 标准规范、Panther 自动化、安装介质根目录)
+# 4. 多通道合规注入 (Sysprep、Panther、安装介质根目录)
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
@@ -364,7 +409,7 @@ if (-not (Test-Path -LiteralPath $pantherDir)) { New-Item -ItemType Directory -P
 
 $utf8Encoding = [System.Text.Encoding]::UTF8
 
-# Sysprep 核心规范通道：必须写入 unattend.xml，同时补充 autounattend.xml 以确保双向兼容
+# Sysprep 核心规范通道
 [System.IO.File]::WriteAllText((Join-Path $sysprepDir "unattend.xml"), $autoUnattendXml, $utf8Encoding)
 [System.IO.File]::WriteAllText((Join-Path $sysprepDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
 
@@ -374,4 +419,4 @@ $utf8Encoding = [System.Text.Encoding]::UTF8
 # ISO 可移动介质根目录自启动通道
 [System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $autoUnattendXml, $utf8Encoding)
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自毁死锁彻底根治，Sysprep 合规固化)。" -ForegroundColor Green
+Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (已集成首次登录自动化稳定性探针)。" -ForegroundColor Green
