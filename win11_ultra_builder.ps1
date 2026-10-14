@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-14 14:16:25 UTC
+#  生成时间: 2026-10-14 15:09:24 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -505,7 +505,7 @@ Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
 #  [nano11 逻辑直装重构版]：彻底抛弃脆弱的拓扑解析，采用原生安全匹配与极速剥离
 # ==============================================================================
 
-Write-Host "`n[步骤 4/11] 正在执行 UWP 预装应用剥离..." -ForegroundColor Cyan
+Write-Host "`n[步骤 4/11] 正在执行UWP预装应用剥离..." -ForegroundColor Cyan
 
 # ----------------- 1. 母盘主语言探测 (严格保护母盘核心语言) -----------------
 $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
@@ -591,7 +591,7 @@ if ($totalApps -gt 0) {
         # 使用 DISM 官方原生接口规范化反注册，不强行抹杀注册表
         & dism.exe /English /Image:$scratchDir /Remove-ProvisionedAppxPackage "/PackageName:$($app.PackageName)" 2>$null | Out-Null
     }
-    Write-Progress -Activity "正在同步 nano11 逻辑精简预装 UWP" -Completed
+    Write-Progress -Activity "正在同步逻辑精简预装 UWP" -Completed
 
     # 按照 nano11 原生逻辑清理 WindowsApps 目录下的残留大实体文件夹
     Write-Host "   正在清理 WindowsApps 残留实体文件..." -ForegroundColor DarkGray
@@ -608,13 +608,13 @@ if ($totalApps -gt 0) {
         & icacls.exe "$winAppsDir" /grant "*S-1-5-32-545:(OI)(CI)RX" /C /Q 2>$null | Out-Null
     }
 } else {
-    Write-Host "   [提示] 未发现匹配 nano11 规则的预装应用。" -ForegroundColor DarkGray
+    Write-Host "   [提示] 未发现匹配规则的预装应用。" -ForegroundColor DarkGray
 }
 
 Write-Host "[完成] UWP 预装应用剥离完毕。" -ForegroundColor Green
 
 # ----------------- 3. nano11 原生系统可选功能包 (FOD) 精炼 -----------------
-Write-Host "`n[步骤 5/11] 正在同步 nano11 规则精炼可选功能与外语包..." -ForegroundColor Cyan
+Write-Host "`n[步骤 5/11] 正在同步规则精炼可选功能与外语包..." -ForegroundColor Cyan
 
 # 继承自 nano11 官方精简方案 (安全保留 Search-Engine-Client，避免属性页与索引架构损伤)
 $packagePatterns = @(
@@ -759,115 +759,63 @@ Write-Host "[完成] 老旧特性剥离完毕。" -ForegroundColor Green
 # >>> [分块代码引入] 文件来源: src/05-PhysicalNuke.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 6/11] 大文件实体深度物理粉碎 (src/05-PhysicalNuke.ps1)
-#  [终极修复加固版]：剔除 Client.CBS 破损隐患 + 保护记事本原生硬链接与安全 ACL
+#  win11 Builder - [模块 6/11] 物理实体精简 (src/05-PhysicalNuke.ps1)
+#  [100% 像素级对齐 nano11 物理删除逻辑]：绝不破坏系统核心组件与 SmartScreen
 # ==============================================================================
 
-Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/Defender/OneDrive/Speech)..." -ForegroundColor Cyan
-Write-Host "   [模式说明] 普通模式与极限模式均完整执行以下实体物理粉碎：" -ForegroundColor DarkCyan
+Write-Host "`n[步骤 7/11] 正在同步 nano11 执行非必要实体文件清理..." -ForegroundColor Cyan
+$winDir = Join-Path $scratchDir "Windows"
 
-# ----------------- 1. 恢复环境 (WinRE) -----------------
-$recoveryDir = Join-Path $scratchDir "Windows\System32\Recovery"
-Write-Host "   -> 正在物理粉碎 WinRE 恢复环境文件..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $recoveryDir "winre.wim")
-Force-NukeFolderOrFile (Join-Path $recoveryDir "ReAgent.xml")
+# 1. 彻底移除 Edge 浏览器与 WebView
+Write-Host "   -> 正在清理 Edge 与 WebView..." -ForegroundColor DarkGray
+Remove-Item -Path "$scratchDir\Program Files (x86)\Microsoft\Edge*" -Recurse -Force -ErrorAction SilentlyContinue
+$arch = if ((Get-CimInstance Win32_OperatingSystem).OSArchitecture -match 'ARM') { "arm64" } else { "amd64" }
+if ($arch -eq 'amd64') {
+    $folderPath = Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "amd64_microsoft-edge-webview_31bf3856ad364e35*" -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+    if ($folderPath) { Remove-Item -Path $folderPath -Recurse -Force -ErrorAction SilentlyContinue }
+}
+Remove-Item -Path "$scratchDir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force -ErrorAction SilentlyContinue
 
-# ----------------- 2. Microsoft Edge 完整生态 -----------------
-Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整生态 (Chromium 本体 + WebView + UWP 桩程序)..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\Edge")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\EdgeUpdate")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\Microsoft-Edge-Webview")
+# 2. 移除 WinRE 恢复环境并建立 nano11 占位桩 (防止 Setup 报错)
+Write-Host "   -> 正在清理 WinRE (保留 nano11 占位空文件)..." -ForegroundColor DarkGray
+$winreFile = "$scratchDir\Windows\System32\Recovery\winre.wim"
+Remove-Item -Path $winreFile -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -Path $winreFile -ItemType File -Force -ErrorAction SilentlyContinue | Out-Null
 
-$systemApps = Join-Path $scratchDir "Windows\SystemApps"
-if (Test-Path -LiteralPath $systemApps) {
-    Get-ChildItem -Path $systemApps -Directory | Where-Object { 
-        $_.Name -like "*MicrosoftEdge*" 
-    } | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
+# 3. 移除 OneDrive 安装引导实体
+Write-Host "   -> 正在清理 OneDrive 安装包..." -ForegroundColor DarkGray
+Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
+
+# 4. 清理 Defender 病毒库更新残留 (绝不强删 smartscreen 和核心驱动，保持 Shell 完好)
+Write-Host "   -> 正在清理 Defender 历史残留..." -ForegroundColor DarkGray
+Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
+
+# 5. 清理语音引擎 TTS
+Write-Host "   -> 正在清理语音引擎 TTS..." -ForegroundColor DarkGray
+Remove-Item -Path (Join-Path $winDir "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
+
+# 6. 输入法清理：严格按 nano11 仅剔除繁体、日语、韩语
+Write-Host "   -> 正在清理日韩繁输入法实体..." -ForegroundColor DarkGray
+Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHT" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\JPN" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force -ErrorAction SilentlyContinue
+
+# 7. 临时目录、帮助、壁纸、光标清理 (完全对齐 nano11)
+Write-Host "   -> 正在清理临时文件、Web、帮助与光标..." -ForegroundColor DarkGray
+Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $winDir "Web") -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $winDir "Help") -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $winDir "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
+
+# 8. 字体库精炼 (100% 对齐 nano11 白名单与剔除规则)
+Write-Host "   -> 正在精炼字体库..." -ForegroundColor DarkGray
+$fontsPath = Join-Path $winDir "Fonts"
+if (Test-Path $fontsPath) { 
+    Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "lucon*.*", "calibri*.*", "arial*.*", "times*.*", "cou*.*", "8*.*", "msyh*.*", "simsun*.*", "simhei*.*" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $fontsPath -Include "mingli*", "msjh*", "malgun*", "meiryo*", "yugoth*", "segoeuihistoric.ttf" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue 
 }
 
-# ----------------- 3. Microsoft OneDrive -----------------
-Write-Host "   -> 正在物理粉碎 OneDrive 各层级安装与运行实体..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\OneDriveSetup.exe")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\SysWOW64\OneDriveSetup.exe")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files\Microsoft OneDrive")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft OneDrive")
-Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft OneDrive")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Users\Default\AppData\Local\Microsoft\OneDrive")
-
-# ----------------- 4. Windows Defender 全栈驱动与服务组件 -----------------
-Write-Host "   -> 正在物理粉碎 Windows Defender 全栈驱动与服务组件实体..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft\Windows Defender")
-Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft\Windows Defender Advanced Threat Protection")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files\Windows Defender")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Windows Defender")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files\Windows Defender Advanced Threat Protection")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\SecurityHealthSystray.exe")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\SecurityHealthService.exe")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\smartscreen.exe")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\wd")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\WdFilter.sys")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\WdNisDrv.sys")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\wdboot.sys")
-
-# ----------------- 5. 日语、韩语、繁体中文输入法字库实体 -----------------
-Write-Host "   -> 正在物理粉碎繁体/日语/韩语输入法实体..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\CHT")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\JPN")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\KOR")
-
-# ----------------- 6. 独立 Cortana 专属残留包 (严格保护 Client.CBS 核心) -----------------
-# 【关键】：绝对不能递归粉碎 Client.CBS 内的 SearchHost.exe，否则 XAML 打开方式弹窗必崩！
-Write-Host "   -> 正在物理清理独立 Cortana 专属残留应用包..." -ForegroundColor DarkGray
-if (Test-Path -LiteralPath $systemApps) {
-    Get-ChildItem -Path $systemApps -Directory | Where-Object { 
-        $_.Name -like "*Cortana*" 
-    } | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
-}
-# 注意：原脚本下方删除 SearchIndexer.exe / SearchFilterHost.exe 的语句必须全部删掉！
-
-# ----------------- 7. 语音引擎与离线帮助文档 -----------------
-Write-Host "   -> 正在物理粉碎语音引擎与帮助文档..." -ForegroundColor DarkGray
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Speech\Engines\SR")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Speech\Engines\TTS\en-US")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\Speech\Engines\SR")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Help")
-
-# ----------------- 8. 冗余壁纸 (严格保护保留默认 img0.jpg) -----------------
-$wallpapers = Join-Path $scratchDir "Windows\Web\Wallpaper"
-if (Test-Path -LiteralPath $wallpapers) {
-    Write-Host "   -> 正在清理多余壁纸 (严格保留默认 img0.jpg)..." -ForegroundColor DarkGray
-    Get-ChildItem -Path $wallpapers -Recurse -File | Where-Object { $_.Name -ne "img0.jpg" } | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
-}
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Web\Screen")
-Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Web\TouchKeyboard")
-
-# ----------------- 9. 系统提示音 (严格保护保留核心事件声音) -----------------
-$mediaDir = Join-Path $scratchDir "Windows\Media"
-if (Test-Path -LiteralPath $mediaDir) {
-    Write-Host "   -> 正在精炼系统提示音 (保留核心事件声音)..." -ForegroundColor DarkGray
-    Get-ChildItem -Path $mediaDir -Filter "*.wav" | Where-Object { 
-        $_.Name -notmatch "Windows (Background|Foreground|Error|Ding|Default)\.wav" 
-    } | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
-}
-
-# ----------------- 10. 中文字体库深度精炼 -----------------
-$fontsPath = Join-Path $scratchDir "Windows\Fonts"
-if (Test-Path -LiteralPath $fontsPath) {
-    Write-Host "   -> 正在精炼中文字体库..." -ForegroundColor DarkGray
-    Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "calibri*.*", "arial*.*", "times*.*", "msyh*.*", "simsun*.*", "simhei*.*", "kaiu*.*", "mingliu*.*" | ForEach-Object {
-        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
-    }
-}
-
-Write-Host "[完成] 大文件实体物理粉碎完毕 (底层核心框架完整性已得到妥善保护)。" -ForegroundColor Green
+Write-Host "[完成] 实体文件精简完毕 (完全符合 nano11 稳定基准)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/05-PhysicalNuke.ps1
 
@@ -875,303 +823,163 @@ Write-Host "[完成] 大文件实体物理粉碎完毕 (底层核心框架完整
 # >>> [分块代码引入] 文件来源: src/06-RegistryTweaks.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 7/11] 离线注册表原生 Unicode 导入引擎 (src/06-RegistryTweaks.ps1)
-#  [终极重构]：彻底唤醒新建文本文档 + IFEO 内核绝杀 SearchHost + 修复打开方式死锁
+#  win11 Builder - [模块 7/11] 注册表核心优化 (src/06-RegistryTweaks.ps1)
+#  [100% 像素级对齐 nano11 注册表配置]：不触动任何 Shell 关联，原生保障打开方式
 # ==============================================================================
 
-Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
+Write-Host "`n[步骤 8/11] 正在挂载配置单元并 100% 注入 nano11 官方注册表优化项..." -ForegroundColor Cyan
 
-# 1. 定位并挂载离线配置单元文件
+# 1. 挂载注册表配置单元
+$defaultPath  = Join-Path $scratchDir "Windows\System32\config\default"
+$ntuserPath   = Join-Path $scratchDir "Users\Default\ntuser.dat"
 $softwarePath = Join-Path $scratchDir "Windows\System32\config\SOFTWARE"
 $systemPath   = Join-Path $scratchDir "Windows\System32\config\SYSTEM"
-$ntuserPath   = Join-Path $scratchDir "Users\Default\ntuser.dat"
 
+attrib.exe -R -S -H "$defaultPath" 2>$null
+attrib.exe -R -S -H "$ntuserPath" 2>$null
 attrib.exe -R -S -H "$softwarePath" 2>$null
 attrib.exe -R -S -H "$systemPath" 2>$null
-attrib.exe -R -S -H "$ntuserPath" 2>$null
 
+& reg.exe load HKLM\zDEFAULT "$defaultPath" 2>$null | Out-Null
+& reg.exe load HKLM\zNTUSER "$ntuserPath" 2>$null | Out-Null
 & reg.exe load HKLM\zSOFTWARE "$softwarePath" 2>$null | Out-Null
 & reg.exe load HKLM\zSYSTEM "$systemPath" 2>$null | Out-Null
-& reg.exe load HKLM\zNTUSER "$ntuserPath" 2>$null | Out-Null
 
-# 2. 准备原生 .reg 注册表内容 (UTF-16 LE 原生支持中文，无转义 BUG)
-$reg = New-Object System.Text.StringBuilder
-$null = $reg.AppendLine("Windows Registry Editor Version 5.00`n")
+# 2. 绕过硬件检测全量配置 (nano11 原生)
+Write-Host "   -> 正在写入硬件限制全量绕过项..." -ForegroundColor DarkGray
+& reg.exe add "HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache" /v SV1 /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache" /v SV2 /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache" /v SV1 /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache" /v SV2 /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v BypassCPUCheck /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v BypassRAMCheck /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v BypassSecureBootCheck /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v BypassStorageCheck /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSYSTEM\Setup\MoSetup" /v AllowUpgradesWithUnsupportedTPMOrCPU /t REG_DWORD /d 1 /f 2>$null | Out-Null
 
-# ==============================================================================
-#  A. 全局底层安全加固策略 (普通模式与极限模式均必须执行)
-# ==============================================================================
-
-$null = $reg.AppendLine(@"
-; 1. 内核级 ELAM 启动策略豁免 (彻底杜绝强删 wdboot.sys 后的 0xc0000428 蓝屏)
-[HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Control\EarlyLaunch]
-"DriverLoadPolicy"=dword:00000008
-
-; 2. 彻底拔除导致盘符属性瘫痪的 BitLocker 幽灵扩展
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\PropertySheetHandlers\{D9DE8B79-CE8A-421A-98C3-5F17A9EB2269}]
-
-; 3. 彻底抹杀导致右键菜单卡死 1~3 秒的 Defender EPP 幽灵扩展
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shellex\ContextMenuHandlers\EPP]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Directory\shellex\ContextMenuHandlers\EPP]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\ContextMenuHandlers\EPP]
-
-; 4. 固化盘符与文件标准属性页 COM 挂载
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\PropertySheetHandlers\Sharing]
-@="{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Drive\shellex\PropertySheetHandlers\Security]
-@="{1f2e5c40-9550-11ce-99d2-00aa006e086a}"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shellex\PropertySheetHandlers\Security]
-@="{1f2e5c40-9550-11ce-99d2-00aa006e086a}"
-
-; 5. 全局切换至 Windows 经典高效右键菜单 (解决现代 XAML 菜单吞点击事件 BUG)
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32]
-@=""
-
-[HKEY_LOCAL_MACHINE\zNTUSER\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32]
-@=""
-"@)
-
-# ==============================================================================
-#  B. 内核级绝对拦截 SearchHost / SearchIndexer (彻底杜绝后台常驻拉起)
-# ==============================================================================
-$null = $reg.AppendLine(@"
-; 关闭任务栏搜索图标展示
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Search]
-"SearchboxTaskbarMode"=dword:00000000
-
-[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Search]
-"SearchboxTaskbarMode"=dword:00000000
-
-; 彻底停用 Windows 搜索与 Cortana 联网策略
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Windows Search]
-"AllowCortana"=dword:00000000
-"DisableWebSearch"=dword:00000001
-"ConnectedSearchUseWeb"=dword:00000000
-"PreventIndexingLowDiskSpaceMB"=dword:00000000
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer]
-"DisableSearchBoxSuggestions"=dword:00000001
-"@)
-
-# ==============================================================================
-#  C. 模式分支：服务配置
-# ==============================================================================
-$normalServices = @(
-    "SysMain", "DiagTrack", "dmwappushservice", "WerSvc", "PcaSvc",
-    "MapsBroker", "SensorService", "SensrSvc", "lfsvc", "RetailDemo",
-    "wisvc", "WalletService", "SharedRealitySvc", "XblAuthManager", "XblGameSave",
-    "XboxNetApiSvc", "XboxGipSvc", "AllJoynRouter", "SecurityHealthService"
+# 3. 禁用预装推广与商用广告推送 (nano11 原生)
+Write-Host "   -> 正在禁用推广应用与流氓广告通道..." -ForegroundColor DarkGray
+$cdmKeys = @(
+    "OemPreInstalledAppsEnabled", "PreInstalledAppsEnabled", "SilentInstalledAppsEnabled",
+    "ContentDeliveryAllowed", "FeatureManagementEnabled", "PreInstalledAppsEverEnabled",
+    "SoftLandingEnabled", "SubscribedContentEnabled", "SubscribedContent-310093Enabled",
+    "SubscribedContent-338388Enabled", "SubscribedContent-338389Enabled", "SubscribedContent-338393Enabled",
+    "SubscribedContent-353694Enabled", "SubscribedContent-353696Enabled", "SystemPaneSuggestionsEnabled"
 )
-$defenderFullStack = @("WinDefend", "WdNisSvc", "Sense", "WdFilter", "WdNisDrv", "WdBoot")
+foreach ($k in $cdmKeys) {
+    & reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v $k /t REG_DWORD /d 0 /f 2>$null | Out-Null
+}
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableWindowsConsumerFeatures /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableConsumerAccountStateContent /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableCloudOptimizedContent /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\PolicyManager\current\device\Start" /v ConfigureStartPins /t REG_SZ /d '{"pinnedList": [{}]}' /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\PushToInstall" /v DisablePushToInstall /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\MRT" /v DontOfferThroughWUAU /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe delete "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Subscriptions" /f 2>$null | Out-Null
+& reg.exe delete "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps" /f 2>$null | Out-Null
 
+# 4. 开启 OOBE 本地账户跳过支持 (nano11 原生)
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f 2>$null | Out-Null
+
+# 5. 禁用保留存储与 BitLocker 自动加密 (nano11 原生)
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager" /v ShippedWithReserves /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f 2>$null | Out-Null
+
+# 6. 禁用 Chat 图标与任务栏小组件 (nano11 原生)
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat" /v ChatIcon /t REG_DWORD /d 3 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarMn /t REG_DWORD /d 0 /f 2>$null | Out-Null
+
+# 7. 清理 Edge 遗留卸载信息 (nano11 原生)
+& reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>$null | Out-Null
+& reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>$null | Out-Null
+
+# 8. 禁用 OneDrive 同步与遥测跟踪 (nano11 原生)
+Write-Host "   -> 正在禁用遥测与隐私搜集..." -ForegroundColor DarkGray
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v DisableFileSyncNGSC /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" /v Enabled /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Privacy" /v TailoredExperiencesWithDiagnosticDataEnabled /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zNTUSER\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy" /v HasAccepted /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zNTUSER\Software\Microsoft\Input\TIPC" /v Enabled /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zNTUSER\Software\Microsoft\InputPersonalization" /v RestrictImplicitInkCollection /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zNTUSER\Software\Microsoft\InputPersonalization" /v RestrictImplicitTextCollection /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zNTUSER\Software\Microsoft\InputPersonalization\TrainedDataStore" /v HarvestContacts /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zNTUSER\Software\Microsoft\Personalization\Settings" /v AcceptedPrivacyPolicy /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice" /v Start /t REG_DWORD /d 4 /f 2>$null | Out-Null
+
+# 9. 阻止 DevHome、新版 Outlook、Teams、Copilot 自动拉取 (nano11 原生)
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate" /v workCompleted /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate" /v workCompleted /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe delete "HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate" /f 2>$null | Out-Null
+& reg.exe delete "HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate" /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v HubsSidebarEnabled /t REG_DWORD /d 0 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Teams" /v DisableInstallation /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail" /v PreventRun /t REG_DWORD /d 1 /f 2>$null | Out-Null
+
+# 10. 删除 nano11 官方指定的 5 个计划任务定义文件 (直接对齐)
+Write-Host "   -> 正在删除遥测计划任务定义..." -ForegroundColor DarkGray
+$tasksPath = Join-Path $scratchDir "Windows\System32\Tasks"
+Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$tasksPath\Microsoft\Windows\Customer Experience Improvement Program" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\ProgramDataUpdater" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
+
+# 11. 禁用 Windows Update 自动更新 (nano11 原生)
+Write-Host "   -> 正在关闭 Windows 自动更新通道..." -ForegroundColor DarkGray
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" /v StopWUPostOOBE1 /t REG_SZ /d "net stop wuauserv" /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" /v StopWUPostOOBE2 /t REG_SZ /d "sc stop wuauserv" /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" /v StopWUPostOOBE3 /t REG_SZ /d "sc config wuauserv start= disabled" /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" /v DisbaleWUPostOOBE1 /t REG_SZ /d "reg add HKLM\SYSTEM\CurrentControlSet\Services\wuauserv /v Start /t REG_DWORD /d 4 /f" /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" /v DisbaleWUPostOOBE2 /t REG_SZ /d "reg add HKLM\SYSTEM\ControlSet001\Services\wuauserv /v Start /t REG_DWORD /d 4 /f" /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v DoNotConnectToWindowsUpdateInternetLocations /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v DisableWindowsUpdateAccess /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v WUServer /t REG_SZ /d "localhost" /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v WUStatusServer /t REG_SZ /d "localhost" /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v UpdateServiceUrlAlternate /t REG_SZ /d "localhost" /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v UseWUServer /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v DisableOnline /t REG_DWORD /d 1 /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\wuauserv" /v Start /t REG_DWORD /d 4 /f 2>$null | Out-Null
+& reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC" /f 2>$null | Out-Null
+& reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /f 2>$null | Out-Null
+& reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f 2>$null | Out-Null
+
+# 12. 禁用 Windows Defender 服务 (nano11 原生规范：安全停用服务，隐藏设置页，绝不乱删系统文件)
+Write-Host "   -> 正在停用 Windows Defender 服务栈..." -ForegroundColor DarkGray
+$defenderServices = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense")
+foreach ($svc in $defenderServices) {
+    & reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$svc" /v Start /t REG_DWORD /d 4 /f 2>$null | Out-Null
+}
+& reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v SettingsPageVisibility /t REG_SZ /d "hide:virus;windowsupdate" /f 2>$null | Out-Null
+
+# 13. 卸载并安全移除冗余服务 (完全遵照 nano11 原版列表)
+Write-Host "   -> 正在移除冗余服务项目..." -ForegroundColor DarkGray
+$servicesToRemove = @( 
+    'Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 
+    'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
+    'BluetoothUserService', 'wuauserv', 'UsoSvc', 'WaaSMedicSvc' 
+)
 if ($trimMode -eq "2") {
-    Write-Host "   >>> [极限模式] 构建 Defender 物理抹杀与服务深度清除指令..." -ForegroundColor DarkYellow
-    $null = $reg.AppendLine("[-HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\WSearch]")
-    $extremeDeleteServices = $normalServices + $defenderFullStack + @("Spooler", "PrintNotify", "Fax", "RemoteRegistry", "diagsvc")
-    foreach ($svc in $extremeDeleteServices) {
-        $null = $reg.AppendLine("[-HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\$svc]")
-    }
-} else {
-    Write-Host "   >>> [普通模式] 构建服务安全停用指令 (Start = 4)..." -ForegroundColor Cyan
-    $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\WSearch]")
-    $null = $reg.AppendLine('"Start"=dword:00000004' + "`n")
-
-    $allServicesToDisable = $normalServices + $defenderFullStack
-    foreach ($svc in $allServicesToDisable) {
-        $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\ControlSet001\Services\$svc]")
-        $null = $reg.AppendLine('"Start"=dword:00000004' + "`n")
-    }
+    $servicesToRemove += 'WSearch'
+}
+foreach ($service in $servicesToRemove) { 
+    & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$service" /f 2>$null | Out-Null 
 }
 
-
-# ==============================================================================
-#  D. 核心修复：新建文本文档 100% 唤醒与经典记事本原生关联 (杜绝哈希校验破损与崩溃)
-# ==============================================================================
-$null = $reg.AppendLine(@"
-; 1. 扩展名 .txt 基础关联 (主指原生 txtfile，保持标准 ProgID 树形结构)
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
-@="txtfile"
-"Content Type"="text/plain"
-"PerceivedType"="text"
-
-; 唤醒右键【新建 -> 文本文档】(规范间接字符串资源 @notepad.exe,-470)
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
-"ItemName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,37,00,30,00,00,00
-"NullFile"=""
-
-; 规范化 OpenWithProgids 候选池 (采用标准空字符串，严禁写入破坏类型的 hex(0))
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
-"txtfile"=""
-"txtfilelegacy"=""
-
-; 2. 核心实体 txtfile 原生参数全量固化 (直接挂载经典记事本)
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
-@="文本文档"
-"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\DefaultIcon]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
-@="open"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-
-; 3. Win11 兼容实体 txtfilelegacy 同步映射 (防部分 Win11 进程硬编码寻址)
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
-@="文本文档"
-"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\DefaultIcon]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\shell]
-@="open"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\shell\open\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-
-; 4. 固化 App Paths，确保运行窗口与命令行直达
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,00,00
-"@)
-
-# ==============================================================================
-#  E. 核心修复：还原 Windows 原生打开方式与 Shell 代理契约
-# ==============================================================================
-$null = $reg.AppendLine(@"
-; 1. 清理阻碍网络探针超时的策略
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
-[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
-
-; 2. 恢复 Windows 官方原生 Shell32 OpenWithVerbHandler 代理 (确保 HWND 父句柄正常传递)
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas]
-@=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,73,00,68,00,65,00,6c,00,6c,00,33,00,32,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,35,00,33,00,37,00,36,00,00,00
-"MultiSelectModel"="Single"
-"Position"="Bottom"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"="{1fbae0f7-4ba2-41a4-901b-7733b84b0661}"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Unknown\shell\opendlg\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"="{1fbae0f7-4ba2-41a4-901b-7733b84b0661}"
-"@)
-
-# ==============================================================================
-#  F. 系统基础优化与隐私遥测剥离
-# ==============================================================================
-$null = $reg.AppendLine(@"
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\DataCollection]
-"AllowTelemetry"=dword:00000000
-"MaxTelemetryAllowed"=dword:00000000
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting]
-"Disabled"=dword:00000001
-
-[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize]
-"EnableTransparency"=dword:00000000
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\OneDrive]
-"DisableFileSyncNGSC"=dword:00000001
-"DisableFileSync"=dword:00000001
-"DisableMeteredNetworkFileSync"=dword:00000001
-"DisableLibrariesStylePin"=dword:00000001
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Run]
-"OneDrive"=-
-"OneDriveSetup"=-
-
-[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Run]
-"OneDrive"=-
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}]
-"System.IsPinnedToNameSpaceTree"=dword:00000000
-
-; 清理 Edge 遗留卸载项与幽灵 DCOM 契约 (斩断 Event 10001 死锁源)
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgeHTM]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\MSEdgePDF]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Applications\msedge.exe]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\AppID\{1F8766B3-3F96-48DA-B6A8-A013FFC2A5BE}]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\AppID\Microsoft.MicrosoftEdge_8wekyb3d8bbwe]
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Extensions\ContractId\Windows.File\PackageId\Microsoft.MicrosoftEdge_44.22000.120.0_neutral__8wekyb3d8bbwe]
-
-; 关闭 SmartScreen 拦截策略 (防 smartscreen.exe 物理删除后调用挂起)
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\System]
-"EnableSmartScreen"=dword:00000000
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer]
-"SmartScreenEnabled"="Off"
-"@)
-
-# ==============================================================================
-#  G. 硬件检测全量绕过与 OOBE 免联网
-# ==============================================================================
-$labConfigKeys = @("BypassCPUCheck", "BypassRAMCheck", "BypassSecureBootCheck", "BypassStorageCheck", "BypassTPMCheck", "BypassDiskCheck")
-$null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\Setup\LabConfig]")
-foreach ($k in $labConfigKeys) {
-    $null = $reg.AppendLine("`"$k`"=dword:00000001")
-}
-
-$null = $reg.AppendLine(@"
-[HKEY_LOCAL_MACHINE\zSYSTEM\Setup\MoSetup]
-"AllowUpgradesWithUnsupportedTPMOrCPU"=dword:00000001
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\CloudContent]
-"DisableWindowsConsumerFeatures"=dword:00000001
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE]
-"BypassNRO"=dword:00000001
-"DisableOnline"=dword:00000001
-"@)
-
-# ==============================================================================
-#  H. 经典 Windows 照片查看器关联激活
-# ==============================================================================
-$photoExts = @(".jpg", ".jpeg", ".png", ".bmp", ".gif", ".ico", ".tiff", ".tif", ".jfif")
-$null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSOFTWARE\RegisteredApplications]")
-$null = $reg.AppendLine('"Windows Photo Viewer"="SOFTWARE\\Microsoft\\Windows Photo Viewer\\Capabilities"' + "`n")
-$null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations]")
-foreach ($ext in $photoExts) {
-    $null = $reg.AppendLine("`"$ext`"=`"PhotoViewer.FileAssoc.Tiff`"")
-}
-foreach ($ext in $photoExts) {
-    $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\$ext]")
-    $null = $reg.AppendLine('@="PhotoViewer.FileAssoc.Tiff"' + "`n")
-}
-
-# 3. 写入带 BOM 的 UTF-16 LE 原生 .reg 文件并使用 reg import 原生原子导入
-$tempRegFile = Join-Path $env:TEMP "win11_ultra_tweaks.reg"
-[System.IO.File]::WriteAllText($tempRegFile, $reg.ToString(), [System.Text.Encoding]::Unicode)
-
-Write-Host "   正在通过 Windows 原生注册表引擎导入 Unicode 策略流..." -ForegroundColor Green
-& reg.exe import "$tempRegFile" 2>&1 | Out-Null
-Remove-Item -LiteralPath $tempRegFile -Force -ErrorAction SilentlyContinue
-
-# 4. 彻底物理粉碎 Explorer 僵尸缓存 (强制唤醒文本文档与新建菜单项)
-Write-Host "   正在粉碎 Explorer 新建菜单僵尸缓存 (强制刷新菜单索引)..." -ForegroundColor DarkGray
-cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
-cmd.exe /c "reg delete `"HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
-
-# 5. 安全卸载配置单元 (防句柄残留死锁)
-Write-Host "   正在安全卸载配置单元 (GC 垃圾回收防锁死机制推进)..." -ForegroundColor Green
+# 14. 安全卸载全部配置单元
+Write-Host "   -> 正在卸载注册表配置单元..." -ForegroundColor DarkGray
 [System.GC]::Collect()
 [System.GC]::WaitForPendingFinalizers()
 
+Safely-UnloadHive "HKLM\zDEFAULT" | Out-Null
+Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
 Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
-Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
 
-Write-Host "[完成] 离线注册表加固优化全部完毕 (文本文档已三重加固，SearchHost 已内核拦截，打开方式死锁已排除)。" -ForegroundColor Green
+Write-Host "[完成] 注册表配置全部注入完毕 (100% 对齐 nano11，底层 Shell 结构零篡改)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/06-RegistryTweaks.ps1
 
