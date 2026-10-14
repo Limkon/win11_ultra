@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-14 09:47:03 UTC
+#  生成时间: 2026-10-14 12:01:55 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -922,19 +922,19 @@ Write-Host "[完成] 老旧特性剥离完毕。" -ForegroundColor Green
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 大文件实体深度物理粉碎 (src/05-PhysicalNuke.ps1)
-#  [重构加固]：全盘彻底剿灭 SearchHost 实体 + 杜绝后台拉起 + 核心框架保护
+#  [终极修复加固版]：剔除 Client.CBS 破损隐患 + 保护记事本原生硬链接与安全 ACL
 # ==============================================================================
 
-Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/Search/Defender/OneDrive/Speech)..." -ForegroundColor Cyan
+Write-Host "`n[步骤 7/11] 深度物理粉碎非必要大文件实体 (Edge/Defender/OneDrive/Speech)..." -ForegroundColor Cyan
 Write-Host "   [模式说明] 普通模式与极限模式均完整执行以下实体物理粉碎：" -ForegroundColor DarkCyan
 
-# 1. 恢复环境 (WinRE)
+# ----------------- 1. 恢复环境 (WinRE) -----------------
 $recoveryDir = Join-Path $scratchDir "Windows\System32\Recovery"
 Write-Host "   -> 正在物理粉碎 WinRE 恢复环境文件..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $recoveryDir "winre.wim")
 Force-NukeFolderOrFile (Join-Path $recoveryDir "ReAgent.xml")
 
-# 2. Microsoft Edge 浏览器完整生态 (Chromium 本体 + WebView + SystemApps 遗留 UWP 桩程序)
+# ----------------- 2. Microsoft Edge 完整生态 -----------------
 Write-Host "   -> 正在物理粉碎 Microsoft Edge 完整生态 (Chromium 本体 + WebView + UWP 桩程序)..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\Edge")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft\EdgeUpdate")
@@ -949,7 +949,7 @@ if (Test-Path -LiteralPath $systemApps) {
     }
 }
 
-# 3. Microsoft OneDrive (全路径与预装源)
+# ----------------- 3. Microsoft OneDrive -----------------
 Write-Host "   -> 正在物理粉碎 OneDrive 各层级安装与运行实体..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\OneDriveSetup.exe")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\SysWOW64\OneDriveSetup.exe")
@@ -958,7 +958,7 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Program Files (x86)\Microsoft One
 Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft OneDrive")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Users\Default\AppData\Local\Microsoft\OneDrive")
 
-# 4. Windows Defender 全栈驱动与服务组件
+# ----------------- 4. Windows Defender 全栈驱动与服务组件 -----------------
 Write-Host "   -> 正在物理粉碎 Windows Defender 全栈驱动与服务组件实体..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft\Windows Defender")
 Force-NukeFolderOrFile (Join-Path $scratchDir "ProgramData\Microsoft\Windows Defender Advanced Threat Protection")
@@ -973,45 +973,33 @@ Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\WdFilter
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\WdNisDrv.sys")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\drivers\wdboot.sys")
 
-# 5. 日语、韩语、繁体中文输入法字库实体
+# ----------------- 5. 日语、韩语、繁体中文输入法字库实体 -----------------
 Write-Host "   -> 正在物理粉碎繁体/日语/韩语输入法实体..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\CHT")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\JPN")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\InputMethod\KOR")
 
-# 6. Cortana 与 Windows Search 前后台全套引擎实体 (深度清除 Client.CBS 内部残留)
-Write-Host "   -> 正在物理粉碎 Cortana 与 Windows Search (包含 SearchHost/SearchApp)..." -ForegroundColor DarkGray
+# ----------------- 6. 独立 Cortana 专属残留包 (保护 Client.CBS 核心) -----------------
+# 【关键修复说明】：
+# 严禁递归粉碎 Client.CBS 内的 SearchHost.exe，否则直接损坏 Windows 核心体验包数字签名，
+# 导致“打开方式”等现代 XAML 弹窗无法初始化！停止搜索应完全交由注册表服务策略控制。
+Write-Host "   -> 正在物理清理独立 Cortana 专属残留应用包..." -ForegroundColor DarkGray
 if (Test-Path -LiteralPath $systemApps) {
-    # 清理明确的 Cortana 与 Search 专属包
     Get-ChildItem -Path $systemApps -Directory | Where-Object { 
-        $_.Name -like "*Cortana*" -or $_.Name -like "*Microsoft.Windows.Search*" 
+        $_.Name -like "*Cortana*" 
     } | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
-
-    # 【深度修复】：全盘递归粉碎隐藏在 CBS 或其他宿主目录中的 SearchHost 执行实体
-    Get-ChildItem -Path $systemApps -Recurse -Filter "SearchHost.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-        Force-NukeFolderOrFile $_.FullName
-    }
-    Get-ChildItem -Path $systemApps -Recurse -Filter "SearchApp.exe" -ErrorAction SilentlyContinue | ForEach-Object {
         Force-NukeFolderOrFile $_.FullName
     }
 }
 
-# 物理粉碎 System32 传统后台索引二进制文件
-$sys32Dir = Join-Path $scratchDir "Windows\System32"
-Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchIndexer.exe")
-Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchFilterHost.exe")
-Force-NukeFolderOrFile (Join-Path $sys32Dir "SearchProtocolHost.exe")
-
-# 7. 语音引擎与离线帮助文档
+# ----------------- 7. 语音引擎与离线帮助文档 -----------------
 Write-Host "   -> 正在物理粉碎语音引擎与帮助文档..." -ForegroundColor DarkGray
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Speech\Engines\SR")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Speech\Engines\TTS\en-US")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\System32\Speech\Engines\SR")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Help")
 
-# 8. 冗余壁纸 (严格保护保留默认 img0.jpg)
+# ----------------- 8. 冗余壁纸 (严格保护保留默认 img0.jpg) -----------------
 $wallpapers = Join-Path $scratchDir "Windows\Web\Wallpaper"
 if (Test-Path -LiteralPath $wallpapers) {
     Write-Host "   -> 正在清理多余壁纸 (严格保留默认 img0.jpg)..." -ForegroundColor DarkGray
@@ -1022,7 +1010,7 @@ if (Test-Path -LiteralPath $wallpapers) {
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Web\Screen")
 Force-NukeFolderOrFile (Join-Path $scratchDir "Windows\Web\TouchKeyboard")
 
-# 9. 系统提示音 (严格保护保留 Windows 核心事件声音)
+# ----------------- 9. 系统提示音 (严格保护保留核心事件声音) -----------------
 $mediaDir = Join-Path $scratchDir "Windows\Media"
 if (Test-Path -LiteralPath $mediaDir) {
     Write-Host "   -> 正在精炼系统提示音 (保留核心事件声音)..." -ForegroundColor DarkGray
@@ -1033,7 +1021,7 @@ if (Test-Path -LiteralPath $mediaDir) {
     }
 }
 
-# 10. 中文字体库深度精炼 (保护保留常见中文字体与核心 UI 字体)
+# ----------------- 10. 中文字体库深度精炼 -----------------
 $fontsPath = Join-Path $scratchDir "Windows\Fonts"
 if (Test-Path -LiteralPath $fontsPath) {
     Write-Host "   -> 正在精炼中文字体库..." -ForegroundColor DarkGray
@@ -1042,18 +1030,12 @@ if (Test-Path -LiteralPath $fontsPath) {
     }
 }
 
-Write-Host "[完成] 大文件实体物理粉碎完毕 (SearchHost 物理实体已全面歼灭)。" -ForegroundColor Green
+# 【关键修复说明】：
+# 原第 11 节【修复记事本物理执行实体】已被彻底移除！
+# 严禁用 System32\notepad.exe 强行覆盖 C:\Windows\notepad.exe。
+# 移除该节后，系统原生硬链接及其 TrustedInstaller/Users 组的安全 ACL 得到 100% 完整保留。
 
-# ----------------- 11. 修复记事本物理执行实体 (消灭 Windows 目录下的 UWP 幽灵桩) -----------------
-Write-Host "   -> 正在使用 System32 经典记事本覆盖根目录 UWP 跳转死桩..." -ForegroundColor DarkGray
-$winDir = Join-Path $scratchDir "Windows"
-$sys32Notepad = Join-Path $winDir "System32\notepad.exe"
-$rootNotepad  = Join-Path $winDir "notepad.exe"
-
-if (Test-Path -LiteralPath $sys32Notepad) {
-    Force-NukeFolderOrFile $rootNotepad
-    Copy-Item -LiteralPath $sys32Notepad -Destination $rootNotepad -Force
-}
+Write-Host "[完成] 大文件实体物理粉碎完毕 (底层核心框架完整性已得到妥善保护)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/05-PhysicalNuke.ps1
 
@@ -1181,29 +1163,44 @@ if ($trimMode -eq "2") {
     }
 }
 
+
 # ==============================================================================
-#  D. 核心修复：新建文本文档 100% 唤醒机制 (规范化 Win11 字符串间接资源与双 ProgID)
+#  D. 核心修复：新建文本文档 100% 唤醒与经典记事本原生关联 (杜绝哈希校验破损与崩溃)
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 扩展名 .txt 基础关联 (主指 txtfilelegacy)
+; 1. 扩展名 .txt 基础关联 (主指原生 txtfile，保持标准 ProgID 树形结构)
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
-@="txtfilelegacy"
+@="txtfile"
 "Content Type"="text/plain"
 "PerceivedType"="text"
 
-; 【关键修复】：必须写入间接字符串资源 @%SystemRoot%\system32\notepad.exe,-470，否则 Win11 判定名称为空直接隐藏
+; 唤醒右键【新建 -> 文本文档】(规范间接字符串资源 @notepad.exe,-470)
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
 "ItemName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,37,00,30,00,00,00
 "NullFile"=""
 
-; 清空可能干扰的 OpenWithProgids
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
+; 规范化 OpenWithProgids 候选池 (采用标准空字符串，严禁写入破坏类型的 hex(0))
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
-"txtfilelegacy"=hex(0):
-"txtfile"=hex(0):
+"txtfile"=""
+"txtfilelegacy"=""
 
-; 2. Win11 核心实体 txtfilelegacy 深度补全
+; 2. 核心实体 txtfile 原生参数全量固化 (直接挂载经典记事本)
+[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
+@="文本文档"
+"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\DefaultIcon]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
+@="open"
+
+[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
+@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
+
+; 3. Win11 兼容实体 txtfilelegacy 同步映射 (防部分 Win11 进程硬编码寻址)
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
 @="文本文档"
@@ -1218,44 +1215,22 @@ $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\shell\open\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
 
-; 3. 经典 txtfile 回退兼容实体
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
-@="文本文档"
-"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\DefaultIcon]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
-@="open"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-
-; 4. 彻底修正 App Paths，强制直指 System32 经典记事本
+; 4. 固化 App Paths，确保运行窗口与命令行直达
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,00,00
-
-; 5. 抹除 Default 用户中 UWP 留下的损坏关联
-[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
-[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
-"txtfilelegacy"=hex(0):
-"txtfile"=hex(0):
-
-[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\UserChoice]
 "@)
 
 # ==============================================================================
-#  E. 核心修复：彻底根治“打开方式 -> 选择其他应用”无反应的死锁
+#  E. 核心修复：彻底根治“打开方式 -> 选择其他应用”无反应的死锁 (物理剔除 DelegateExecute 劫持)
 # ==============================================================================
 $null = $reg.AppendLine(@"
-; 1. 彻底删除导致 Win11 XAML OpenWith 按钮路由断裂的策略
+; 1. 彻底删除导致 Win11 打开方式联网探针死锁的策略
 [-HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
 [-HKEY_LOCAL_MACHINE\zNTUSER\Software\Policies\Microsoft\Windows\Explorer\NoInternetOpenWith]
 
-; 2. 【核心修复】：为 openas 与 opendlg 注入原生 COM DelegateExecute 代理契约
-; 严禁裸调 OpenWith.exe，必须由 Shell 代理调度器托管拉起
+; 2. 【核心修复】：物理拔除已断裂的旧版 COM DelegateExecute 代理契约！
+;    注：使用 -"DelegateExecute"=- 语法强制将其从 command 节点彻底抹杀！
+;    让 Explorer 直接回退到命令行调用原生 OpenWith.exe 进程，彻底杜绝点击吞噬死锁！
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas]
 @=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,73,00,68,00,65,00,6c,00,6c,00,33,00,32,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,35,00,33,00,37,00,36,00,00,00
 "MultiSelectModel"="Single"
@@ -1263,12 +1238,13 @@ $null = $reg.AppendLine(@"
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\*\shell\openas\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
+"DelegateExecute"=-
 
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\Unknown\shell\opendlg\command]
 @=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,4f,00,70,00,65,00,6e,00,57,00,69,00,74,00,68,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-"DelegateExecute"="{e44e9428-bdbc-4987-a099-40dc8fd255e7}"
+"DelegateExecute"=-
 "@)
+
 # ==============================================================================
 #  F. 系统基础优化与隐私遥测剥离
 # ==============================================================================
