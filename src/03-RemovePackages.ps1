@@ -1,6 +1,6 @@
 # ==============================================================================
 #  win11 Builder - [模块 4/11] UWP 应用与可选功能包精简 (src/03-RemovePackages.ps1)
-#  [企业级重构]：动态规则库联动 + 依赖异常交互阻断裁决 + 属性页架构固化
+#  [企业级重构]：消费前置全局处置策略 + 零中途挂起 + 依赖稳定性测试与自动分流
 # ==============================================================================
 
 # ----------------- 0. 动态环境感知与主语言探测 -----------------
@@ -12,6 +12,15 @@ if ([string]::IsNullOrWhiteSpace($defaultLang)) {
     $defaultLang = "zh-CN"
 }
 Write-Host "   [母盘语言检测] 锁定系统原生核心语言为: $defaultLang" -ForegroundColor Green
+
+# 承接前置冲突处置策略 (默认策略 2: 不删除)
+$conflictPolicy = if ($global:uwpConflictPolicy) { $global:uwpConflictPolicy } else { "2" }
+$policyText = switch ($conflictPolicy) {
+    "1" { "全部删除 (遇到冲突强行粉碎)" }
+    "3" { "手动选择 (遇到冲突时现场确认)" }
+    default { "不删除 (遇到冲突自动保护保留)" }
+}
+Write-Host "   [策略承接] 当前激活的冲突处置策略: $policyText" -ForegroundColor DarkCyan
 
 # ----------------- 1. 加载并解析外部 Appslist.txt 规则库 -----------------
 $appsListSearchPaths = @(
@@ -158,48 +167,55 @@ foreach ($cand in $candidateAppsToRemove) {
     }
 }
 
-# ----------------- 4. 依赖异常交互阻断裁决机制 -----------------
+# ----------------- 4. 消费前置策略，自动化执行分流 -----------------
 $finalDeleteList = New-Object System.Collections.Generic.List[System.Object]
 
 if ($conflictItems.Count -gt 0) {
-    Write-Host "`n==================================================================" -ForegroundColor Red
-    Write-Host " [安全预警] UWP 依赖完整性测试发现 $($conflictItems.Count) 处严重依赖冲突！" -ForegroundColor Red
-    Write-Host " 以下组件存在于您的待删除黑名单中，但被您选择保留的应用强行依赖：" -ForegroundColor Yellow
-    Write-Host "==================================================================" -ForegroundColor Red
-
+    Write-Host "`n   --------------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "   [安全审计] UWP 依赖测试发现 $($conflictItems.Count) 处潜在风险组件:" -ForegroundColor Yellow
     foreach ($item in $conflictItems) {
-        Write-Host " [冲突组件] $($item.App.DisplayName)" -ForegroundColor Yellow
-        Write-Host "    └─ 强依赖于它的保留组件: $($item.RequiredBy)" -ForegroundColor DarkGray
+        Write-Host "    * 冲突组件: $($item.App.DisplayName) (依赖方: $($item.RequiredBy))" -ForegroundColor DarkGray
     }
+    Write-Host "   --------------------------------------------------------------" -ForegroundColor Yellow
 
-    Write-Host "------------------------------------------------------------------" -ForegroundColor Cyan
-    Write-Host " 请选择对异常冲突组件的处理策略:" -ForegroundColor Cyan
-    Write-Host " [1] 智能保护 (推荐: 自动保留这 $($conflictItems.Count) 个冲突包，仅删除其余无害应用，确保系统稳定)" -ForegroundColor Green
-    Write-Host " [2] 强行粉碎 (高危: 忽略测试警告，强行物理抹杀所有待删包，依赖缺失的应用可能闪退)" -ForegroundColor Red
-    Write-Host " [3] 终止构建 (安全: 丢弃当前镜像修改并退出，以便您重新调整 Appslist.txt)" -ForegroundColor DarkYellow
-    Write-Host "------------------------------------------------------------------" -ForegroundColor Cyan
-
-    $choice = Read-Host "请输入对应选项 [1, 2 或 3] (直接回车默认推荐 1)"
-
-    if ($choice -eq "2") {
-        Write-Host ">>> [警告] 用户选择强行粉碎模式，将移除包括冲突项在内的所有指定包..." -ForegroundColor Red
-        foreach ($item in $conflictItems) {
-            $finalDeleteList.Add($item.App)
+    switch ($conflictPolicy) {
+        "1" {
+            Write-Host "   >>> [自动执行前置策略: 全部删除] 忽略警告，强行移除所有冲突包..." -ForegroundColor Red
+            foreach ($item in $conflictItems) {
+                $finalDeleteList.Add($item.App)
+            }
+            foreach ($item in $safeDeleteList) {
+                $finalDeleteList.Add($item)
+            }
         }
-        foreach ($item in $safeDeleteList) {
-            $finalDeleteList.Add($item)
+        "3" {
+            Write-Host "`n   >>> [执行前置策略: 手动选择] 正在逐项确认冲突组件处置方案:" -ForegroundColor Yellow
+            $manualIdx = 0
+            foreach ($item in $conflictItems) {
+                $manualIdx++
+                Write-Host "`n   [$manualIdx/$($conflictItems.Count)] 待裁决组件: $($item.App.DisplayName)" -ForegroundColor Cyan
+                Write-Host "      └─ 被依赖来源: $($item.RequiredBy)" -ForegroundColor DarkGray
+                $ans = Read-Host "      是否删除该组件？[Y: 强行删除 / N: 安全保留] (直接回车默认 N)"
+                if ($ans -eq "Y" -or $ans -eq "y") {
+                    Write-Host "      -> 标记为: [强行删除]" -ForegroundColor Red
+                    $finalDeleteList.Add($item.App)
+                } else {
+                    Write-Host "      -> 标记为: [安全保留]" -ForegroundColor Green
+                    $candidateAppsToPreserve.Add($item.App)
+                }
+            }
+            foreach ($item in $safeDeleteList) {
+                $finalDeleteList.Add($item)
+            }
         }
-    } elseif ($choice -eq "3") {
-        Write-Host "`n>>> [中止操作] 用户已终止流程。正在安全卸载挂载点并丢弃所有临时更改..." -ForegroundColor DarkYellow
-        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard
-        Stop-Transcript
-        Write-Host "[完成] 映像已安全重置，未产生损坏文件。请调整规则后重新运行。" -ForegroundColor Green
-        pause
-        exit
-    } else {
-        Write-Host ">>> [智能保护] 已自动将 $($conflictItems.Count) 个冲突包移入保护名单，继续精简其余应用。" -ForegroundColor Green
-        foreach ($item in $safeDeleteList) {
-            $finalDeleteList.Add($item)
+        default {
+            Write-Host "   >>> [自动执行前置策略: 不删除] 自动保护全部冲突包，继续移除其余无害应用。" -ForegroundColor Green
+            foreach ($item in $conflictItems) {
+                $candidateAppsToPreserve.Add($item.App)
+            }
+            foreach ($item in $safeDeleteList) {
+                $finalDeleteList.Add($item)
+            }
         }
     }
 } else {
