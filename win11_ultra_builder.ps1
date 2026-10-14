@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-13 08:17:43 UTC
+#  生成时间: 2026-10-14 01:05:33 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -377,7 +377,7 @@ Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 4/11] UWP 应用与可选功能包精简 (src/03-RemovePackages.ps1)
-#  [重构加固]：动态语言感知 + 属性页 COM 架构保护 + 生产力组件保留
+#  [重构加固]：动态语言感知 + 基于 Appslist.txt 黑名单过滤 + 属性页 COM 架构保护
 # ==============================================================================
 
 # ----------------- 0. 动态环境感知与主语言探测 (彻底杜绝外语 ISO 报废) -----------------
@@ -390,21 +390,43 @@ if ([string]::IsNullOrWhiteSpace($defaultLang)) {
 }
 Write-Host "   [母盘语言检测] 锁定系统原生核心语言为: $defaultLang" -ForegroundColor Green
 
-# ----------------- 1. UWP 卸载 + 定向物理粉碎 -----------------
-# 核心基础白名单（绝不能删除的底层基础框架与高频终端环境）
-$preservedPackages = @(
-    "*VCLibs*",
-    "*UI.Xaml*",
-    "*NET.Native*",
-    "*Client.CBS*",
-    "*ShellExperience*",
-    "*AccountsControl*",
-    "*CloudExperienceHost*",
-    "*BioEnrollment*",
-    "*WindowsTerminal*",        # 保留终端：彻底杜绝右键“在终端中打开”报找不到应用
-    "*DesktopAppInstaller*"     # 保留应用安装程序：保留 Winget 与离线 MSIX/APPX 安装能力
+# ----------------- 1. 加载 Appslist.txt 黑名单规则 -----------------
+# 自动探测 Appslist.txt 路径 (支持存放在脚本目录、项目根目录或当前工作目录)
+$appsListCandidates = @(
+    (Join-Path $scriptDir "Appslist.txt"),
+    (Join-Path (Split-Path -Parent $scriptDir) "Appslist.txt"),
+    (Join-Path (Get-Location) "Appslist.txt")
 )
 
+$appsListPath = $null
+foreach ($path in $appsListCandidates) {
+    if (Test-Path -LiteralPath $path) {
+        $appsListPath = $path
+        break
+    }
+}
+
+$blacklistPatterns = New-Object System.Collections.Generic.List[string]
+
+if ($appsListPath) {
+    Write-Host "   [黑名单加载] 正在读取黑名单配置: $appsListPath" -ForegroundColor Green
+    Get-Content -LiteralPath $appsListPath -Encoding UTF8 | ForEach-Object {
+        $line = $_.Trim()
+        # 跳过整行注释和空行
+        if (-not [string]::IsNullOrWhiteSpace($line) -and -not $line.StartsWith("#")) {
+            # 剥离行尾内联注释 (如: Clipchamp.Clipchamp # Video editor...)
+            $appId = ($line -split '#')[0].Trim()
+            if (-not [string]::IsNullOrWhiteSpace($appId)) {
+                $blacklistPatterns.Add("*$appId*")
+            }
+        }
+    }
+    Write-Host "   [黑名单加载] 成功加载 $($blacklistPatterns.Count) 条待卸载应用规则。" -ForegroundColor DarkGray
+} else {
+    Write-Host "   [警告] 未找到 Appslist.txt 文件！跳过 UWP 黑名单删除流程。" -ForegroundColor Yellow
+}
+
+# ----------------- 2. UWP 黑名单卸载 + 定向物理粉碎 -----------------
 $appxPackages = Get-AppxProvisionedPackage -Path $scratchDir
 $totalAppx = $appxPackages.Count
 $currentAppx = 0
@@ -412,29 +434,31 @@ $deletedAppxList = New-Object System.Collections.Generic.List[string]
 
 foreach ($app in $appxPackages) {
     $currentAppx++
-    $shouldKeep = $false
-    foreach ($pattern in $preservedPackages) {
+    $shouldDelete = $false
+
+    # 在黑名单规则中匹配
+    foreach ($pattern in $blacklistPatterns) {
         if ($app.PackageName -like $pattern -or $app.DisplayName -like $pattern) {
-            $shouldKeep = $true
+            $shouldDelete = $true
             break
         }
     }
 
     $pct = [math]::Round(($currentAppx / [math]::Max(1, $totalAppx)) * 100)
-    Write-Progress -Activity "正在清理 UWP 预装应用" -Status "[$currentAppx/$totalAppx] 正在处理: $($app.DisplayName)" -PercentComplete $pct
+    Write-Progress -Activity "正在按黑名单清理 UWP 预装应用" -Status "[$currentAppx/$totalAppx] 正在比对: $($app.DisplayName)" -PercentComplete $pct
 
-    if ($shouldKeep) {
-        Write-Host "   [$currentAppx/$totalAppx] [保留核心] $($app.DisplayName)" -ForegroundColor DarkGray
+    if (-not $shouldDelete) {
+        Write-Host "   [$currentAppx/$totalAppx] [保留应用] $($app.DisplayName)" -ForegroundColor DarkGray
         continue
     }
 
-    Write-Host "   [$currentAppx/$totalAppx] [删除应用] $($app.PackageName)" -ForegroundColor Yellow
+    Write-Host "   [$currentAppx/$totalAppx] [黑名单命中·删除] $($app.PackageName)" -ForegroundColor Yellow
     & dism.exe /English /Image:$scratchDir /Remove-ProvisionedAppxPackage "/PackageName:$($app.PackageName)" 2>$null | Out-Null
     $deletedAppxList.Add($app.PackageName)
 }
-Write-Progress -Activity "正在清理 UWP 预装应用" -Completed
+Write-Progress -Activity "正在按黑名单清理 UWP 预装应用" -Completed
 
-# 精准定向物理粉碎已卸载的应用实体 (绝不污染父目录 SDDL，彻底释放磁盘空间)
+# 精准定向物理粉碎已卸载的应用实体 (绝不破坏父目录 SDDL，彻底释放磁盘空间)
 $winAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
 if (Test-Path -LiteralPath $winAppsDir) {
     Write-Host "   正在执行 WindowsApps 废弃应用实体定向物理粉碎..." -ForegroundColor DarkGray
@@ -450,19 +474,17 @@ if (Test-Path -LiteralPath $winAppsDir) {
     & icacls.exe "$winAppsDir" /grant "*S-1-15-2-1:(OI)(CI)RX" /C /Q 2>$null | Out-Null
     & icacls.exe "$winAppsDir" /grant "*S-1-5-32-545:(OI)(CI)RX" /C /Q 2>$null | Out-Null
 }
-Write-Host "[完成] UWP 应用清理与实体定向粉碎完毕。" -ForegroundColor Green
+Write-Host "[完成] UWP 黑名单应用清理与实体定向粉碎完毕。" -ForegroundColor Green
 
-# ----------------- 2. 功能包清理 (严格保留 Search-Engine-Client 以固化属性页) -----------------
+# ----------------- 3. 功能包清理 (严格保留 Search-Engine-Client 以固化属性页) -----------------
 Write-Host "`n[步骤 5/11] 正在检索系统组件包并执行深度可选功能精简..." -ForegroundColor Cyan
 
 $installedPackages = & dism.exe /English /Image:$scratchDir /Get-Packages /Format:Table
 $pkgLines = $installedPackages -split '\r?\n' | Select-Object -Skip 1
 
 # 基础需要剥离的无用功能包列表
-# 【底层架构警示】：绝对不能删除 Microsoft-Windows-Search-Engine-Client-Package，
-#  否则盘符属性页底部的索引复选框和文件高级属性 COM 结构会彻底暴毙，导致右键属性无反应！
 $basePackagesToRemove = @(
-    "Microsoft-Windows-InternetExplorer-Optional-Package~", # IE 基础可选组件彻底剔除
+    "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
@@ -498,7 +520,6 @@ foreach ($line in $pkgLines) {
         if ($isLangRelated) {
             $isCurrentLang = ($pkgId -like "*$defaultLang*")
             if ($defaultLang -match "^zh-") {
-                # 中文环境下，额外保留简体中文 Hans 标识
                 if ($pkgId -match "zh-CN|zh-cn|Hans") { $isCurrentLang = $true }
             }
             if (-not $isCurrentLang) {
@@ -507,7 +528,7 @@ foreach ($line in $pkgLines) {
         }
     }
 
-    # 冗余非主语言输入法包判定 (仅在当前环境非对应语系时剔除)
+    # 冗余非主语言输入法包判定
     if (-not $shouldDelete) {
         if ($defaultLang -ne "ja-JP" -and $pkgId -match "IME-ja-jp") { $shouldDelete = $true }
         if ($defaultLang -ne "ko-KR" -and $pkgId -match "IME-ko-kr") { $shouldDelete = $true }
@@ -729,7 +750,7 @@ if (Test-Path -LiteralPath $sys32Notepad) {
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表原生 Unicode 导入引擎 (src/06-RegistryTweaks.ps1)
-#  [终极重构加固]：彻底根治打开方式“更多应用”死锁 + 唤醒新建文本文档 + IFEO 内核绝杀 SearchHost
+#  [终极重构加固]：彻底根治打开方式“更多应用”死锁 + IFEO 内核绝杀 SearchHost
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -849,72 +870,7 @@ if ($trimMode -eq "2") {
 }
 
 # ==============================================================================
-#  D. 核心修复：新建文本文档 100% 唤醒机制 (规范化 Win11 字符串间接资源与双 ProgID)
-# ==============================================================================
-$null = $reg.AppendLine(@"
-; 1. 扩展名 .txt 基础关联 (主指 txtfilelegacy)
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt]
-@="txtfilelegacy"
-"Content Type"="text/plain"
-"PerceivedType"="text"
-
-; 【关键修复】：必须写入间接字符串资源 @%SystemRoot%\system32\notepad.exe,-470，否则 Win11 判定名称为空直接隐藏
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\ShellNew]
-"ItemName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,37,00,30,00,00,00
-"NullFile"=""
-
-; 清空可能干扰的 OpenWithProgids
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\.txt\OpenWithProgids]
-"txtfilelegacy"=hex(0):
-"txtfile"=hex(0):
-
-; 2. Win11 核心实体 txtfilelegacy 深度补全
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy]
-@="文本文档"
-"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\DefaultIcon]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\shell]
-@="open"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfilelegacy\shell\open\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-
-; 3. 经典 txtfile 回退兼容实体
-[-HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile]
-@="文本文档"
-"FriendlyTypeName"=hex(2):40,00,25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,2c,00,2d,00,34,00,36,00,39,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\DefaultIcon]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,32,00,5c,00,69,00,6d,00,61,00,67,00,65,00,72,00,65,00,73,00,2e,00,64,00,6c,00,6c,00,2c,00,2d,00,31,00,30,00,32,00,00,00
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell]
-@="open"
-
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Classes\txtfile\shell\open\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,20,00,22,00,25,00,31,00,22,00,00,00
-
-; 4. 彻底修正 App Paths，强制直指 System32 经典记事本
-[HKEY_LOCAL_MACHINE\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,6e,00,6f,00,74,00,65,00,70,00,61,00,64,00,2e,00,65,00,78,00,65,00,00,00
-
-; 5. 抹除 Default 用户中 UWP 留下的损坏关联
-[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
-[HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids]
-"txtfilelegacy"=hex(0):
-"txtfile"=hex(0):
-
-[-HKEY_LOCAL_MACHINE\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\UserChoice]
-"@)
-
-# ==============================================================================
-#  E. 终极修复：彻底根治“打开方式 -> 更多应用”点击无反应、无法展开的死锁
+#  D. 终极修复：彻底根治“打开方式 -> 更多应用”点击无反应、无法展开的死锁
 # ==============================================================================
 $null = $reg.AppendLine(@"
 ; 1. 【核心救砖策略】：全域禁用 OpenWith 对 Microsoft Store 的网络/组件依赖探测
@@ -948,7 +904,7 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  F. 系统基础优化与隐私遥测剥离
+#  E. 系统基础优化与隐私遥测剥离
 # ==============================================================================
 $null = $reg.AppendLine(@"
 [HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\DataCollection]
@@ -996,7 +952,7 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  G. 硬件检测全量绕过与 OOBE 免联网
+#  F. 硬件检测全量绕过与 OOBE 免联网
 # ==============================================================================
 $labConfigKeys = @("BypassCPUCheck", "BypassRAMCheck", "BypassSecureBootCheck", "BypassStorageCheck", "BypassTPMCheck", "BypassDiskCheck")
 $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSYSTEM\Setup\LabConfig]")
@@ -1017,7 +973,7 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  H. 经典 Windows 照片查看器关联激活
+#  G. 经典 Windows 照片查看器关联激活
 # ==============================================================================
 $photoExts = @(".jpg", ".jpeg", ".png", ".bmp", ".gif", ".ico", ".tiff", ".tif", ".jfif")
 $null = $reg.AppendLine("[HKEY_LOCAL_MACHINE\zSOFTWARE\RegisteredApplications]")
@@ -1039,12 +995,7 @@ Write-Host "   正在通过 Windows 原生注册表引擎导入 Unicode 策略�
 & reg.exe import "$tempRegFile" 2>&1 | Out-Null
 Remove-Item -LiteralPath $tempRegFile -Force -ErrorAction SilentlyContinue
 
-# 4. 彻底物理粉碎 Explorer 僵尸缓存 (强制唤醒文本文档与新建菜单项)
-Write-Host "   正在粉碎 Explorer 新建菜单僵尸缓存 (强制刷新菜单索引)..." -ForegroundColor DarkGray
-cmd.exe /c "reg delete `"HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
-cmd.exe /c "reg delete `"HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew`" /f 2>nul" | Out-Null
-
-# 5. 安全卸载配置单元 (防句柄残留死锁)
+# 4. 安全卸载配置单元 (防句柄残留死锁)
 Write-Host "   正在安全卸载配置单元 (GC 垃圾回收防锁死机制推进)..." -ForegroundColor Green
 [System.GC]::Collect()
 [System.GC]::WaitForPendingFinalizers()
@@ -1053,7 +1004,7 @@ Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
 
-Write-Host "[完成] 离线注册表加固优化全部完毕 (打开方式“更多应用”死锁已排除，新建文本文档已全面激活)。" -ForegroundColor Green
+Write-Host "[完成] 离线注册表加固优化全部完毕 (记事本保持原生系统配置，打开方式“更多应用”死锁已排除)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/06-RegistryTweaks.ps1
 
