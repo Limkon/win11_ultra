@@ -1,6 +1,6 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表原生 Unicode 导入引擎 (src/06-RegistryTweaks.ps1)
-#  [架构优化]：恢复官方打开方式契约 + 拔除 NoUseStoreOpenWith + 纯策略禁用搜索
+#  [架构重构]：官方原生 COM 调度 + 肃清 NoUseStoreOpenWith + 纯策略安全禁用
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -61,7 +61,7 @@ $null = $reg.AppendLine(@"
 "@)
 
 # ==============================================================================
-#  B. 纯策略安全禁用 Windows Search / Cortana (彻底移除危险的 IFEO 劫持)
+#  B. 纯策略安全禁用 Windows Search / Cortana (安全无害，杜绝 IFEO 劫持)
 # ==============================================================================
 $null = $reg.AppendLine(@"
 ; 清除任何潜在的 IFEO 进程劫持残留
@@ -259,4 +259,4 @@ Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
 
-Write-Host "[完成] 离线注册表加固优化全部完毕 (打开方式官方标准契约已还原，有害策略已彻底拔除)。" -ForegroundColor Green
+Write-Host "[完成] 离线注册表加固优化全部完毕 (官方标准契约已固化，死锁隐患全部扫除)。" -ForegroundColor Green
