@@ -1,11 +1,11 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 注册表原生优化 (src/06-RegistryTweaks.ps1)
-#  [100% 像素级对齐 nano11 源码]：零私货、零篡改 Shell，彻底恢复打开方式
+#  [100% 像素级对齐  源码]：零私货、零篡改 Shell，彻底恢复打开方式
 # ==============================================================================
 
-Write-Host "`n[步骤 8/11] 正在挂载配置单元并 100% 注入 nano11 原版注册表配置..." -ForegroundColor Cyan
+Write-Host "`n[步骤 8/11] 正在挂载配置单元并 100% 注入  原版注册表配置..." -ForegroundColor Cyan
 
-# 1. 挂载注册表配置单元 (nano11 原版 5 个 Hive)
+# 1. 挂载注册表配置单元 ( 原版 5 个 Hive)
 $defaultPath    = Join-Path $scratchDir "Windows\System32\config\default"
 $ntuserPath     = Join-Path $scratchDir "Users\Default\ntuser.dat"
 $softwarePath   = Join-Path $scratchDir "Windows\System32\config\SOFTWARE"
@@ -21,7 +21,7 @@ attrib.exe -R -S -H "$systemPath" 2>$null
 & reg.exe load HKLM\zSOFTWARE "$softwarePath" 2>$null | Out-Null
 & reg.exe load HKLM\zSYSTEM "$systemPath" 2>$null | Out-Null
 
-# 2. 绕过硬件检测全量参数 (nano11 原版)
+# 2. 绕过硬件检测全量参数 ( 原版)
 Write-Host "   -> 写入硬件需求全量绕过配置..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache" /v SV1 /t REG_DWORD /d 0 /f | Out-Null
 & reg.exe add "HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache" /v SV2 /t REG_DWORD /d 0 /f | Out-Null
@@ -34,7 +34,7 @@ Write-Host "   -> 写入硬件需求全量绕过配置..." -ForegroundColor Dark
 & reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSYSTEM\Setup\MoSetup" /v AllowUpgradesWithUnsupportedTPMOrCPU /t REG_DWORD /d 1 /f | Out-Null
 
-# 3. 禁用预装推广与流氓广告通道 (nano11 原版)
+# 3. 禁用预装推广与流氓广告通道 ( 原版)
 Write-Host "   -> 禁用推广应用与预装推送..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v OemPreInstalledAppsEnabled /t REG_DWORD /d 0 /f | Out-Null
 & reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v PreInstalledAppsEnabled /t REG_DWORD /d 0 /f | Out-Null
@@ -60,22 +60,22 @@ Write-Host "   -> 禁用推广应用与预装推送..." -ForegroundColor DarkGra
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableConsumerAccountStateContent /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableCloudOptimizedContent /t REG_DWORD /d 1 /f | Out-Null
 
-# 4. 开启 OOBE 本地账户跳过支持 (nano11 原版)
+# 4. 开启 OOBE 本地账户跳过支持 ( 原版)
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f | Out-Null
 
-# 5. 禁用保留存储与 BitLocker 自动设备加密 (nano11 原版)
+# 5. 禁用保留存储与 BitLocker 自动设备加密 ( 原版)
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager" /v ShippedWithReserves /t REG_DWORD /d 0 /f | Out-Null
 & reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f | Out-Null
 
-# 6. 禁用 Chat 图标与任务栏组件 (nano11 原版)
+# 6. 禁用 Chat 图标与任务栏组件 ( 原版)
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat" /v ChatIcon /t REG_DWORD /d 3 /f | Out-Null
 & reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarMn /t REG_DWORD /d 0 /f | Out-Null
 
-# 7. 清理 Edge 遗留注册表 (nano11 原版)
+# 7. 清理 Edge 遗留注册表 ( 原版)
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>$null | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>$null | Out-Null
 
-# 8. 禁用 OneDrive 同步与遥测跟踪 (nano11 原版)
+# 8. 禁用 OneDrive 同步与遥测跟踪 ( 原版)
 Write-Host "   -> 禁用遥测与隐私搜集..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v DisableFileSyncNGSC /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" /v Enabled /t REG_DWORD /d 0 /f | Out-Null
@@ -89,7 +89,7 @@ Write-Host "   -> 禁用遥测与隐私搜集..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f | Out-Null
 & reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice" /v Start /t REG_DWORD /d 4 /f | Out-Null
 
-# 9. 阻止 DevHome、Outlook、Teams、Mail 自动安装 (nano11 原版)
+# 9. 阻止 DevHome、Outlook、Teams、Mail 自动安装 ( 原版)
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate" /v workCompleted /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate" /v workCompleted /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate" /f 2>$null | Out-Null
@@ -100,7 +100,7 @@ Write-Host "   -> 禁用遥测与隐私搜集..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Teams" /v DisableInstallation /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail" /v PreventRun /t REG_DWORD /d 1 /f | Out-Null
 
-# 10. 删除 nano11 官方指定的 5 个计划任务定义文件 (nano11 原版)
+# 10. 删除  官方指定的 5 个计划任务定义文件 ( 原版)
 Write-Host "   -> 删除遥测计划任务定义..." -ForegroundColor DarkGray
 $tasksPath = Join-Path $scratchDir "Windows\System32\Tasks"
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" -Force -ErrorAction SilentlyContinue
@@ -109,7 +109,7 @@ Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\ProgramDa
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
 
-# 11. 禁用 Windows Update 自动更新 (nano11 原版)
+# 11. 禁用 Windows Update 自动更新 ( 原版)
 Write-Host "   -> 关闭 Windows 自动更新通道..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" /v StopWUPostOOBE1 /t REG_SZ /d "net stop wuauserv" /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" /v StopWUPostOOBE2 /t REG_SZ /d "sc stop wuauserv" /f | Out-Null
@@ -128,7 +128,7 @@ Write-Host "   -> 关闭 Windows 自动更新通道..." -ForegroundColor DarkGra
 & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /f 2>$null | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f | Out-Null
 
-# 12. 禁用 Windows Defender 服务 (nano11 原版方式：安全停用服务，隐藏设置页，绝不损坏文件)
+# 12. 禁用 Windows Defender 服务 ( 原版方式：安全停用服务，隐藏设置页，绝不损坏文件)
 Write-Host "   -> 停用 Windows Defender 服务栈..." -ForegroundColor DarkGray
 $defenderServices = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense")
 foreach ($svc in $defenderServices) {
@@ -142,7 +142,7 @@ Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
 Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 
-# 13. 独立重载 SYSTEM 彻底物理删除指定无用服务 (100% 对齐 nano11 最终服务删除)
+# 13. 独立重载 SYSTEM 彻底物理删除指定无用服务 (100% 对齐  最终服务删除)
 Write-Host "   -> 彻底移除冗余系统服务..." -ForegroundColor DarkGray
 & reg.exe load HKLM\zSYSTEM "$systemPath" 2>$null | Out-Null
 
@@ -172,4 +172,4 @@ foreach ($service in $servicesToRemove) {
 
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 
-Write-Host "[完成] 注册表优化完成 (100% 遵照 nano11 官方纯净标准，系统原生 Shell 完美无瑕)。" -ForegroundColor Green
+Write-Host "[完成] 注册表优化完成 (100% 遵照  官方纯净标准，系统原生 Shell 完美无瑕)。" -ForegroundColor Green
