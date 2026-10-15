@@ -71,15 +71,6 @@ if (-not (Test-Path "$scratchDir\Windows\System32")) {
 }
 Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
 
-# 挂载状态校验
-if (-not (Test-Path "$scratchDir\Windows\System32")) {
-    Write-Host "[严重错误] 映像挂载失败！System32 目录不存在，终止运行。" -ForegroundColor Red
-    Stop-Transcript
-    pause
-    exit
-}
-Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
-
 Write-Host "`n   -> 正在接管目标核心目录物理权限 (防止静默删除失败)..." -ForegroundColor Cyan
 
 $foldersToUnlock = @( 
