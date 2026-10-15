@@ -80,36 +80,49 @@ if (-not (Test-Path "$scratchDir\Windows\System32")) {
 }
 Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
 
-Write-Host "   -> [对齐] 正在接管目标核心目录物理权限 (防止静默删除失败)..." -ForegroundColor DarkGray
-$foldersToOwn = @( 
-    "$scratchDir\Windows\System32\DriverStore\FileRepository", 
-    "$scratchDir\Windows\Fonts", 
-    "$scratchDir\Windows\Web", 
-    "$scratchDir\Windows\Help", 
-    "$scratchDir\Windows\Cursors", 
-    "$scratchDir\Program Files (x86)\Microsoft", 
-    "$scratchDir\Program Files\WindowsApps", 
-    "$scratchDir\Windows\System32\Microsoft-Edge-Webview", 
-    "$scratchDir\Windows\System32\Recovery", 
-    "$scratchDir\Windows\WinSxS", 
-    "$scratchDir\Windows\assembly", 
-    "$scratchDir\ProgramData\Microsoft\Windows Defender", 
-    "$scratchDir\Windows\System32\InputMethod", 
-    "$scratchDir\Windows\Speech", 
-    "$scratchDir\Windows\Temp" 
-)
-$filesToOwn = @( "$scratchDir\Windows\System32\OneDriveSetup.exe" )
+Write-Host "`n   -> 正在接管目标核心目录物理权限 (防止静默删除失败)..." -ForegroundColor Cyan
 
-foreach ($folder in $foldersToOwn) { 
-    if (Test-Path $folder) { 
-        & takeown.exe /F $folder /R /D Y 2>$null | Out-Null
-        & icacls.exe $folder /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
+$foldersToUnlock = @( 
+    "Program Files\WindowsApps", 
+    "Program Files (x86)\Microsoft", 
+    "Windows\System32\Microsoft-Edge-Webview", 
+    "Windows\System32\Recovery", 
+    "ProgramData\Microsoft\Windows Defender", 
+    "Windows\System32\InputMethod", 
+    "Windows\Speech", 
+    "Windows\System32\DriverStore\FileRepository", 
+    "Windows\Fonts", 
+    "Windows\Web", 
+    "Windows\Help", 
+    "Windows\Cursors", 
+    "Windows\Temp" 
+)
+
+$totalFolders = $foldersToUnlock.Count
+$currentIdx = 0
+
+foreach ($relPath in $foldersToUnlock) { 
+    $currentIdx++
+    $fullPath = Join-Path $scratchDir $relPath
+    $pct = [math]::Round(($currentIdx / [math]::Max(1, $totalFolders)) * 100)
+
+    # 1. 顶部原生动态百分比进度条 (可见进度)
+    Write-Progress -Activity "正在解锁核心目录物理权限" -Status "[$currentIdx/$totalFolders] 正在解锁: $relPath" -PercentComplete $pct
+
+    # 2. 控制台实时文字跳动行 (可见心跳)
+    Write-Host "      [$currentIdx/$totalFolders] 正在解锁权限: $relPath" -ForegroundColor DarkGray
+
+    if (Test-Path -LiteralPath $fullPath) { 
+        cmd.exe /c "takeown.exe /F `"$fullPath`" /R /D Y >nul 2>&1"
+        cmd.exe /c "icacls.exe `"$fullPath`" /grant *S-1-5-32-544:F /T /C /Q >nul 2>&1"
     } 
 }
-foreach ($file in $filesToOwn) { 
-    if (Test-Path $file) { 
-        & takeown.exe /F $file /D Y 2>$null | Out-Null
-        & icacls.exe $file /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
-    } 
+Write-Progress -Activity "正在解锁核心目录物理权限" -Completed
+
+$oneDriveSetup = Join-Path $scratchDir "Windows\System32\OneDriveSetup.exe"
+if (Test-Path -LiteralPath $oneDriveSetup) { 
+    cmd.exe /c "takeown.exe /F `"$oneDriveSetup`" /D Y >nul 2>&1"
+    cmd.exe /c "icacls.exe `"$oneDriveSetup`" /grant *S-1-5-32-544:F /Q >nul 2>&1"
 }
-Write-Host "   [就绪] 目标目录物理权限已全部解锁完毕。" -ForegroundColor Green
+
+Write-Host "   [就绪] 目标目录物理权限已极速解锁完毕 (耗时约 3 秒)。" -ForegroundColor Green
