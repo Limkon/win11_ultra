@@ -412,22 +412,10 @@ $finalXml = $finalXml.Replace('__AUTO_LOGON__', $autoLogonXmlFragment)
 $finalXml = $finalXml.Replace('__HIDE_LOCAL_ACCOUNT_SCREEN__', $hideLocalAccountScreenValue)
 $finalXml = $finalXml.Replace('__DEPLOY_MODE_TEXT__', $modeText)
 
-# ----------------- 4. 多通道合规注入 -----------------
-$sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
-$pantherDir = Join-Path $scratchDir "Windows\Panther"
-if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
-if (-not (Test-Path -LiteralPath $pantherDir)) { New-Item -ItemType Directory -Path $pantherDir -Force | Out-Null }
-
+# ----------------- 4. 纯净 ISO 根目录注入 (绝不污染 install.wim 内部) -----------------
 $utf8Encoding = [System.Text.Encoding]::UTF8
 
-# Sysprep 核心规范通道
-[System.IO.File]::WriteAllText((Join-Path $sysprepDir "unattend.xml"), $finalXml, $utf8Encoding)
-[System.IO.File]::WriteAllText((Join-Path $sysprepDir "autounattend.xml"), $finalXml, $utf8Encoding)
-
-# Panther 初始化通道
-[System.IO.File]::WriteAllText((Join-Path $pantherDir "unattend.xml"), $finalXml, $utf8Encoding)
-
-# ISO 可移动介质根目录自启动通道
+# 只写入 ISO 安装介质根目录，让 Windows 安装程序自动抓取，镜像内部 100% 保持纯净零污染
 [System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $finalXml, $utf8Encoding)
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (全自动运行，无需人工干预)。" -ForegroundColor Green
+Write-Host "[完成] 无人值守应答文件已写入 ISO 根目录 (install.wim 内部保持 100% 纯净)。" -ForegroundColor Green
