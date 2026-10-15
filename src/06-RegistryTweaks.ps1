@@ -163,8 +163,6 @@ $servicesToRemove = @(
     'WaaSMedicSvc' 
 )
 
-}
-
 foreach ($service in $servicesToRemove) { 
     & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$service" /f 2>$null | Out-Null 
 }
