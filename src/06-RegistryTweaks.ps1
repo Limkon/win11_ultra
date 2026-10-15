@@ -162,8 +162,7 @@ $servicesToRemove = @(
     'UsoSvc', 
     'WaaSMedicSvc' 
 )
-if ($trimMode -eq "2") {
-    $servicesToRemove += 'WSearch'
+
 }
 
 foreach ($service in $servicesToRemove) { 
