@@ -70,3 +70,41 @@ if (-not (Test-Path "$scratchDir\Windows\System32")) {
     exit
 }
 Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
+
+# ------------------------------------------------------------------------------
+# 【100% 对齐 nano11 核心防死锁基石】：挂载后立刻预先接管目标目录的最高物理控制权
+# 绝不让后续的 WindowsApps 和组件删除因 TrustedInstaller 权限不足而“静默失败产生幽灵桩”
+# ------------------------------------------------------------------------------
+Write-Host "   -> [对齐 nano11] 正在接管目标核心目录物理权限 (防止静默删除失败)..." -ForegroundColor DarkGray
+$foldersToOwn = @( 
+    "$scratchDir\Windows\System32\DriverStore\FileRepository", 
+    "$scratchDir\Windows\Fonts", 
+    "$scratchDir\Windows\Web", 
+    "$scratchDir\Windows\Help", 
+    "$scratchDir\Windows\Cursors", 
+    "$scratchDir\Program Files (x86)\Microsoft", 
+    "$scratchDir\Program Files\WindowsApps", 
+    "$scratchDir\Windows\System32\Microsoft-Edge-Webview", 
+    "$scratchDir\Windows\System32\Recovery", 
+    "$scratchDir\Windows\WinSxS", 
+    "$scratchDir\Windows\assembly", 
+    "$scratchDir\ProgramData\Microsoft\Windows Defender", 
+    "$scratchDir\Windows\System32\InputMethod", 
+    "$scratchDir\Windows\Speech", 
+    "$scratchDir\Windows\Temp" 
+)
+$filesToOwn = @( "$scratchDir\Windows\System32\OneDriveSetup.exe" )
+
+foreach ($folder in $foldersToOwn) { 
+    if (Test-Path $folder) { 
+        & takeown.exe /F $folder /R /D Y 2>$null | Out-Null
+        & icacls.exe $folder /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
+    } 
+}
+foreach ($file in $filesToOwn) { 
+    if (Test-Path $file) { 
+        & takeown.exe /F $file /D Y 2>$null | Out-Null
+        & icacls.exe $file /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
+    } 
+}
+Write-Host "   [就绪] 目标目录物理权限已全部解锁完毕。" -ForegroundColor Green
