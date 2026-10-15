@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-15 03:46:49 UTC
+#  生成时间: 2026-10-15 04:46:48 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -495,11 +495,16 @@ if (-not (Test-Path "$scratchDir\Windows\System32")) {
 }
 Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
 
-# ------------------------------------------------------------------------------
-# 【100% 对齐 nano11 核心防死锁基石】：挂载后立刻预先接管目标目录的最高物理控制权
-# 绝不让后续的 WindowsApps 和组件删除因 TrustedInstaller 权限不足而“静默失败产生幽灵桩”
-# ------------------------------------------------------------------------------
-Write-Host "   -> [对齐 nano11] 正在接管目标核心目录物理权限 (防止静默删除失败)..." -ForegroundColor DarkGray
+# 挂载状态校验
+if (-not (Test-Path "$scratchDir\Windows\System32")) {
+    Write-Host "[严重错误] 映像挂载失败！System32 目录不存在，终止运行。" -ForegroundColor Red
+    Stop-Transcript
+    pause
+    exit
+}
+Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
+
+Write-Host "   -> [对齐] 正在接管目标核心目录物理权限 (防止静默删除失败)..." -ForegroundColor DarkGray
 $foldersToOwn = @( 
     "$scratchDir\Windows\System32\DriverStore\FileRepository", 
     "$scratchDir\Windows\Fonts", 
