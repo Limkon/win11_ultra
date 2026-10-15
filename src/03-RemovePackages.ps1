@@ -101,9 +101,6 @@ if ($totalApps -gt 0) {
                 Remove-Item -LiteralPath $folderPath -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
-        # 【工业级安全防线】：恢复 WindowsApps 必要的继承访问权限，确保剩余现代应用不闪退
-        & icacls.exe "$winAppsDir" /grant "*S-1-15-2-1:(OI)(CI)RX" /C /Q 2>$null | Out-Null
-        & icacls.exe "$winAppsDir" /grant "*S-1-5-32-545:(OI)(CI)RX" /C /Q 2>$null | Out-Null
     }
 } else {
     Write-Host "   [提示] 未发现匹配规则的预装应用。" -ForegroundColor DarkGray
