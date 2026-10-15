@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-15 01:06:02 UTC
+#  生成时间: 2026-10-15 02:11:55 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -708,19 +708,24 @@ Write-Host "[完成] 系统可选功能包精炼完毕 (与 nano11 稳定基线�
 # >>> [分块代码引入] 文件来源: src/04-DriversFeatures.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 5/11] 驱动压榨与老旧特性停用 (src/04-DriversFeatures.ps1)
+#  win11 Builder - [模块 5/11] 驱动仓库深度精炼 (src/04-DriversFeatures.ps1)
+#  [100% 对齐 稳定基准]：安全精炼冗余驱动，绝不滥用 /Remove 破坏系统特性
 # ==============================================================================
 
-# ----------------- 1. 安全驱动仓库压榨 (两模式均执行) -----------------
-Write-Host "`n[步骤 6/11] 正在执行安全驱动压榨 (剔除打印机/调制解调器/传真驱动)..." -ForegroundColor Cyan
+Write-Host "`n[步骤 6/11] 正在执行安全驱动仓库压榨 (剔除无用驱动)..." -ForegroundColor Cyan
 $driverStorePath = Join-Path $scratchDir "Windows\System32\DriverStore\FileRepository"
 
-# 安全剔除模式列表 (保留显卡、芯片组、存储、声卡、网卡等核心驱动)
+# 对齐 官方驱动剔除规则 (严格保留显卡、芯片组、存储、声卡、网卡等核心驱动)
 $safeDriverPurgeList = @(
-    "prn*.inf_*",     # 冗余打印机驱动
+    "prn*.inf_*",     # 冗余打印机驱动 (原生规则)
+    "scan*.inf_*",    # 扫描仪驱动 (原生规则)
+    "mfd*.inf_*",     # 多功能设备驱动 (原生规则)
+    "wscsmd.inf_*",   # 智能卡读卡器驱动 (原生规则)
+    "tapdrv*.inf_*",  # 磁带机驱动 (原生规则)
+    "rdpbus.inf_*",   # 远程桌面总线驱动 (原生规则)
+    "tdibth.inf_*",   # 蓝牙 PAN 驱动 (原生规则)
     "mdm*.inf_*",     # 调制解调器驱动
     "fax*.inf_*",     # 传真驱动
-    "scancopy.inf_*", # 扫描仪复制驱动
     "flpydisk.inf_*", # 软驱驱动
     "brmf*.inf_*",    # Brother 打印机残留
     "hpq*.inf_*"      # HP 打印机残留
@@ -734,24 +739,8 @@ if (Test-Path $driverStorePath) {
         }
     }
 }
-Write-Host "[完成] 驱动仓库深度压榨完毕。" -ForegroundColor Green
 
-# ----------------- 2. 停用冗余老旧 Windows 特性 (两模式均执行) -----------------
-Write-Host "   正在停用并移除老旧 Windows 特性 (WorkFolders/Fax 等)..." -ForegroundColor DarkGray
-
-$featuresToDisable = @(
-    "WorkFolders-Client",                   # 工作文件夹
-    "Printing-Foundation-Features",         # 打印基础服务
-    "Printing-PrintToPDFServices-Features", # 打印到 PDF 架构
-    "FaxServicesClientPackage",             # 传真客户端
-    "MSRDC-Infrastructure"                  # 远程桌面旧版基础设施
-)
-
-foreach ($feat in $featuresToDisable) {
-    Write-Host "   [停用特性] $feat" -ForegroundColor DarkGray
-    & dism.exe /English /Image:$scratchDir /Disable-Feature "/FeatureName:$feat" /Remove /NoRestart 2>$null | Out-Null
-}
-Write-Host "[完成] 老旧特性剥离完毕。" -ForegroundColor Green
+Write-Host "[完成] 驱动仓库精简完毕 (特性层完整性 100% 保留，零破坏)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/04-DriversFeatures.ps1
 
@@ -760,13 +749,13 @@ Write-Host "[完成] 老旧特性剥离完毕。" -ForegroundColor Green
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 物理实体精简 (src/05-PhysicalNuke.ps1)
-#  [100% 像素级对齐 nano11 源码]：绝不误删系统核心组件
+#  [100% 像素级对齐  源码]：绝不误删系统核心组件
 # ==============================================================================
 
-Write-Host "`n[步骤 7/11] 正在同步 nano11 执行实体文件清理..." -ForegroundColor Cyan
+Write-Host "`n[步骤 7/11] 正在同步  执行实体文件清理..." -ForegroundColor Cyan
 $winDir = Join-Path $scratchDir "Windows"
 
-# 1. 移除 Edge 与 WebView (nano11 原生)
+# 1. 移除 Edge 与 WebView ()
 Write-Host "   -> 正在清理 Edge 与 WebView..." -ForegroundColor DarkGray
 Remove-Item -Path "$scratchDir\Program Files (x86)\Microsoft\Edge*" -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -780,37 +769,37 @@ if ($architecture -eq 'amd64') {
 }
 Remove-Item -Path "$scratchDir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force -ErrorAction SilentlyContinue
 
-# 2. 移除 WinRE 恢复环境并建立 nano11 空占位桩 (nano11 原生，防止安装报错)
+# 2. 移除 WinRE 恢复环境并建立  空占位桩 (，防止安装报错)
 Write-Host "   -> 正在清理 WinRE (生成占位空文件)..." -ForegroundColor DarkGray
 Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force -ErrorAction SilentlyContinue | Out-Null
 
-# 3. 移除 OneDrive 安装程序 (nano11 原生)
+# 3. 移除 OneDrive 安装程序 ()
 Write-Host "   -> 正在清理 OneDrive 安装包..." -ForegroundColor DarkGray
 Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
 
-# 4. 清理 Defender 病毒库定义缓存 (nano11 原生，不删驱动本体)
+# 4. 清理 Defender 病毒库定义缓存 (，不删驱动本体)
 Write-Host "   -> 正在清理 Defender 定义库更新残留..." -ForegroundColor DarkGray
 Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
 
-# 5. 清理语音 TTS 引擎 (nano11 原生)
+# 5. 清理语音 TTS 引擎 ()
 Write-Host "   -> 正在清理语音引擎 TTS..." -ForegroundColor DarkGray
 Remove-Item -Path (Join-Path $winDir "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
 
-# 6. 输入法清理：仅剔除繁体、日文、韩文 (nano11 原生)
+# 6. 输入法清理：仅剔除繁体、日文、韩文 ()
 Write-Host "   -> 正在清理繁体/日文/韩文输入法..." -ForegroundColor DarkGray
 Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHT" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\JPN" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force -ErrorAction SilentlyContinue
 
-# 7. 清理 Temp、Web 壁纸、Help 帮助、Cursors 光标 (nano11 原生)
+# 7. 清理 Temp、Web 壁纸、Help 帮助、Cursors 光标 ()
 Write-Host "   -> 正在清理临时文件、帮助文档与壁纸..." -ForegroundColor DarkGray
 Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path $winDir "Web") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path $winDir "Help") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path $winDir "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
 
-# 8. 字体库精炼 (nano11 原生保留中文字体与 Segoe 核心)
+# 8. 字体库精炼 (保留中文字体与 Segoe 核心)
 Write-Host "   -> 正在精炼字体库..." -ForegroundColor DarkGray
 $fontsPath = Join-Path $winDir "Fonts"
 if (Test-Path $fontsPath) { 
@@ -818,7 +807,7 @@ if (Test-Path $fontsPath) {
     Get-ChildItem -Path $fontsPath -Include "mingli*", "msjh*", "malgun*", "meiryo*", "yugoth*", "segoeuihistoric.ttf" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue 
 }
 
-Write-Host "[完成] 物理文件精简完毕 (完全符合 nano11 稳定基线)。" -ForegroundColor Green
+Write-Host "[完成] 物理文件精简完毕 (完全符合  稳定基线)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/05-PhysicalNuke.ps1
 
@@ -827,12 +816,12 @@ Write-Host "[完成] 物理文件精简完毕 (完全符合 nano11 稳定基线)
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 注册表原生优化 (src/06-RegistryTweaks.ps1)
-#  [100% 像素级对齐 nano11 源码]：零私货、零篡改 Shell，彻底恢复打开方式
+#  [100% 像素级对齐  源码]：零私货、零篡改 Shell，彻底恢复打开方式
 # ==============================================================================
 
-Write-Host "`n[步骤 8/11] 正在挂载配置单元并 100% 注入 nano11 原版注册表配置..." -ForegroundColor Cyan
+Write-Host "`n[步骤 8/11] 正在挂载配置单元并 100% 注入  原版注册表配置..." -ForegroundColor Cyan
 
-# 1. 挂载注册表配置单元 (nano11 原版 5 个 Hive)
+# 1. 挂载注册表配置单元 ( 原版 5 个 Hive)
 $defaultPath    = Join-Path $scratchDir "Windows\System32\config\default"
 $ntuserPath     = Join-Path $scratchDir "Users\Default\ntuser.dat"
 $softwarePath   = Join-Path $scratchDir "Windows\System32\config\SOFTWARE"
@@ -848,7 +837,7 @@ attrib.exe -R -S -H "$systemPath" 2>$null
 & reg.exe load HKLM\zSOFTWARE "$softwarePath" 2>$null | Out-Null
 & reg.exe load HKLM\zSYSTEM "$systemPath" 2>$null | Out-Null
 
-# 2. 绕过硬件检测全量参数 (nano11 原版)
+# 2. 绕过硬件检测全量参数 ( 原版)
 Write-Host "   -> 写入硬件需求全量绕过配置..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache" /v SV1 /t REG_DWORD /d 0 /f | Out-Null
 & reg.exe add "HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache" /v SV2 /t REG_DWORD /d 0 /f | Out-Null
@@ -861,7 +850,7 @@ Write-Host "   -> 写入硬件需求全量绕过配置..." -ForegroundColor Dark
 & reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSYSTEM\Setup\MoSetup" /v AllowUpgradesWithUnsupportedTPMOrCPU /t REG_DWORD /d 1 /f | Out-Null
 
-# 3. 禁用预装推广与流氓广告通道 (nano11 原版)
+# 3. 禁用预装推广与流氓广告通道 ( 原版)
 Write-Host "   -> 禁用推广应用与预装推送..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v OemPreInstalledAppsEnabled /t REG_DWORD /d 0 /f | Out-Null
 & reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v PreInstalledAppsEnabled /t REG_DWORD /d 0 /f | Out-Null
@@ -887,22 +876,22 @@ Write-Host "   -> 禁用推广应用与预装推送..." -ForegroundColor DarkGra
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableConsumerAccountStateContent /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableCloudOptimizedContent /t REG_DWORD /d 1 /f | Out-Null
 
-# 4. 开启 OOBE 本地账户跳过支持 (nano11 原版)
+# 4. 开启 OOBE 本地账户跳过支持 ( 原版)
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f | Out-Null
 
-# 5. 禁用保留存储与 BitLocker 自动设备加密 (nano11 原版)
+# 5. 禁用保留存储与 BitLocker 自动设备加密 ( 原版)
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager" /v ShippedWithReserves /t REG_DWORD /d 0 /f | Out-Null
 & reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f | Out-Null
 
-# 6. 禁用 Chat 图标与任务栏组件 (nano11 原版)
+# 6. 禁用 Chat 图标与任务栏组件 ( 原版)
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat" /v ChatIcon /t REG_DWORD /d 3 /f | Out-Null
 & reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarMn /t REG_DWORD /d 0 /f | Out-Null
 
-# 7. 清理 Edge 遗留注册表 (nano11 原版)
+# 7. 清理 Edge 遗留注册表 ( 原版)
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>$null | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>$null | Out-Null
 
-# 8. 禁用 OneDrive 同步与遥测跟踪 (nano11 原版)
+# 8. 禁用 OneDrive 同步与遥测跟踪 ( 原版)
 Write-Host "   -> 禁用遥测与隐私搜集..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" /v DisableFileSyncNGSC /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" /v Enabled /t REG_DWORD /d 0 /f | Out-Null
@@ -916,7 +905,7 @@ Write-Host "   -> 禁用遥测与隐私搜集..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f | Out-Null
 & reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice" /v Start /t REG_DWORD /d 4 /f | Out-Null
 
-# 9. 阻止 DevHome、Outlook、Teams、Mail 自动安装 (nano11 原版)
+# 9. 阻止 DevHome、Outlook、Teams、Mail 自动安装 ( 原版)
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate" /v workCompleted /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate" /v workCompleted /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate" /f 2>$null | Out-Null
@@ -927,7 +916,7 @@ Write-Host "   -> 禁用遥测与隐私搜集..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Teams" /v DisableInstallation /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail" /v PreventRun /t REG_DWORD /d 1 /f | Out-Null
 
-# 10. 删除 nano11 官方指定的 5 个计划任务定义文件 (nano11 原版)
+# 10. 删除  官方指定的 5 个计划任务定义文件 ( 原版)
 Write-Host "   -> 删除遥测计划任务定义..." -ForegroundColor DarkGray
 $tasksPath = Join-Path $scratchDir "Windows\System32\Tasks"
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" -Force -ErrorAction SilentlyContinue
@@ -936,7 +925,7 @@ Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\ProgramDa
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
 
-# 11. 禁用 Windows Update 自动更新 (nano11 原版)
+# 11. 禁用 Windows Update 自动更新 ( 原版)
 Write-Host "   -> 关闭 Windows 自动更新通道..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" /v StopWUPostOOBE1 /t REG_SZ /d "net stop wuauserv" /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" /v StopWUPostOOBE2 /t REG_SZ /d "sc stop wuauserv" /f | Out-Null
@@ -955,7 +944,7 @@ Write-Host "   -> 关闭 Windows 自动更新通道..." -ForegroundColor DarkGra
 & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /f 2>$null | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f | Out-Null
 
-# 12. 禁用 Windows Defender 服务 (nano11 原版方式：安全停用服务，隐藏设置页，绝不损坏文件)
+# 12. 禁用 Windows Defender 服务 ( 原版方式：安全停用服务，隐藏设置页，绝不损坏文件)
 Write-Host "   -> 停用 Windows Defender 服务栈..." -ForegroundColor DarkGray
 $defenderServices = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense")
 foreach ($svc in $defenderServices) {
@@ -969,7 +958,7 @@ Safely-UnloadHive "HKLM\zNTUSER" | Out-Null
 Safely-UnloadHive "HKLM\zSOFTWARE" | Out-Null
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 
-# 13. 独立重载 SYSTEM 彻底物理删除指定无用服务 (100% 对齐 nano11 最终服务删除)
+# 13. 独立重载 SYSTEM 彻底物理删除指定无用服务 (100% 对齐  最终服务删除)
 Write-Host "   -> 彻底移除冗余系统服务..." -ForegroundColor DarkGray
 & reg.exe load HKLM\zSYSTEM "$systemPath" 2>$null | Out-Null
 
@@ -989,8 +978,7 @@ $servicesToRemove = @(
     'UsoSvc', 
     'WaaSMedicSvc' 
 )
-if ($trimMode -eq "2") {
-    $servicesToRemove += 'WSearch'
+
 }
 
 foreach ($service in $servicesToRemove) { 
@@ -999,7 +987,7 @@ foreach ($service in $servicesToRemove) {
 
 Safely-UnloadHive "HKLM\zSYSTEM" | Out-Null
 
-Write-Host "[完成] 注册表优化完成 (100% 遵照 nano11 官方纯净标准，系统原生 Shell 完美无瑕)。" -ForegroundColor Green
+Write-Host "[完成] 注册表优化完成 (100% 遵照  官方纯净标准，系统原生 Shell 完美无瑕)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/06-RegistryTweaks.ps1
 
@@ -1241,15 +1229,8 @@ $scripts = @(
 	{
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'SearchboxTaskbarMode' -Type 'DWord' -Value 0;
 	};
-	{
-		Remove-Item -Path 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew' -Recurse -Force -ErrorAction 'SilentlyContinue';
-	};
-	{
-		Get-Process -Name 'explorer' -ErrorAction 'SilentlyContinue' | Where-Object -FilterScript {
-			$_.SessionId -eq ( Get-Process -Id $PID ).SessionId;
-		} | Stop-Process -Force;
-	};
 );
+
 &amp; {
   [float] $complete = 0;
   [float] $increment = 100 / $scripts.Count;
