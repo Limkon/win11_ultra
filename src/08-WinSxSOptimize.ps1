@@ -105,16 +105,19 @@ Write-Host "`n正在提交映像更改并导出紧凑单卷..." -ForegroundColor
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
 
 $finalWim = Join-Path $sourcesDir "install_final.wim"
-$targetExportIndex = if ($global:targetIndex) { $global:targetIndex } elseif ($index) { $index } else { "1" }
-& dism.exe /English /Export-Image "/SourceImageFile:$wimFilePath" "/SourceIndex:$targetExportIndex" "/DestinationImageFile:$finalWim" /Compress:max
+# 确保目标临时文件干净
+if (Test-Path -LiteralPath $finalWim) { 
+    Remove-Item -LiteralPath $finalWim -Force -ErrorAction SilentlyContinue 
+}
 
-# 2. 导出目标分卷
+$targetExportIndex = if ($global:targetIndex) { $global:targetIndex } elseif ($index) { $index } else { "1" }
+
 & dism.exe /English /Export-Image "/SourceImageFile:$wimFilePath" "/SourceIndex:$targetExportIndex" "/DestinationImageFile:$finalWim" /Compress:max
 
 if ((Test-Path -LiteralPath $finalWim) -and ((Get-Item -LiteralPath $finalWim).Length -gt 500MB)) {
     Remove-Item -LiteralPath $wimFilePath -Force -ErrorAction SilentlyContinue
     Rename-Item -LiteralPath $finalWim -NewName "install.wim" -Force
-    Write-Host "[完成] 映像处理与提交导出完毕 (已生成纯净紧凑单卷)。" -ForegroundColor Green
+    Write-Host "[完成] 映像处理与提交导出完毕 (已生成唯一的专业版单卷)。" -ForegroundColor Green
 } else {
     Write-Host "[警告] 紧凑单卷导出校验异常，保留原映像以保全数据。" -ForegroundColor Yellow
 }
