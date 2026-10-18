@@ -1,19 +1,29 @@
 # ==============================================================================
-#  win11 Builder - [模块 9/11] WinSxS 运行库物理重构与紧凑单卷导出 (src/08-WinSxSOptimize.ps1)
-#  [企业级重构]：深度提权穿透 + 事务完整性门禁 + 故障自动回滚 + 彻底杜绝 Error 87
+#  win11 Builder - [模块 9/11] WinSxS 运行库物理重构与动态单卷导出 (src/08-WinSxSOptimize.ps1)
+#  [企业级重构]：动态分卷精准导出 + 彻底根治版本错位 + 深度提权穿透 + 事务回退保护
 # ==============================================================================
 
 Write-Host "`n正在重构 WinSxS 核心运行库目录 (企业级自适应安全模式)..." -ForegroundColor Cyan
 
-# ----------------- 0. 上下文变量安全兜底 -----------------
+# ----------------- 0. 上下文变量与目标分卷安全兜底 -----------------
 if (-not $wimFilePath) { 
     $wimFilePath = Join-Path $sourcesDir "install.wim" 
 }
 
+# 动态解析目标分卷，优先承接全局变量，杜绝历史硬编码导致的版本错位
+$targetExportIndex = if ($global:targetIndex) { 
+    $global:targetIndex 
+} elseif ($index) { 
+    $index 
+} else { 
+    "1" 
+}
+Write-Host ">>> 核心单卷导出已锁定目标分卷 Index: $targetExportIndex" -ForegroundColor Green
+
 $sourceDirectory      = Join-Path $scratchDir "Windows\WinSxS"
 $destinationDirectory = Join-Path $scratchDir "Windows\WinSxS_edit"
 
-# 重置并预备临时目录
+# 重置并预备临时提取目录
 if (Test-Path -LiteralPath $destinationDirectory) { 
     Remove-Item -LiteralPath $destinationDirectory -Recurse -Force -ErrorAction SilentlyContinue 
 }
@@ -76,7 +86,7 @@ Write-Host "   -> 正在接管原 WinSxS 目录全量权限并执行物理粉碎
 attrib.exe -R -S -H "$sourceDirectory\*" /S /D > $null 2>&1
 cmd.exe /c "rd /s /q `"$sourceDirectory`"" > $null 2>&1
 
-# 容错重试检测：确保文件系统彻底完成删除同步
+# 容错重试检测：确保底层文件系统完成删除同步
 if (Test-Path -LiteralPath $sourceDirectory) {
     Start-Sleep -Seconds 1
     cmd.exe /c "rd /s /q `"$sourceDirectory`"" > $null 2>&1
@@ -91,26 +101,30 @@ if (-not (Test-Path -LiteralPath $sourceDirectory)) {
     Write-Host "   -> 正在执行组件存储重置与基线固化..." -ForegroundColor DarkGray
     & dism.exe /English /Image:$scratchDir /Cleanup-Image /StartComponentCleanup /ResetBase 2>$null | Out-Null
 } else {
-    # 【分支 B：回滚保护】检测到外部顽固占用，坚决不进行破坏性重命名，保护母盘 100% 稳定可引导
+    # 【分支 B：回滚保护】检测到外部顽固占用，中止替换，保护母盘 100% 稳定可引导
     Write-Host "[智能回退] 检测到原 WinSxS 存在外部句柄锁定未完全释放，已中止重命名替换，保留完整组件存储。" -ForegroundColor Yellow
     Remove-Item -LiteralPath $destinationDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# ----------------- 4. 提交映像并导出高压紧凑单卷 -----------------
-Write-Host "`n正在提交映像更改并导出紧凑单卷..." -ForegroundColor Cyan
+# ----------------- 4. 提交映像并动态导出所选分卷的紧凑单卷 -----------------
+Write-Host "`n正在提交映像更改 (分卷 $targetExportIndex)..." -ForegroundColor Cyan
 
 [System.GC]::Collect()
 [System.GC]::WaitForPendingFinalizers()
 
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
 
+Write-Host "正在将已修改的目标分卷 [$targetExportIndex] 导出为独立紧凑单卷..." -ForegroundColor Cyan
 $finalWim = Join-Path $sourcesDir "install_final.wim"
-& dism.exe /English /Export-Image "/SourceImageFile:$wimFilePath" "/SourceIndex:1" "/DestinationImageFile:$finalWim" /Compress:max
 
+# 【核心修正】：使用动态的 $targetExportIndex，彻底杜绝写死为 1 的致命 Bug
+& dism.exe /English /Export-Image "/SourceImageFile:$wimFilePath" "/SourceIndex:$targetExportIndex" "/DestinationImageFile:$finalWim" /Compress:max
+
+# 最终文件原子替换与安全门禁校验
 if ((Test-Path -LiteralPath $finalWim) -and ((Get-Item -LiteralPath $finalWim).Length -gt 500MB)) {
     Remove-Item -LiteralPath $wimFilePath -Force -ErrorAction SilentlyContinue
     Rename-Item -LiteralPath $finalWim -NewName "install.wim" -Force
-    Write-Host "[完成] 映像处理与提交导出完毕 (已生成纯净紧凑单卷)。" -ForegroundColor Green
+    Write-Host "[完成] 映像处理与提交导出完毕 (已精确导出选定的版本分卷 [$targetExportIndex])。" -ForegroundColor Green
 } else {
     Write-Host "[警告] 紧凑单卷导出校验异常，保留原映像以保全数据。" -ForegroundColor Yellow
 }
