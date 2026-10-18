@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-18 03:11:25 UTC
+#  生成时间: 2026-10-18 10:52:08 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -423,40 +423,63 @@ function Read-InputWithTimeout {
 # >>> [分块代码引入] 文件来源: src/02-MountImage.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 3/11] 镜像挂载与权限接管 (1:1 对齐 nano11)
+#  win11 Builder - [模块 3/11] 镜像挂载与底层权限接管 (src/02-MountImage.ps1)
+#  [企业级重构]：Index 全局持久化锁定 + 核心与 Edge 目录底层穿透夺权
 # ==============================================================================
 
-# 1. 输入与校验 ISO 光驱盘符
+# ----------------- 1. 输入与校验 ISO 光驱盘符 -----------------
 $DriveLetter = Read-Host "请输入 Windows 11 ISO 虚拟光驱盘符 (例如 E)"
 $DriveLetter = ($DriveLetter.TrimEnd('\').TrimEnd(':').Trim()) + ":"
 
 if (-not (Test-Path "$DriveLetter\sources\boot.wim") -or (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$DriveLetter\sources\install.esd"))) {
-    Write-Host "[错误] 镜像文件不存在！" -ForegroundColor Red
+    Write-Host "[严重错误] 指定驱动器中未找到有效的 Windows 安装镜像文件！" -ForegroundColor Red
+    pause
     exit
 }
 
-# 2. 复制基础镜像架构 (nano11 原生)
-Write-Host "正在复制 Windows 镜像架构..." -ForegroundColor Cyan
+# ----------------- 2. 复制基础安装介质架构 -----------------
+Write-Host "正在复制 Windows 原始安装介质架构..." -ForegroundColor Cyan
 Copy-Item -Path "$DriveLetter\*" -Destination "$workDir" -Recurse -Force > $null
 Remove-Item "$sourcesDir\install.esd" -ErrorAction SilentlyContinue 
 
-# 3. 获取分卷并挂载 (nano11 原生)
-& dism.exe /English /Get-WimInfo "/wimfile:$sourcesDir\install.wim"
-$index = Read-Host "请输入要精简的目标版本 Index 序号"
-
+# ----------------- 3. 动态获取分卷并全局锁定选定版本 -----------------
 $wimFilePath = "$sourcesDir\install.wim"
-& takeown.exe /F "$wimFilePath" > $null
-& icacls.exe "$wimFilePath" /grant "*S-1-5-32-544:F" > $null
+& dism.exe /English /Get-WimInfo "/wimfile:$wimFilePath"
+
+$inputIndex = Read-Host "请输入要精简的目标版本 Index 序号"
+$inputIndex = $inputIndex.Trim()
+
+# 校验并全局锁定目标分卷序号，杜绝后续单卷导出时硬编码错位
+if ([string]::IsNullOrWhiteSpace($inputIndex) -or ($inputIndex -notmatch '^\d+$')) {
+    Write-Host "[提示] 输入无效，默认锁定 Index 序号: 1" -ForegroundColor Yellow
+    $global:targetIndex = "1"
+} else {
+    $global:targetIndex = $inputIndex
+    Write-Host ">>> 已全局锁定精简目标版本 Index: $global:targetIndex" -ForegroundColor Green
+}
+
+# 接管 install.wim 实体文件所有权
+& takeown.exe /F "$wimFilePath" > $null 2>&1
+& icacls.exe "$wimFilePath" /grant "*S-1-5-32-544:F" > $null 2>&1
 Set-ItemProperty -Path $wimFilePath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
 
-if (Test-Path $scratchDir) { Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue }
+# 重置并创建挂载工作目录
+if (Test-Path -LiteralPath $scratchDir) { 
+    Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue 
+}
 New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
 
-Write-Host "正在挂载映像..." -ForegroundColor Green
-& dism.exe /English /Mount-Image "/ImageFile:$wimFilePath" "/Index:$index" "/MountDir:$scratchDir"
+Write-Host "正在挂载映像分卷 [$global:targetIndex]..." -ForegroundColor Green
+& dism.exe /English /Mount-Image "/ImageFile:$wimFilePath" "/Index:$global:targetIndex" "/MountDir:$scratchDir"
 
-# 4. nano11 原版预夺权 (完全对齐 nano11 原始语法，不走子进程，秒过不卡顿)
-Write-Host "正在接管核心目录权限 (nano11 原版)..." -ForegroundColor DarkGray
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[严重错误] 映像挂载失败！" -ForegroundColor Red
+    pause
+    exit
+}
+
+# ----------------- 4. 脱机核心系统目录提权预处理 -----------------
+Write-Host "正在接管核心系统目录控制权 (注入 Administrators 完全控制权限)..." -ForegroundColor DarkGray
 $foldersToOwn = @( 
     "$scratchDir\Windows\System32\DriverStore\FileRepository", 
     "$scratchDir\Windows\Fonts", 
@@ -464,7 +487,12 @@ $foldersToOwn = @(
     "$scratchDir\Windows\Help", 
     "$scratchDir\Windows\Cursors", 
     "$scratchDir\Program Files (x86)\Microsoft", 
+    "$scratchDir\Program Files (x86)\Microsoft\Edge", 
+    "$scratchDir\Program Files (x86)\Microsoft\EdgeUpdate", 
+    "$scratchDir\Program Files (x86)\Microsoft\EdgeCore", 
+    "$scratchDir\Program Files (x86)\Microsoft\EdgeWebView", 
     "$scratchDir\Program Files\WindowsApps", 
+    "$scratchDir\Windows\SystemApps", 
     "$scratchDir\Windows\System32\Microsoft-Edge-Webview", 
     "$scratchDir\Windows\System32\Recovery", 
     "$scratchDir\Windows\WinSxS", 
@@ -474,21 +502,30 @@ $foldersToOwn = @(
     "$scratchDir\Windows\Speech", 
     "$scratchDir\Windows\Temp" 
 )
-$filesToOwn = @( "$scratchDir\Windows\System32\OneDriveSetup.exe" )
+
+$filesToOwn = @( 
+    "$scratchDir\Windows\System32\OneDriveSetup.exe" 
+)
 
 foreach ($folder in $foldersToOwn) { 
-    if (Test-Path $folder) { 
+    if (Test-Path -LiteralPath $folder) { 
         & takeown.exe /F "$folder" /R /D Y > $null 2>&1
-        & icacls.exe "$folder" /grant "*S-1-5-32-544:F" /T /C > $null 2>&1
+        & icacls.exe "$folder" /grant "*S-1-5-32-544:F" /T /C /Q > $null 2>&1
     } 
 }
+
 foreach ($file in $filesToOwn) { 
-    if (Test-Path $file) { 
+    if (Test-Path -LiteralPath $file) { 
         & takeown.exe /F "$file" /D Y > $null 2>&1
-        & icacls.exe "$file" /grant "*S-1-5-32-544:F" /C > $null 2>&1
+        & icacls.exe "$file" /grant "*S-1-5-32-544:F" /C /Q > $null 2>&1
     } 
 }
-Write-Host "[完成] 映像挂载与权限接管完毕。" -ForegroundColor Green
+
+# 释放临时句柄保证稳定性
+[System.GC]::Collect()
+[System.GC]::WaitForPendingFinalizers()
+
+Write-Host "[完成] 目标分卷 [$global:targetIndex] 挂载与全量权限预接管完毕。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/02-MountImage.ps1
 
@@ -734,45 +771,129 @@ Write-Host "[完成] 驱动精简完毕。" -ForegroundColor Green
 # >>> [分块代码引入] 文件来源: src/05-PhysicalNuke.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 6/11] 实体物理清理 (1:1 对齐 nano11)
+#  win11 Builder - [模块 6/11] 冗余大文件与组件实体物理清理 (src/05-PhysicalNuke.ps1)
+#  [企业级重构]：深度提权穿透粉碎 + 彻底连根拔起 Edge 全栈 + 字体与外壳安全精简
 # ==============================================================================
 
-Write-Host "`n正在执行大文件实体物理删除 (nano11 原版)..." -ForegroundColor Cyan
+Write-Host "`n正在执行大文件实体物理深度清理..." -ForegroundColor Cyan
 $winDir = Join-Path $scratchDir "Windows"
 
-# 1. 字体精简 (nano11 原版白名单)
-$fontsPath = Join-Path $winDir "Fonts"
-if (Test-Path $fontsPath) { 
-    Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "lucon*.*", "calibri*.*", "arial*.*", "times*.*", "cou*.*", "8*.*", "msyh*.*", "simsun*.*", "simhei*.*" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    Get-ChildItem -Path $fontsPath -Include "mingli*", "msjh*", "malgun*", "meiryo*", "yugoth*", "segoeuihistoric.ttf" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue 
+# ----------------- 0. 本地底层穿透粉碎工具函数 -----------------
+function Nuke-PathEntity {
+    <#
+    .SYNOPSIS
+        先探针探测、解除只读属性、接管所有权并强制物理粉碎，杜绝权限拦截
+    #>
+    param([string]$TargetPath)
+    if (Test-Path -LiteralPath $TargetPath) {
+        & takeown.exe /F "$TargetPath" /A /R /D Y > $null 2>&1
+        & icacls.exe "$TargetPath" /grant "*S-1-5-32-544:F" /T /C /Q > $null 2>&1
+        attrib.exe -R -S -H "$TargetPath" /S /D > $null 2>&1
+        if ((Get-Item -LiteralPath $TargetPath).PSIsContainer) {
+            cmd.exe /c "rd /s /q `"$TargetPath`"" > $null 2>&1
+        } else {
+            cmd.exe /c "del /f /q /a `"$TargetPath`"" > $null 2>&1
+        }
+    }
 }
 
-# 2. TTS 引擎与 Defender 更新缓存
-Remove-Item -Path (Join-Path $winDir "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
+# ----------------- 1. 系统字体智能精炼 (保留中英文核心字体) -----------------
+Write-Host "   -> 正在精简冗余外文字体库..." -ForegroundColor DarkGray
+$fontsPath = Join-Path $winDir "Fonts"
+if (Test-Path -LiteralPath $fontsPath) { 
+    # 排除关键中英文及系统核心字体，剔除其他冗余字体
+    Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "lucon*.*", "calibri*.*", "arial*.*", "times*.*", "cou*.*", "8*.*", "msyh*.*", "simsun*.*", "simhei*.*" | ForEach-Object {
+        attrib.exe -R -S -H "$($_.FullName)" 2>$null
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    # 清理特大冷门东亚字体与历史字体
+    Get-ChildItem -Path $fontsPath -Include "mingli*", "msjh*", "malgun*", "meiryo*", "yugoth*", "segoeuihistoric.ttf" | ForEach-Object {
+        attrib.exe -R -S -H "$($_.FullName)" 2>$null
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 
-# 3. 繁体、日文、韩文输入法
-Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHT" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\JPN" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force -ErrorAction SilentlyContinue
+# ----------------- 2. TTS 语音引擎与 Defender 更新缓存 -----------------
+Write-Host "   -> 正在清理 TTS 离线引擎与 Defender 冗余缓存..." -ForegroundColor DarkGray
+Nuke-PathEntity (Join-Path $winDir "Speech\Engines\TTS")
+Nuke-PathEntity "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates"
 
-# 4. Temp、Web、Help、Cursors
+# ----------------- 3. 繁体、日文、韩文输入法组件 -----------------
+Write-Host "   -> 正在清理东亚非必要输入法引擎..." -ForegroundColor DarkGray
+Nuke-PathEntity "$scratchDir\Windows\System32\InputMethod\CHT"
+Nuke-PathEntity "$scratchDir\Windows\System32\InputMethod\JPN"
+Nuke-PathEntity "$scratchDir\Windows\System32\InputMethod\KOR"
+
+# ----------------- 4. 临时目录、壁纸、帮助文档与指针 -----------------
+Write-Host "   -> 正在清理系统帮助、壁纸、临时缓存与指针..." -ForegroundColor DarkGray
 Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path $winDir "Web") -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path $winDir "Help") -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path $winDir "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
+Nuke-PathEntity (Join-Path $winDir "Web")
+Nuke-PathEntity (Join-Path $winDir "Help")
+Nuke-PathEntity (Join-Path $winDir "Cursors")
 
-# 5. 移除 Edge、WinRE (空桩占位)、OneDrive (nano11 原生)
-Remove-Item -Path "$scratchDir\Program Files (x86)\Microsoft\Edge*" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force -ErrorAction SilentlyContinue | Out-Null
-Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
+# ----------------- 5. 彻底连根拔起 Microsoft Edge 全栈体系 -----------------
+Write-Host "   -> 正在全维度物理粉碎 Microsoft Edge 及其关联更新通道..." -ForegroundColor DarkGray
 
-# 6. nano11 原版第一轮基础清理
+# 5.1 粉碎 Program Files (x86) 实体目录
+$edgeDirs = @(
+    "$scratchDir\Program Files (x86)\Microsoft\Edge",
+    "$scratchDir\Program Files (x86)\Microsoft\EdgeUpdate",
+    "$scratchDir\Program Files (x86)\Microsoft\EdgeCore",
+    "$scratchDir\Program Files (x86)\Microsoft\EdgeWebView",
+    "$scratchDir\Windows\System32\Microsoft-Edge-Webview"
+)
+foreach ($dir in $edgeDirs) {
+    Nuke-PathEntity $dir
+}
+
+# 5.2 粉碎 SystemApps 中的 Edge 核心骨架
+$edgeSystemApps = Get-ChildItem -Path "$scratchDir\Windows\SystemApps" -Filter "*MicrosoftEdge*" -Directory -ErrorAction SilentlyContinue
+foreach ($sa in $edgeSystemApps) {
+    Nuke-PathEntity $sa.FullName
+}
+
+# 5.3 物理清理 Edge 快捷方式（杜绝安装后桌面上遗留无效白图标）
+$edgeShortcuts = @(
+    "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk",
+    "$scratchDir\Users\Default\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk",
+    "$scratchDir\Users\Default\Desktop\Microsoft Edge.lnk",
+    "$scratchDir\Users\Public\Desktop\Microsoft Edge.lnk"
+)
+foreach ($lnk in $edgeShortcuts) {
+    if (Test-Path -LiteralPath $lnk) {
+        attrib.exe -R -S -H "$lnk" 2>$null
+        Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# 5.4 清理 Edge 升级计划任务定义
+$edgeTasks = Get-ChildItem -Path "$scratchDir\Windows\System32\Tasks" -Filter "*MicrosoftEdge*" -Recurse -File -ErrorAction SilentlyContinue
+foreach ($task in $edgeTasks) {
+    Remove-Item -LiteralPath $task.FullName -Force -ErrorAction SilentlyContinue
+}
+
+# ----------------- 6. 移除 OneDrive 与 WinRE 安全占位 -----------------
+Write-Host "   -> 正在移除 OneDrive 安装包并重置 WinRE 恢复环境占位..." -ForegroundColor DarkGray
+Nuke-PathEntity "$scratchDir\Windows\System32\OneDriveSetup.exe"
+
+# 剥离 winre.wim 并建立 0 字节只读安全占位，规避安装程序校验异常
+$winrePath = "$scratchDir\Windows\System32\Recovery\winre.wim"
+if (Test-Path -LiteralPath $winrePath) {
+    attrib.exe -R -S -H "$winrePath" 2>$null
+    Remove-Item -LiteralPath $winrePath -Force -ErrorAction SilentlyContinue
+}
+[System.IO.File]::WriteAllBytes($winrePath, [byte[]]@())
+attrib.exe +R +H +S "$winrePath" 2>$null
+
+# ----------------- 7. 执行第一轮 DISM 组件存储基线深度固化 -----------------
+Write-Host "   -> 正在执行组件存储基线深度固化..." -ForegroundColor DarkGray
+
+[System.GC]::Collect()
+[System.GC]::WaitForPendingFinalizers()
+
 & dism.exe /English /Image:$scratchDir /Cleanup-Image /StartComponentCleanup /ResetBase
 
-Write-Host "[完成] 实体物理清理完毕。" -ForegroundColor Green
+Write-Host "[完成] 大文件与 Edge 全栈体系实体物理清理完毕。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/05-PhysicalNuke.ps1
 
@@ -781,21 +902,36 @@ Write-Host "[完成] 实体物理清理完毕。" -ForegroundColor Green
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 注册表原生系统优化 (src/06-RegistryTweaks.ps1)
-#  [企业级重构]：探针感知删除 + 核心服务智能降级 + 零权限报错 + 句柄闭环管理
+#  [企业级重构]：底层管道重定向消除红字 + Edge 协议关联全解绑 + 核心服务智能降级
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在挂载配置单元并执行企业级纯净优化注入..." -ForegroundColor Cyan
 
-# ----------------- 0. 注册表安全操作探针函数 -----------------
+# ----------------- 0. 底层静默探针函数 (彻底杜绝 NativeCommandError) -----------------
 function Safe-DeleteRegKey {
     <#
     .SYNOPSIS
-        先探针探测键路径是否存在，存在时再执行删除，彻底规避“系统找不到指定项”报错
+        先探针探测键路径是否存在，存在时通过 cmd 纯内核通道静默删除，杜绝 PowerShell 5.1 Transcript 漏出红字
     #>
     param([string]$KeyPath)
     $psPath = $KeyPath -replace '^HKLM\\', 'HKLM:\'
     if (Test-Path -LiteralPath $psPath) {
-        & reg.exe delete "$KeyPath" /f 2>$null | Out-Null
+        cmd.exe /c "reg.exe delete `"$KeyPath`" /f 2>nul" | Out-Null
+    }
+}
+
+function Safe-DeleteRegValue {
+    <#
+    .SYNOPSIS
+        静默删除指定键路径下的特定值项
+    #>
+    param(
+        [string]$KeyPath,
+        [string]$ValueName
+    )
+    $psPath = $KeyPath -replace '^HKLM\\', 'HKLM:\'
+    if (Test-Path -LiteralPath $psPath) {
+        cmd.exe /c "reg.exe delete `"$KeyPath`" /v `"$ValueName`" /f 2>nul" | Out-Null
     }
 }
 
@@ -850,7 +986,6 @@ Write-Host "   -> 禁用推广应用与预装推送..." -ForegroundColor DarkGra
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\PushToInstall" /v DisablePushToInstall /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\MRT" /v DontOfferThroughWUAU /t REG_DWORD /d 1 /f | Out-Null
 
-# 探针安全删除广告推广键
 Safe-DeleteRegKey "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Subscriptions"
 Safe-DeleteRegKey "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps"
 
@@ -868,7 +1003,17 @@ Safe-DeleteRegKey "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Conten
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat" /v ChatIcon /t REG_DWORD /d 3 /f | Out-Null
 & reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarMn /t REG_DWORD /d 0 /f | Out-Null
 
-# ----------------- 7. 探针清理 Edge 遗留卸载项 -----------------
+# ----------------- 7. 彻底注销 Edge 注册表关联与协议绑定 -----------------
+Write-Host "   -> 彻底注销 Microsoft Edge 注册表关联与协议绑定..." -ForegroundColor DarkGray
+Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\Edge"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Edge"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\EdgeUpdate"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\WOW6432Node\Microsoft\EdgeUpdate"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\Clients\StartMenuInternet\Microsoft Edge"
+Safe-DeleteRegValue "HKLM\zSOFTWARE\RegisteredApplications" "Microsoft Edge"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge"
 Safe-DeleteRegKey "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge"
 Safe-DeleteRegKey "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update"
 
@@ -890,7 +1035,6 @@ Write-Host "   -> 禁用遥测与隐私搜集..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate" /v workCompleted /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate" /v workCompleted /t REG_DWORD /d 1 /f | Out-Null
 
-# 探针安全删除调度更新配置
 Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate"
 Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate"
 
@@ -932,7 +1076,6 @@ Write-Host "   -> 关闭 Windows 自动更新通道..." -ForegroundColor DarkGra
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v DisableOnline /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\wuauserv" /v Start /t REG_DWORD /d 4 /f | Out-Null
 
-# 探针安全删除更新辅助服务项
 Safe-DeleteRegKey "HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC"
 Safe-DeleteRegKey "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc"
 
@@ -946,7 +1089,7 @@ foreach ($svc in $defenderServices) {
 }
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v SettingsPageVisibility /t REG_SZ /d "hide:virus;windowsupdate" /f | Out-Null
 
-# ----------------- 13. 系统冗余服务智能治理 (消除拒绝访问与报错) -----------------
+# ----------------- 13. 系统冗余与 Edge 升级服务智能治理 (零红字通道) -----------------
 Write-Host "   -> 正在智能治理冗余系统服务..." -ForegroundColor DarkGray
 $servicesToRemove = @( 
     'Spooler', 
@@ -962,7 +1105,10 @@ $servicesToRemove = @(
     'BluetoothUserService', 
     'wuauserv', 
     'UsoSvc', 
-    'WaaSMedicSvc' 
+    'WaaSMedicSvc',
+    'edgeupdate',
+    'edgeupdatem',
+    'MicrosoftEdgeElevationService'
 )
 
 foreach ($service in $servicesToRemove) { 
@@ -971,10 +1117,10 @@ foreach ($service in $servicesToRemove) {
 
     if (Test-Path -LiteralPath $svcPsPath) {
         # 1. 率先写入内核级安全禁用 (Start = 4)，保障即使后续 ACL 拦截也能 100% 达成停止运行目标
-        & reg.exe add "$svcPath" /v Start /t REG_DWORD /d 4 /f 2>$null | Out-Null
+        cmd.exe /c "reg.exe add `"$svcPath`" /v Start /t REG_DWORD /d 4 /f 2>nul" | Out-Null
 
-        # 2. 尝试物理彻底抹除键值
-        & reg.exe delete "$svcPath" /f 2>$null | Out-Null
+        # 2. 尝试物理彻底抹除键值（使用 cmd 内核吸收 stderr，杜绝 Transcript 抛出 NativeCommandError）
+        cmd.exe /c "reg.exe delete `"$svcPath`" /f 2>nul" | Out-Null
 
         # 3. 校验执行结果
         if (Test-Path -LiteralPath $svcPsPath) {
@@ -1429,21 +1575,31 @@ Write-Host "[完成] 无人值守应答文件已写入 ISO 根目录 (install.wi
 # >>> [分块代码引入] 文件来源: src/08-WinSxSOptimize.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 9/11] WinSxS 运行库物理重构与紧凑单卷导出 (src/08-WinSxSOptimize.ps1)
-#  [企业级重构]：深度提权穿透 + 事务完整性门禁 + 故障自动回滚 + 彻底杜绝 Error 87
+#  win11 Builder - [模块 9/11] WinSxS 运行库物理重构与动态单卷导出 (src/08-WinSxSOptimize.ps1)
+#  [企业级重构]：动态分卷精准导出 + 彻底根治版本错位 + 深度提权穿透 + 事务回退保护
 # ==============================================================================
 
 Write-Host "`n正在重构 WinSxS 核心运行库目录 (企业级自适应安全模式)..." -ForegroundColor Cyan
 
-# ----------------- 0. 上下文变量安全兜底 -----------------
+# ----------------- 0. 上下文变量与目标分卷安全兜底 -----------------
 if (-not $wimFilePath) { 
     $wimFilePath = Join-Path $sourcesDir "install.wim" 
 }
 
+# 动态解析目标分卷，优先承接全局变量，杜绝历史硬编码导致的版本错位
+$targetExportIndex = if ($global:targetIndex) { 
+    $global:targetIndex 
+} elseif ($index) { 
+    $index 
+} else { 
+    "1" 
+}
+Write-Host ">>> 核心单卷导出已锁定目标分卷 Index: $targetExportIndex" -ForegroundColor Green
+
 $sourceDirectory      = Join-Path $scratchDir "Windows\WinSxS"
 $destinationDirectory = Join-Path $scratchDir "Windows\WinSxS_edit"
 
-# 重置并预备临时目录
+# 重置并预备临时提取目录
 if (Test-Path -LiteralPath $destinationDirectory) { 
     Remove-Item -LiteralPath $destinationDirectory -Recurse -Force -ErrorAction SilentlyContinue 
 }
@@ -1506,7 +1662,7 @@ Write-Host "   -> 正在接管原 WinSxS 目录全量权限并执行物理粉碎
 attrib.exe -R -S -H "$sourceDirectory\*" /S /D > $null 2>&1
 cmd.exe /c "rd /s /q `"$sourceDirectory`"" > $null 2>&1
 
-# 容错重试检测：确保文件系统彻底完成删除同步
+# 容错重试检测：确保底层文件系统完成删除同步
 if (Test-Path -LiteralPath $sourceDirectory) {
     Start-Sleep -Seconds 1
     cmd.exe /c "rd /s /q `"$sourceDirectory`"" > $null 2>&1
@@ -1521,26 +1677,30 @@ if (-not (Test-Path -LiteralPath $sourceDirectory)) {
     Write-Host "   -> 正在执行组件存储重置与基线固化..." -ForegroundColor DarkGray
     & dism.exe /English /Image:$scratchDir /Cleanup-Image /StartComponentCleanup /ResetBase 2>$null | Out-Null
 } else {
-    # 【分支 B：回滚保护】检测到外部顽固占用，坚决不进行破坏性重命名，保护母盘 100% 稳定可引导
+    # 【分支 B：回滚保护】检测到外部顽固占用，中止替换，保护母盘 100% 稳定可引导
     Write-Host "[智能回退] 检测到原 WinSxS 存在外部句柄锁定未完全释放，已中止重命名替换，保留完整组件存储。" -ForegroundColor Yellow
     Remove-Item -LiteralPath $destinationDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# ----------------- 4. 提交映像并导出高压紧凑单卷 -----------------
-Write-Host "`n正在提交映像更改并导出紧凑单卷..." -ForegroundColor Cyan
+# ----------------- 4. 提交映像并动态导出所选分卷的紧凑单卷 -----------------
+Write-Host "`n正在提交映像更改 (分卷 $targetExportIndex)..." -ForegroundColor Cyan
 
 [System.GC]::Collect()
 [System.GC]::WaitForPendingFinalizers()
 
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
 
+Write-Host "正在将已修改的目标分卷 [$targetExportIndex] 导出为独立紧凑单卷..." -ForegroundColor Cyan
 $finalWim = Join-Path $sourcesDir "install_final.wim"
-& dism.exe /English /Export-Image "/SourceImageFile:$wimFilePath" "/SourceIndex:1" "/DestinationImageFile:$finalWim" /Compress:max
 
+# 【核心修正】：使用动态的 $targetExportIndex，彻底杜绝写死为 1 的致命 Bug
+& dism.exe /English /Export-Image "/SourceImageFile:$wimFilePath" "/SourceIndex:$targetExportIndex" "/DestinationImageFile:$finalWim" /Compress:max
+
+# 最终文件原子替换与安全门禁校验
 if ((Test-Path -LiteralPath $finalWim) -and ((Get-Item -LiteralPath $finalWim).Length -gt 500MB)) {
     Remove-Item -LiteralPath $wimFilePath -Force -ErrorAction SilentlyContinue
     Rename-Item -LiteralPath $finalWim -NewName "install.wim" -Force
-    Write-Host "[完成] 映像处理与提交导出完毕 (已生成纯净紧凑单卷)。" -ForegroundColor Green
+    Write-Host "[完成] 映像处理与提交导出完毕 (已精确导出选定的版本分卷 [$targetExportIndex])。" -ForegroundColor Green
 } else {
     Write-Host "[警告] 紧凑单卷导出校验异常，保留原映像以保全数据。" -ForegroundColor Yellow
 }
