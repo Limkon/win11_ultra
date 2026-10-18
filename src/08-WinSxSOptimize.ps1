@@ -105,8 +105,8 @@ Write-Host "`n正在提交映像更改并导出紧凑单卷..." -ForegroundColor
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
 
 $finalWim = Join-Path $sourcesDir "install_final.wim"
-# 1. 确保在导出前获取目标分卷（若无则取 $index）
-$targetExportIndex = if ($global:targetIndex) { $global:targetIndex } elseif ($index) { $index } else { "3" }
+$targetExportIndex = if ($global:targetIndex) { $global:targetIndex } elseif ($index) { $index } else { "1" }
+& dism.exe /English /Export-Image "/SourceImageFile:$wimFilePath" "/SourceIndex:$targetExportIndex" "/DestinationImageFile:$finalWim" /Compress:max
 
 # 2. 导出目标分卷
 & dism.exe /English /Export-Image "/SourceImageFile:$wimFilePath" "/SourceIndex:$targetExportIndex" "/DestinationImageFile:$finalWim" /Compress:max
