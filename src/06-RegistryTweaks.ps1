@@ -1,20 +1,35 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 注册表原生系统优化 (src/06-RegistryTweaks.ps1)
-#  [企业级重构]：探针感知删除 + 核心服务智能降级 + 零权限报错 + 句柄闭环管理
+#  [企业级重构]：底层管道重定向消除红字 + Edge 协议关联全解绑 + 核心服务智能降级
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在挂载配置单元并执行企业级纯净优化注入..." -ForegroundColor Cyan
 
-# ----------------- 0. 注册表安全操作探针函数 -----------------
+# ----------------- 0. 底层静默探针函数 (彻底杜绝 NativeCommandError) -----------------
 function Safe-DeleteRegKey {
     <#
     .SYNOPSIS
-        先探针探测键路径是否存在，存在时再执行删除，彻底规避“系统找不到指定项”报错
+        先探针探测键路径是否存在，存在时通过 cmd 纯内核通道静默删除，杜绝 PowerShell 5.1 Transcript 漏出红字
     #>
     param([string]$KeyPath)
     $psPath = $KeyPath -replace '^HKLM\\', 'HKLM:\'
     if (Test-Path -LiteralPath $psPath) {
-        & reg.exe delete "$KeyPath" /f 2>$null | Out-Null
+        cmd.exe /c "reg.exe delete `"$KeyPath`" /f 2>nul" | Out-Null
+    }
+}
+
+function Safe-DeleteRegValue {
+    <#
+    .SYNOPSIS
+        静默删除指定键路径下的特定值项
+    #>
+    param(
+        [string]$KeyPath,
+        [string]$ValueName
+    )
+    $psPath = $KeyPath -replace '^HKLM\\', 'HKLM:\'
+    if (Test-Path -LiteralPath $psPath) {
+        cmd.exe /c "reg.exe delete `"$KeyPath`" /v `"$ValueName`" /f 2>nul" | Out-Null
     }
 }
 
@@ -69,7 +84,6 @@ Write-Host "   -> 禁用推广应用与预装推送..." -ForegroundColor DarkGra
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\PushToInstall" /v DisablePushToInstall /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\MRT" /v DontOfferThroughWUAU /t REG_DWORD /d 1 /f | Out-Null
 
-# 探针安全删除广告推广键
 Safe-DeleteRegKey "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Subscriptions"
 Safe-DeleteRegKey "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps"
 
@@ -87,7 +101,17 @@ Safe-DeleteRegKey "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Conten
 & reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat" /v ChatIcon /t REG_DWORD /d 3 /f | Out-Null
 & reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarMn /t REG_DWORD /d 0 /f | Out-Null
 
-# ----------------- 7. 探针清理 Edge 遗留卸载项 -----------------
+# ----------------- 7. 彻底注销 Edge 注册表关联与协议绑定 -----------------
+Write-Host "   -> 彻底注销 Microsoft Edge 注册表关联与协议绑定..." -ForegroundColor DarkGray
+Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\Edge"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Edge"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\EdgeUpdate"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\WOW6432Node\Microsoft\EdgeUpdate"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\Clients\StartMenuInternet\Microsoft Edge"
+Safe-DeleteRegValue "HKLM\zSOFTWARE\RegisteredApplications" "Microsoft Edge"
+Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge"
 Safe-DeleteRegKey "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge"
 Safe-DeleteRegKey "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update"
 
@@ -109,7 +133,6 @@ Write-Host "   -> 禁用遥测与隐私搜集..." -ForegroundColor DarkGray
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate" /v workCompleted /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate" /v workCompleted /t REG_DWORD /d 1 /f | Out-Null
 
-# 探针安全删除调度更新配置
 Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate"
 Safe-DeleteRegKey "HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate"
 
@@ -151,7 +174,6 @@ Write-Host "   -> 关闭 Windows 自动更新通道..." -ForegroundColor DarkGra
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v DisableOnline /t REG_DWORD /d 1 /f | Out-Null
 & reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\wuauserv" /v Start /t REG_DWORD /d 4 /f | Out-Null
 
-# 探针安全删除更新辅助服务项
 Safe-DeleteRegKey "HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC"
 Safe-DeleteRegKey "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc"
 
@@ -165,7 +187,7 @@ foreach ($svc in $defenderServices) {
 }
 & reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v SettingsPageVisibility /t REG_SZ /d "hide:virus;windowsupdate" /f | Out-Null
 
-# ----------------- 13. 系统冗余服务智能治理 (消除拒绝访问与报错) -----------------
+# ----------------- 13. 系统冗余与 Edge 升级服务智能治理 (零红字通道) -----------------
 Write-Host "   -> 正在智能治理冗余系统服务..." -ForegroundColor DarkGray
 $servicesToRemove = @( 
     'Spooler', 
@@ -181,7 +203,10 @@ $servicesToRemove = @(
     'BluetoothUserService', 
     'wuauserv', 
     'UsoSvc', 
-    'WaaSMedicSvc' 
+    'WaaSMedicSvc',
+    'edgeupdate',
+    'edgeupdatem',
+    'MicrosoftEdgeElevationService'
 )
 
 foreach ($service in $servicesToRemove) { 
@@ -190,10 +215,10 @@ foreach ($service in $servicesToRemove) {
 
     if (Test-Path -LiteralPath $svcPsPath) {
         # 1. 率先写入内核级安全禁用 (Start = 4)，保障即使后续 ACL 拦截也能 100% 达成停止运行目标
-        & reg.exe add "$svcPath" /v Start /t REG_DWORD /d 4 /f 2>$null | Out-Null
+        cmd.exe /c "reg.exe add `"$svcPath`" /v Start /t REG_DWORD /d 4 /f 2>nul" | Out-Null
 
-        # 2. 尝试物理彻底抹除键值
-        & reg.exe delete "$svcPath" /f 2>$null | Out-Null
+        # 2. 尝试物理彻底抹除键值（使用 cmd 内核吸收 stderr，杜绝 Transcript 抛出 NativeCommandError）
+        cmd.exe /c "reg.exe delete `"$svcPath`" /f 2>nul" | Out-Null
 
         # 3. 校验执行结果
         if (Test-Path -LiteralPath $svcPsPath) {
