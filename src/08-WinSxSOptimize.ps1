@@ -1,64 +1,52 @@
 # ==============================================================================
-#  win11 Builder - [模块 9/11] 组件库瘦身与主映像提交 (src/08-WinSxSOptimize.ps1)
+#  win11 Builder - [模块 9/11] 组件库瘦身与主映像优化 (src/08-WinSxSOptimize.ps1)
 # ==============================================================================
 
-Write-Host "`n[步骤 10/11] 正在重置组件基线并执行 WinSxS 裁剪..." -ForegroundColor Cyan
+Write-Host "`n[步骤 10/11] 正在根据精简模式执行组件存储 (WinSxS) 优化..." -ForegroundColor Cyan
 
-# 关键：原版在动 WinSxS 前先由 DISM 做完整的基线重置，解决注册表引用与底层不一致
-Write-Host "Executing DISM StartComponentCleanup /ResetBase..." -ForegroundColor Yellow
-& dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase
+$currentTrimMode = if ($global:trimMode) { $global:trimMode } else { "1" }
+$currentArch     = if ($global:architecture) { $global:architecture } else { "amd64" }
 
-Write-Host "Taking ownership of the WinSxS folder. This might take a while..." -ForegroundColor Yellow
-& takeown.exe /f "$scratchDir\Windows\WinSxS" /r 2>$null | Out-Null
-& icacls.exe "$scratchDir\Windows\WinSxS" /grant "*S-1-5-32-544:F" /T /C 2>$null | Out-Null
+# ----------------- 1. 通用阶段：执行官方基线重置 -----------------
+Write-Host "正在执行 DISM 深度组件清理与基线重置 (/StartComponentCleanup /ResetBase)..." -ForegroundColor Yellow
+& dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase
 
-$folderPath = "$scratchDir\Windows\WinSxS_edit"
-$sourceDirectory = "$scratchDir\Windows\WinSxS"
-$destinationDirectory = "$scratchDir\Windows\WinSxS_edit"
-New-Item -Path $folderPath -ItemType Directory -Force | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[提示] DISM 组件重置退出码: $LASTEXITCODE (部分精简组件无需重置或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
+}
 
-if ($global:architecture -eq "amd64") {
-   $dirsToCopy = @(
-        "x86_microsoft.windows.common-controls_6595b64144ccf1df_*",
-        "x86_microsoft.windows.gdiplus_6595b64144ccf1df_*",    
-        "x86_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
-        "x86_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
-        "x86_microsoft-windows-s..ngstack-onecorebase_31bf3856ad364e35_*",
-        "x86_microsoft-windows-s..stack-termsrv-extra_31bf3856ad364e35_*",
-        "x86_microsoft-windows-servicingstack_31bf3856ad364e35_*",
-        "x86_microsoft-windows-servicingstack-inetsrv_*",
-        "x86_microsoft-windows-servicingstack-onecore_*",
-        "amd64_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
-        "amd64_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
-        "amd64_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*",
-        "amd64_microsoft.windows.common-controls_6595b64144ccf1df_*",
-        "amd64_microsoft.windows.gdiplus_6595b64144ccf1df_*",
-        "amd64_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
-        "amd64_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
-        "amd64_microsoft-windows-s..stack-inetsrv-extra_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-s..stack-msg.resources_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-s..stack-termsrv-extra_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-servicingstack_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-servicingstack-inetsrv_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-servicingstack-onecore_31bf3856ad364e35_*",
-        "Catalogs",
-        "FileMaps",
-        "Fusion",
-        "InstallTemp",
-        "Manifests",
-        "x86_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
-        "x86_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
-        "x86_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*"
-    )
-    foreach ($dir in $dirsToCopy) {
-        $sourceDirs = Get-ChildItem -Path $sourceDirectory -Filter $dir -Directory -ErrorAction SilentlyContinue
-        foreach ($sDir in $sourceDirs) {
-            $destDir = Join-Path -Path $destinationDirectory -ChildPath $sDir.Name
-            Copy-Item -Path $sDir.FullName -Destination $destDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-} elseif ($global:architecture -eq "arm64") {
+# ----------------- 2. 分支处理：依据模式决定是否执行物理抹杀 -----------------
+if ($currentTrimMode -ne "2") {
+    Write-Host "[完成] 当前为【普通精简模式】，已保留完整 WinSxS 核心组件库以确保绝佳兼容性与可维护性。" -ForegroundColor Green
+    return
+}
+
+# ----------------- 3. 极限压榨模式专用：WinSxS 物理极限裁剪 -----------------
+Write-Host "`n>>> [警告] 当前为【极限压榨模式】，正在物理瘦身 WinSxS (架构: $currentArch)..." -ForegroundColor Red
+
+$winSxSDir     = Join-Path $scratchDir "Windows\WinSxS"
+$winSxSEditDir = Join-Path $scratchDir "Windows\WinSxS_edit"
+
+if (-not (Test-Path -LiteralPath $winSxSDir)) {
+    Write-Host "[错误] 未检测到 WinSxS 目录: $winSxSDir，跳过物理替换。" -ForegroundColor Red
+    return
+}
+
+# 获取 WinSxS 物理掌控权
+Write-Host "正在获取 WinSxS 目录物理所有权与完全控制权限..." -ForegroundColor Yellow
+& takeown.exe /F "$winSxSDir" /R /A /D Y 2>$null | Out-Null
+& icacls.exe "$winSxSDir" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
+
+# 重置并创建暂存目录
+if (Test-Path -LiteralPath $winSxSEditDir) {
+    Remove-Item -LiteralPath $winSxSEditDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -Path $winSxSEditDir -ItemType Directory -Force | Out-Null
+
+# 根据架构构建保活组件清单
+$dirsToCopy = @()
+
+if ($currentArch -eq "arm64") {
     $dirsToCopy = @(
         "arm64_microsoft-windows-servicingstack-onecore_31bf3856ad364e35_*",
         "Catalogs",
@@ -94,17 +82,67 @@ if ($global:architecture -eq "amd64") {
         "arm64_microsoft-windows-servicingstack-inetsrv_31bf3856ad364e35_*",
         "arm64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*"
     )
-    foreach ($dir in $dirsToCopy) {
-        $sourceDirs = Get-ChildItem -Path $sourceDirectory -Filter $dir -Directory -ErrorAction SilentlyContinue
-        foreach ($sDir in $sourceDirs) {
-            $destDir = Join-Path -Path $destinationDirectory -ChildPath $sDir.Name
-            Copy-Item -Path $sDir.FullName -Destination $destDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }  
+} else {
+    # 默认 amd64 体系
+    $dirsToCopy = @(
+        "x86_microsoft.windows.common-controls_6595b64144ccf1df_*",
+        "x86_microsoft.windows.gdiplus_6595b64144ccf1df_*",    
+        "x86_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
+        "x86_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
+        "x86_microsoft-windows-s..ngstack-onecorebase_31bf3856ad364e35_*",
+        "x86_microsoft-windows-s..stack-termsrv-extra_31bf3856ad364e35_*",
+        "x86_microsoft-windows-servicingstack_31bf3856ad364e35_*",
+        "x86_microsoft-windows-servicingstack-inetsrv_*",
+        "x86_microsoft-windows-servicingstack-onecore_*",
+        "amd64_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
+        "amd64_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
+        "amd64_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.common-controls_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.gdiplus_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
+        "amd64_microsoft-windows-s..stack-inetsrv-extra_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-s..stack-msg.resources_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-s..stack-termsrv-extra_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack-inetsrv_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack-onecore_31bf3856ad364e35_*",
+        "Catalogs",
+        "FileMaps",
+        "Fusion",
+        "InstallTemp",
+        "Manifests",
+        "x86_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
+        "x86_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
+        "x86_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*"
+    )
 }
 
-Write-Host "Deleting WinSxS. This may take a while..." -ForegroundColor Yellow
-Remove-Item -Path "$scratchDir\Windows\WinSxS" -Recurse -Force -ErrorAction SilentlyContinue
-Rename-Item -Path "$scratchDir\Windows\WinSxS_edit" -NewName "WinSxS" -Force
+# 复制保活核心清单
+Write-Host "正在提取基础运行库与核心服务依赖项..." -ForegroundColor Cyan
+foreach ($pattern in $dirsToCopy) {
+    $matchedDirs = Get-ChildItem -Path $winSxSDir -Filter $pattern -Directory -ErrorAction SilentlyContinue
+    if ($matchedDirs) {
+        foreach ($sDir in $matchedDirs) {
+            $destDir = Join-Path $winSxSEditDir $sDir.Name
+            Copy-Item -LiteralPath $sDir.FullName -Destination $destDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
 
-Write-Host "[完成] WinSxS 裁剪与置换完毕。" -ForegroundColor Green
+# 执行物理粉碎替换
+Write-Host "正在物理销毁原始 WinSxS 并置换轻量结构..." -ForegroundColor Yellow
+attrib.exe -R -S -H "$winSxSDir\*" /S /D 2>$null
+Remove-Item -LiteralPath $winSxSDir -Recurse -Force -ErrorAction SilentlyContinue
+
+if (Test-Path -LiteralPath $winSxSDir) {
+    cmd.exe /c "rd /s /q `"$winSxSDir`"" 2>$null
+}
+
+if (-not (Test-Path -LiteralPath $winSxSDir)) {
+    Rename-Item -LiteralPath $winSxSEditDir -NewName "WinSxS" -Force
+    Write-Host "[完成] WinSxS 极限置换完成，体积已大幅度压缩。" -ForegroundColor Green
+} else {
+    Write-Host "[警告] WinSxS 原始目录存在锁死残留，保留备份以防映像损坏。" -ForegroundColor Yellow
+}
