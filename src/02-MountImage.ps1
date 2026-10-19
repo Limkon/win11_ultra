@@ -3,70 +3,130 @@
 # ==============================================================================
 
 # 1. 输入与校验 ISO 光驱盘符
-$DriveLetter = Read-Host "请输入 Windows 11 ISO 虚拟光驱盘符 (例如 E)"
-$DriveLetter = ($DriveLetter.TrimEnd('\').TrimEnd(':').Trim()) + ":"
-
-if (-not (Test-Path "$DriveLetter\sources\boot.wim") -or (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$DriveLetter\sources\install.esd"))) {
-    Write-Host "[错误] 在 $DriveLetter 中未找到有效的 Windows 安装镜像源 (缺少 boot.wim 或 install.wim/esd)！" -ForegroundColor Red
+$rawDrive = Read-Host "请输入 Windows 11 ISO 虚拟光驱盘符 (例如 E)"
+if ([string]::IsNullOrWhiteSpace($rawDrive)) {
+    Write-Host "[严重错误] 未输入有效盘符！流程终止。" -ForegroundColor Red
     Stop-Transcript
     pause
-    exit
+    exit 1
+}
+
+$DriveLetter = ($rawDrive.TrimEnd('\').TrimEnd(':').Trim().ToUpper()) + ":"
+
+$bootWimSrc    = "$DriveLetter\sources\boot.wim"
+$installWimSrc = "$DriveLetter\sources\install.wim"
+$installEsdSrc = "$DriveLetter\sources\install.esd"
+
+if (-not (Test-Path -LiteralPath $bootWimSrc) -or (-not (Test-Path -LiteralPath $installWimSrc) -and -not (Test-Path -LiteralPath $installEsdSrc))) {
+    Write-Host "[严重错误] 在虚拟光驱 $DriveLetter 中未检测到有效的 Windows 安装介质结构！" -ForegroundColor Red
+    Write-Host "缺少关键文件: boot.wim 或 install.wim/install.esd，请确认 ISO 已正确挂载。" -ForegroundColor Yellow
+    Stop-Transcript
+    pause
+    exit 1
 }
 
 # 2. 复制 ISO 引导架构文件 (步骤 1/11)
-Write-Host "`n[步骤 1/11] 正在复制 ISO 核心引导结构到工作区..." -ForegroundColor Cyan
-& robocopy.exe "$DriveLetter\\" "$workDir" /E /XF "install.wim" "install.esd" /NDL /NFL /NC /NS /NP | Out-Null
-Write-Host "[完成] 基础架构复制完毕。" -ForegroundColor Green
+# 注意：路径严格规范化为不带尾部转义反斜杠的标准形式，杜绝 CRT 逃逸导致的复制失败
+Write-Host "`n[步骤 1/11] 正在复制 ISO 核心引导架构到工作区..." -ForegroundColor Cyan
+$sourceRoot = "$DriveLetter"
 
-# 3. 定位源映像文件并导出目标分卷 (步骤 2/11)
-$srcWim = "$DriveLetter\sources\install.wim"
-$srcEsd = "$DriveLetter\sources\install.esd"
-$destWim = "$sourcesDir\install.wim"
-
-if (Test-Path $srcWim) {
-    Write-Host "`n[步骤 2/11] 检测到 install.wim，获取映像分卷列表..." -ForegroundColor Cyan
-    & dism.exe /English /Get-WimInfo "/WimFile:$srcWim"
-    $index = Read-Host "请输入要精简的目标版本 Index 序号"
-    Write-Host "正在导出目标分卷 (展示官方原生百分比进度条)..." -ForegroundColor Green
-    & dism.exe /English /Export-Image "/SourceImageFile:$srcWim" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
-} else {
-    Write-Host "`n[步骤 2/11] 检测到 install.esd，获取映像分卷列表..." -ForegroundColor Cyan
-    & dism.exe /English /Get-WimInfo "/WimFile:$srcEsd"
-    $index = Read-Host "请输入要精简的目标版本 Index 序号"
-    Write-Host "正在将目标分卷从 ESD 转换导出为 install.wim (展示官方原生百分比进度条)..." -ForegroundColor Green
-    & dism.exe /English /Export-Image "/SourceImageFile:$srcEsd" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
-}
-
-if (-not (Test-Path $destWim)) {
-    Write-Host "[严重错误] install.wim 导出失败！终止流程。" -ForegroundColor Red
+# Robocopy 返回码 0-7 均代表正常/成功（存在新文件、复制成功等），8 及以上代表严重异常
+$null = & robocopy.exe "$sourceRoot" "$workDir" /E /XF "install.wim" "install.esd" /NDL /NFL /NC /NS /NP
+if ($LASTEXITCODE -ge 8) {
+    Write-Host "[严重错误] 基础引导结构复制失败！Robocopy 退出码: $LASTEXITCODE" -ForegroundColor Red
     Stop-Transcript
     pause
-    exit
+    exit 1
+}
+
+# 校验关键引导链文件完整性
+$criticalBootFiles = @(
+    (Join-Path $workDir "bootmgr"),
+    (Join-Path $workDir "boot\bcd"),
+    (Join-Path $workDir "boot\boot.sdi")
+)
+
+$missingBootFile = $false
+foreach ($bf in $criticalBootFiles) {
+    if (-not (Test-Path -LiteralPath $bf)) {
+        Write-Host "[严重警告] 关键引导文件丢失: $bf" -ForegroundColor Red
+        $missingBootFile = $true
+    }
+}
+
+if ($missingBootFile) {
+    Write-Host "[严重错误] 核心引导结构未能完整复制到工作区，无法支持后续引导生成！" -ForegroundColor Red
+    Stop-Transcript
+    pause
+    exit 1
+}
+Write-Host "[完成] ISO 核心引导架构复制完毕，引导链结构完整有效。" -ForegroundColor Green
+
+# 3. 定位源映像文件并导出目标分卷 (步骤 2/11)
+$destWim = Join-Path $sourcesDir "install.wim"
+
+if (Test-Path -LiteralPath $installWimSrc) {
+    Write-Host "`n[步骤 2/11] 检测到 install.wim，正在解析映像分卷列表..." -ForegroundColor Cyan
+    & dism.exe /English /Get-WimInfo "/WimFile:$installWimSrc"
+    $index = Read-Host "请输入要精简的目标版本 Index 序号"
+    if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
+    
+    Write-Host "正在导出目标分卷 $index (展示原生导出进度条)..." -ForegroundColor Green
+    & dism.exe /English /Export-Image "/SourceImageFile:$installWimSrc" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
+} else {
+    Write-Host "`n[步骤 2/11] 检测到 install.esd，正在解析映像分卷列表..." -ForegroundColor Cyan
+    & dism.exe /English /Get-WimInfo "/WimFile:$installEsdSrc"
+    $index = Read-Host "请输入要精简的目标版本 Index 序号"
+    if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
+    
+    Write-Host "正在将目标分卷 $index 从 ESD 高压格式转换为 install.wim (展示原生进度条)..." -ForegroundColor Green
+    & dism.exe /English /Export-Image "/SourceImageFile:$installEsdSrc" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
+}
+
+if (-not (Test-Path -LiteralPath $destWim)) {
+    Write-Host "[严重错误] install.wim 导出生成失败！流程终止。" -ForegroundColor Red
+    Stop-Transcript
+    pause
+    exit 1
 }
 
 # 导出后独立单一镜像的 Index 固定为 1
 $index = "1"
 
-# 4. 解锁映像访问权限并正式挂载 (步骤 3/11)
-Write-Host "`n[步骤 3/11] 解锁 install.wim 访问权限并挂载..." -ForegroundColor Cyan
+# 4. 解锁映像访问权限并挂载 (步骤 3/11)
+Write-Host "`n[步骤 3/11] 正在接管 install.wim 物理访问权限并执行挂载..." -ForegroundColor Cyan
 attrib.exe -R -S -H "$destWim" 2>$null
-Start-Process -FilePath "takeown.exe" -ArgumentList "/F `"$destWim`"" -NoNewWindow -Wait
-Start-Process -FilePath "icacls.exe" -ArgumentList "`"$destWim`" /grant *S-1-5-32-544:F /C /Q" -NoNewWindow -Wait
-(Get-Item $destWim).IsReadOnly = $false
+& takeown.exe /F "$destWim" /A 2>$null | Out-Null
+& icacls.exe "$destWim" /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
+(Get-Item -LiteralPath $destWim).IsReadOnly = $false
 
-if (Test-Path $scratchDir) {
+# 挂载点初始化与清理
+if (Test-Path -LiteralPath $scratchDir) {
+    # 尝试卸载历史可能附着的死锁
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>$null | Out-Null
+    attrib.exe -R -S -H "$scratchDir\*" /S /D 2>$null
     Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
 
-Write-Host "正在挂载 install.wim 到 $scratchDir (展示官方挂载进度条)..." -ForegroundColor Green
+Write-Host "正在挂载目标映像到 $scratchDir (展示官方挂载进度条)..." -ForegroundColor Green
 & dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir"
 
-# 挂载状态校验
-if (-not (Test-Path "$scratchDir\Windows\System32")) {
-    Write-Host "[严重错误] 映像挂载失败！System32 目录不存在，终止运行。" -ForegroundColor Red
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[严重错误] DISM 映像挂载失败，退出码: $LASTEXITCODE！" -ForegroundColor Red
     Stop-Transcript
     pause
-    exit
+    exit 1
 }
-Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
+
+# 挂载状态严密自检
+$sys32Path = Join-Path $scratchDir "Windows\System32"
+if (-not (Test-Path -LiteralPath $sys32Path)) {
+    Write-Host "[严重错误] 挂载目录健康自检失败！未检测到 $sys32Path，映像已损坏或挂载不完整。" -ForegroundColor Red
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>$null | Out-Null
+    Stop-Transcript
+    pause
+    exit 1
+}
+
+Write-Host "[完成] 系统主映像挂载成功，运行环境就绪。" -ForegroundColor Green
