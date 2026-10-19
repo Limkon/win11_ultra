@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-19 05:35:39 UTC
+#  生成时间: 2026-10-19 06:49:05 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -452,73 +452,133 @@ function Read-InputWithTimeout {
 # ==============================================================================
 
 # 1. 输入与校验 ISO 光驱盘符
-$DriveLetter = Read-Host "请输入 Windows 11 ISO 虚拟光驱盘符 (例如 E)"
-$DriveLetter = ($DriveLetter.TrimEnd('\').TrimEnd(':').Trim()) + ":"
-
-if (-not (Test-Path "$DriveLetter\sources\boot.wim") -or (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$DriveLetter\sources\install.esd"))) {
-    Write-Host "[错误] 在 $DriveLetter 中未找到有效的 Windows 安装镜像源 (缺少 boot.wim 或 install.wim/esd)！" -ForegroundColor Red
+$rawDrive = Read-Host "请输入 Windows 11 ISO 虚拟光驱盘符 (例如 E)"
+if ([string]::IsNullOrWhiteSpace($rawDrive)) {
+    Write-Host "[严重错误] 未输入有效盘符！流程终止。" -ForegroundColor Red
     Stop-Transcript
     pause
-    exit
+    exit 1
+}
+
+$DriveLetter = ($rawDrive.TrimEnd('\').TrimEnd(':').Trim().ToUpper()) + ":"
+
+$bootWimSrc    = "$DriveLetter\sources\boot.wim"
+$installWimSrc = "$DriveLetter\sources\install.wim"
+$installEsdSrc = "$DriveLetter\sources\install.esd"
+
+if (-not (Test-Path -LiteralPath $bootWimSrc) -or (-not (Test-Path -LiteralPath $installWimSrc) -and -not (Test-Path -LiteralPath $installEsdSrc))) {
+    Write-Host "[严重错误] 在虚拟光驱 $DriveLetter 中未检测到有效的 Windows 安装介质结构！" -ForegroundColor Red
+    Write-Host "缺少关键文件: boot.wim 或 install.wim/install.esd，请确认 ISO 已正确挂载。" -ForegroundColor Yellow
+    Stop-Transcript
+    pause
+    exit 1
 }
 
 # 2. 复制 ISO 引导架构文件 (步骤 1/11)
-Write-Host "`n[步骤 1/11] 正在复制 ISO 核心引导结构到工作区..." -ForegroundColor Cyan
-& robocopy.exe "$DriveLetter\\" "$workDir" /E /XF "install.wim" "install.esd" /NDL /NFL /NC /NS /NP | Out-Null
-Write-Host "[完成] 基础架构复制完毕。" -ForegroundColor Green
+# 注意：路径严格规范化为不带尾部转义反斜杠的标准形式，杜绝 CRT 逃逸导致的复制失败
+Write-Host "`n[步骤 1/11] 正在复制 ISO 核心引导架构到工作区..." -ForegroundColor Cyan
+$sourceRoot = "$DriveLetter"
 
-# 3. 定位源映像文件并导出目标分卷 (步骤 2/11)
-$srcWim = "$DriveLetter\sources\install.wim"
-$srcEsd = "$DriveLetter\sources\install.esd"
-$destWim = "$sourcesDir\install.wim"
-
-if (Test-Path $srcWim) {
-    Write-Host "`n[步骤 2/11] 检测到 install.wim，获取映像分卷列表..." -ForegroundColor Cyan
-    & dism.exe /English /Get-WimInfo "/WimFile:$srcWim"
-    $index = Read-Host "请输入要精简的目标版本 Index 序号"
-    Write-Host "正在导出目标分卷 (展示官方原生百分比进度条)..." -ForegroundColor Green
-    & dism.exe /English /Export-Image "/SourceImageFile:$srcWim" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
-} else {
-    Write-Host "`n[步骤 2/11] 检测到 install.esd，获取映像分卷列表..." -ForegroundColor Cyan
-    & dism.exe /English /Get-WimInfo "/WimFile:$srcEsd"
-    $index = Read-Host "请输入要精简的目标版本 Index 序号"
-    Write-Host "正在将目标分卷从 ESD 转换导出为 install.wim (展示官方原生百分比进度条)..." -ForegroundColor Green
-    & dism.exe /English /Export-Image "/SourceImageFile:$srcEsd" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
-}
-
-if (-not (Test-Path $destWim)) {
-    Write-Host "[严重错误] install.wim 导出失败！终止流程。" -ForegroundColor Red
+# Robocopy 返回码 0-7 均代表正常/成功（存在新文件、复制成功等），8 及以上代表严重异常
+$null = & robocopy.exe "$sourceRoot" "$workDir" /E /XF "install.wim" "install.esd" /NDL /NFL /NC /NS /NP
+if ($LASTEXITCODE -ge 8) {
+    Write-Host "[严重错误] 基础引导结构复制失败！Robocopy 退出码: $LASTEXITCODE" -ForegroundColor Red
     Stop-Transcript
     pause
-    exit
+    exit 1
+}
+
+# 校验关键引导链文件完整性
+$criticalBootFiles = @(
+    (Join-Path $workDir "bootmgr"),
+    (Join-Path $workDir "boot\bcd"),
+    (Join-Path $workDir "boot\boot.sdi")
+)
+
+$missingBootFile = $false
+foreach ($bf in $criticalBootFiles) {
+    if (-not (Test-Path -LiteralPath $bf)) {
+        Write-Host "[严重警告] 关键引导文件丢失: $bf" -ForegroundColor Red
+        $missingBootFile = $true
+    }
+}
+
+if ($missingBootFile) {
+    Write-Host "[严重错误] 核心引导结构未能完整复制到工作区，无法支持后续引导生成！" -ForegroundColor Red
+    Stop-Transcript
+    pause
+    exit 1
+}
+Write-Host "[完成] ISO 核心引导架构复制完毕，引导链结构完整有效。" -ForegroundColor Green
+
+# 3. 定位源映像文件并导出目标分卷 (步骤 2/11)
+$destWim = Join-Path $sourcesDir "install.wim"
+
+if (Test-Path -LiteralPath $installWimSrc) {
+    Write-Host "`n[步骤 2/11] 检测到 install.wim，正在解析映像分卷列表..." -ForegroundColor Cyan
+    & dism.exe /English /Get-WimInfo "/WimFile:$installWimSrc"
+    $index = Read-Host "请输入要精简的目标版本 Index 序号"
+    if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
+    
+    Write-Host "正在导出目标分卷 $index (展示原生导出进度条)..." -ForegroundColor Green
+    & dism.exe /English /Export-Image "/SourceImageFile:$installWimSrc" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
+} else {
+    Write-Host "`n[步骤 2/11] 检测到 install.esd，正在解析映像分卷列表..." -ForegroundColor Cyan
+    & dism.exe /English /Get-WimInfo "/WimFile:$installEsdSrc"
+    $index = Read-Host "请输入要精简的目标版本 Index 序号"
+    if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
+    
+    Write-Host "正在将目标分卷 $index 从 ESD 高压格式转换为 install.wim (展示原生进度条)..." -ForegroundColor Green
+    & dism.exe /English /Export-Image "/SourceImageFile:$installEsdSrc" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
+}
+
+if (-not (Test-Path -LiteralPath $destWim)) {
+    Write-Host "[严重错误] install.wim 导出生成失败！流程终止。" -ForegroundColor Red
+    Stop-Transcript
+    pause
+    exit 1
 }
 
 # 导出后独立单一镜像的 Index 固定为 1
 $index = "1"
 
-# 4. 解锁映像访问权限并正式挂载 (步骤 3/11)
-Write-Host "`n[步骤 3/11] 解锁 install.wim 访问权限并挂载..." -ForegroundColor Cyan
+# 4. 解锁映像访问权限并挂载 (步骤 3/11)
+Write-Host "`n[步骤 3/11] 正在接管 install.wim 物理访问权限并执行挂载..." -ForegroundColor Cyan
 attrib.exe -R -S -H "$destWim" 2>$null
-Start-Process -FilePath "takeown.exe" -ArgumentList "/F `"$destWim`"" -NoNewWindow -Wait
-Start-Process -FilePath "icacls.exe" -ArgumentList "`"$destWim`" /grant *S-1-5-32-544:F /C /Q" -NoNewWindow -Wait
-(Get-Item $destWim).IsReadOnly = $false
+& takeown.exe /F "$destWim" /A 2>$null | Out-Null
+& icacls.exe "$destWim" /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
+(Get-Item -LiteralPath $destWim).IsReadOnly = $false
 
-if (Test-Path $scratchDir) {
+# 挂载点初始化与清理
+if (Test-Path -LiteralPath $scratchDir) {
+    # 尝试卸载历史可能附着的死锁
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>$null | Out-Null
+    attrib.exe -R -S -H "$scratchDir\*" /S /D 2>$null
     Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
 
-Write-Host "正在挂载 install.wim 到 $scratchDir (展示官方挂载进度条)..." -ForegroundColor Green
+Write-Host "正在挂载目标映像到 $scratchDir (展示官方挂载进度条)..." -ForegroundColor Green
 & dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir"
 
-# 挂载状态校验
-if (-not (Test-Path "$scratchDir\Windows\System32")) {
-    Write-Host "[严重错误] 映像挂载失败！System32 目录不存在，终止运行。" -ForegroundColor Red
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[严重错误] DISM 映像挂载失败，退出码: $LASTEXITCODE！" -ForegroundColor Red
     Stop-Transcript
     pause
-    exit
+    exit 1
 }
-Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
+
+# 挂载状态严密自检
+$sys32Path = Join-Path $scratchDir "Windows\System32"
+if (-not (Test-Path -LiteralPath $sys32Path)) {
+    Write-Host "[严重错误] 挂载目录健康自检失败！未检测到 $sys32Path，映像已损坏或挂载不完整。" -ForegroundColor Red
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>$null | Out-Null
+    Stop-Transcript
+    pause
+    exit 1
+}
+
+Write-Host "[完成] 系统主映像挂载成功，运行环境就绪。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/02-MountImage.ps1
 
@@ -531,93 +591,146 @@ Write-Host "[完成] 系统映像挂载成功。" -ForegroundColor Green
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
 
-# 1. 语言与架构探测 (完全对齐原版)
+# ----------------- 1. 语言与硬件架构深度探针 -----------------
+# 探查默认 UI 语言并写入全局变量，确保跨模块引导与应答文件协同
 $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
-$languageLine = $imageIntl -split '\n' | Where-Object { $_ -match 'Default system UI language : ([a-zA-Z]{2}-[a-zA-Z]{2})' }
-if ($languageLine) { 
-    $languageCode = $Matches[1]
-    Write-Host "Default system UI language code: $languageCode" -ForegroundColor Green
-} else { 
-    Write-Host "Default system UI language code not found." -ForegroundColor Yellow
+$matchedLang = $false
+foreach ($line in ($imageIntl -split '\r?\n')) {
+    if ($line -match 'Default system UI language\s*:\s*([a-zA-Z]{2}-[a-zA-Z]{2})') {
+        $global:languageCode = $Matches[1].Trim()
+        $matchedLang = $true
+        Write-Host "检测到默认系统 UI 语言代码: $global:languageCode" -ForegroundColor Green
+        break
+    }
 }
 
+if (-not $matchedLang -or [string]::IsNullOrWhiteSpace($global:languageCode)) {
+    $global:languageCode = "zh-CN"
+    Write-Host "[提示] 未能从映像中探测到明确的 UI 语言代码，安全回退默认值: $global:languageCode" -ForegroundColor Yellow
+}
+
+# 探查目标映像处理器架构
 $destWimPath = Join-Path $sourcesDir "install.wim"
 $imageInfo = & dism.exe /English /Get-WimInfo "/wimFile:$destWimPath" "/index:1"
-$lines = $imageInfo -split '\r?\n'
-foreach ($line in $lines) { 
-    if ($line -like '*Architecture : *') { 
-        $global:architecture = $line -replace 'Architecture : ',''; 
-        if ($global:architecture -eq 'x64') { $global:architecture = 'amd64' }; 
-        Write-Host "Architecture: $global:architecture" -ForegroundColor Green
-        break 
-    } 
+$matchedArch = $false
+foreach ($line in ($imageInfo -split '\r?\n')) {
+    if ($line -match 'Architecture\s*:\s*(.+)$') {
+        $rawArch = $Matches[1].Trim().ToLower()
+        if ($rawArch -eq 'x64' -or $rawArch -eq 'amd64') {
+            $global:architecture = 'amd64'
+        } elseif ($rawArch -eq 'arm64') {
+            $global:architecture = 'arm64'
+        } elseif ($rawArch -eq 'x86') {
+            $global:architecture = 'x86'
+        } else {
+            $global:architecture = $rawArch
+        }
+        $matchedArch = $true
+        Write-Host "检测到映像处理器架构: $global:architecture" -ForegroundColor Green
+        break
+    }
 }
-if (-not $global:architecture) { 
+
+if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
     $global:architecture = "amd64"
-    Write-Host "Architecture information fallback: amd64" -ForegroundColor Yellow
+    Write-Host "[提示] 架构信息未能自动解析，默认回退安全值: amd64" -ForegroundColor Yellow
 }
 
-# 2. 移除预装 AppX (Bloatware)
-Write-Host "Removing provisioned AppX packages (bloatware)..." -ForegroundColor Cyan
-$packagesToRemove = Get-AppxProvisionedPackage -Path $scratchDir | Where-Object { 
-    $_.PackageName -like '*Zune*' -or 
-    $_.PackageName -like '*Bing*' -or 
-    $_.PackageName -like '*Clipchamp*' -or 
-    $_.PackageName -like '*Gaming*' -or 
-    $_.PackageName -like '*People*' -or 
-    $_.PackageName -like '*PowerAutomate*' -or 
-    $_.PackageName -like '*Teams*' -or 
-    $_.PackageName -like '*Todos*' -or 
-    $_.PackageName -like '*YourPhone*' -or 
-    $_.PackageName -like '*SoundRecorder*' -or 
-    $_.PackageName -like '*Solitaire*' -or 
-    $_.PackageName -like '*FeedbackHub*' -or 
-    $_.PackageName -like '*Maps*' -or 
-    $_.PackageName -like '*OfficeHub*' -or 
-    $_.PackageName -like '*Help*' -or 
-    $_.PackageName -like '*Family*' -or 
-    $_.PackageName -like '*Alarms*' -or 
-    $_.PackageName -like '*CommunicationsApps*' -or 
-    $_.PackageName -like '*Copilot*' -or 
-    $_.PackageName -like '*CompatibilityEnhancements*' -or 
-    $_.PackageName -like '*AV1VideoExtension*' -or 
-    $_.PackageName -like '*AVCEncoderVideoExtension*' -or 
-    $_.PackageName -like '*HEIFImageExtension*' -or 
-    $_.PackageName -like '*HEVCVideoExtension*' -or 
-    $_.PackageName -like '*MicrosoftStickyNotes*' -or 
-    $_.PackageName -like '*OutlookForWindows*' -or 
-    $_.PackageName -like '*RawImageExtension*' -or 
-    $_.PackageName -like '*SecHealthUI*' -or 
-    $_.PackageName -like '*VP9VideoExtensions*' -or 
-    $_.PackageName -like '*WebpImageExtension*' -or 
-    $_.PackageName -like '*DevHome*' -or 
-    $_.PackageName -like '*Photos*' -or 
-    $_.PackageName -like '*Camera*' -or 
-    $_.PackageName -like '*QuickAssist*' -or 
-    $_.PackageName -like '*CoreAI*' -or 
-    $_.PackageName -like '*PeopleExperienceHost*' -or 
-    $_.PackageName -like '*PinningConfirmationDialog*' -or 
-    $_.PackageName -like '*SecureAssessmentBrowser*' -or 
-    $_.PackageName -like '*Paint*' -or 
-    $_.PackageName -like '*Notepad*' 
+# ----------------- 2. 移除预装 AppX (Bloatware) -----------------
+Write-Host "`n正在扫描并移除预装臃肿 AppX 应用包..." -ForegroundColor Cyan
+
+# 精确匹配待移除应用清单
+$targetAppxPatterns = @(
+    '*Zune*',
+    '*Bing*',
+    '*Clipchamp*',
+    '*Gaming*',
+    '*People*',
+    '*PowerAutomate*',
+    '*Teams*',
+    '*Todos*',
+    '*YourPhone*',
+    '*SoundRecorder*',
+    '*Solitaire*',
+    '*FeedbackHub*',
+    '*Maps*',
+    '*OfficeHub*',
+    '*Help*',
+    '*Family*',
+    '*Alarms*',
+    '*CommunicationsApps*',
+    '*Copilot*',
+    '*CompatibilityEnhancements*',
+    '*AV1VideoExtension*',
+    '*AVCEncoderVideoExtension*',
+    '*HEIFImageExtension*',
+    '*HEVCVideoExtension*',
+    '*MicrosoftStickyNotes*',
+    '*OutlookForWindows*',
+    '*RawImageExtension*',
+    '*SecHealthUI*',
+    '*VP9VideoExtensions*',
+    '*WebpImageExtension*',
+    '*DevHome*',
+    '*Photos*',
+    '*Camera*',
+    '*QuickAssist*',
+    '*CoreAI*',
+    '*PeopleExperienceHost*',
+    '*PinningConfirmationDialog*',
+    '*SecureAssessmentBrowser*',
+    '*Paint*',
+    '*Notepad*'
+)
+
+$provisionedPackages = Get-AppxProvisionedPackage -Path $scratchDir -ErrorAction SilentlyContinue
+$packagesToRemove = @()
+
+if ($provisionedPackages) {
+    foreach ($pkg in $provisionedPackages) {
+        foreach ($pattern in $targetAppxPatterns) {
+            if ($pkg.PackageName -like $pattern) {
+                $packagesToRemove += $pkg
+                break
+            }
+        }
+    }
 }
 
-foreach ($package in $packagesToRemove) { 
-    Write-Host "Removing: $($package.DisplayName)"
-    Remove-AppxProvisionedPackage -Path $scratchDir -PackageName $package.PackageName 
+$removedPackageNames = New-Object System.Collections.Generic.List[string]
+
+foreach ($package in $packagesToRemove) {
+    Write-Host "   正在移除应用: $($package.DisplayName) [$($package.PackageName)]" -ForegroundColor DarkGray
+    $null = Remove-AppxProvisionedPackage -Path $scratchDir -PackageName $package.PackageName -ErrorAction SilentlyContinue
+    $removedPackageNames.Add($package.PackageName)
 }
 
-Write-Host "Attempting to remove leftover WindowsApps folders..."
-foreach ($package in $packagesToRemove) { 
-    $folderPath = Join-Path "$scratchDir\Program Files\WindowsApps" $package.PackageName
-    if (Test-Path $folderPath) { 
-        Write-Host "Deleting folder: $($package.PackageName)"
-        Remove-Item $folderPath -Recurse -Force -ErrorAction SilentlyContinue 
-    } 
+# 深度清理 WindowsApps 物理残留目录（夺权并硬核粉碎）
+Write-Host "正在扫描并清理 Program Files\WindowsApps 中的残留资产..." -ForegroundColor DarkGray
+$windowsAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
+
+if (Test-Path -LiteralPath $windowsAppsDir) {
+    foreach ($pkgName in $removedPackageNames) {
+        $candidateFolder = Join-Path $windowsAppsDir $pkgName
+        if (Test-Path -LiteralPath $candidateFolder) {
+            Write-Host "   粉碎残留资产目录: $pkgName" -ForegroundColor DarkGray
+            & takeown.exe /F "$candidateFolder" /A /R /D Y 2>$null | Out-Null
+            & icacls.exe "$candidateFolder" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
+            attrib.exe -R -S -H "$candidateFolder\*" /S /D 2>$null
+            Remove-Item -LiteralPath $candidateFolder -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $candidateFolder) {
+                cmd.exe /c "rd /s /q `"$candidateFolder`"" 2>$null
+            }
+        }
+    }
 }
 
-# 3. 移除系统底层功能包 Packages (完全移植原版规则)
-Write-Host "Removing of system apps complete! Now proceeding to removal of system packages..." -ForegroundColor Cyan
+# 释放内存引用
+$packagesToRemove = $null
+$provisionedPackages = $null
+
+# ----------------- 3. 移除系统底层功能包 Packages -----------------
+Write-Host "`n系统应用精炼完毕，正在执行系统底层按需功能包 (FOD) 精简..." -ForegroundColor Cyan
 
 $packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
@@ -648,26 +761,29 @@ $packagePatterns = @(
     "Microsoft-Windows-Wallpaper-Content-Extended-FoD-Package~"
 )
 
-if ($languageCode -and $languageCode -ne "zh-CN") {
-    $packagePatterns += "Microsoft-Windows-LanguageFeatures-Handwriting-$languageCode-Package~"
-    $packagePatterns += "Microsoft-Windows-LanguageFeatures-OCR-$languageCode-Package~"
-    $packagePatterns += "Microsoft-Windows-LanguageFeatures-Speech-$languageCode-Package~"
-    $packagePatterns += "Microsoft-Windows-LanguageFeatures-TextToSpeech-$languageCode-Package~"
+# 动态扩展：非当前语言的冗余输入/语音语言包
+if ($global:languageCode -ne "zh-CN") {
+    $packagePatterns += "Microsoft-Windows-LanguageFeatures-Handwriting-$($global:languageCode)-Package~"
+    $packagePatterns += "Microsoft-Windows-LanguageFeatures-OCR-$($global:languageCode)-Package~"
+    $packagePatterns += "Microsoft-Windows-LanguageFeatures-Speech-$($global:languageCode)-Package~"
+    $packagePatterns += "Microsoft-Windows-LanguageFeatures-TextToSpeech-$($global:languageCode)-Package~"
 }
 
-$allPackages = & dism.exe /English /Image:$scratchDir /Get-Packages /Format:Table
-$allPackages = $allPackages -split "`n" | Select-Object -Skip 1
+# 抓取当前系统所有功能包列表
+$rawPackageOutput = & dism.exe /English "/Image:$scratchDir" /Get-Packages /Format:Table
+$packageLines = ($rawPackageOutput -split '\r?\n') | Select-Object -Skip 1
 
-foreach ($packagePattern in $packagePatterns) {
-    $matchedPackages = $allPackages | Where-Object { $_ -like "$packagePattern*" }
-    foreach ($package in $matchedPackages) {
-        $packageIdentity = ($package -split "\s+")[0]
+foreach ($pattern in $packagePatterns) {
+    $matchedLines = $packageLines | Where-Object { $_ -like "$pattern*" }
+    foreach ($mLine in $matchedLines) {
+        $packageIdentity = ($mLine -split '\s+')[0]
         if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -ne "Package" -and $packageIdentity -notmatch "^-+$") {
-            Write-Host "Removing $packageIdentity..."
-            & dism.exe /English /Image:$scratchDir /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>$null | Out-Null
+            Write-Host "   正在移除底层功能包: $packageIdentity..." -ForegroundColor DarkGray
+            & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>$null | Out-Null
         }
     }
 }
+
 Write-Host "[完成] 应用与系统组件包移除完毕。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/03-RemovePackages.ps1
@@ -958,7 +1074,6 @@ Write-Host "[完成] 离线注册表配置与多余服务清理全部完毕。" 
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
-#  [终极稳固]：消除反引号跨行隐患 + 单语句顺序安全替换 + 杜绝 ParserError
 # ==============================================================================
 
 Write-Host "`n[步骤 9/11] 正在加载全局配置并注入 Windows 安装引导应答文件..." -ForegroundColor Cyan
@@ -967,9 +1082,11 @@ Write-Host "`n[步骤 9/11] 正在加载全局配置并注入 Windows 安装引�
 $mode = if ($global:unattendMode) { $global:unattendMode } else { "1" }
 $user = if ($global:customUser)   { $global:customUser }   else { "Admin" }
 $pass = if ($global:customPass)   { $global:customPass }   else { "" }
+$lang = if ($global:languageCode) { $global:languageCode } else { "zh-CN" }
+$arch = if ($global:architecture) { $global:architecture } else { "amd64" }
 
 $modeText = if ($mode -eq "2") { "半无人值守 (手动设置账户向导)" } else { "全无人值守 (自动配置并登录)" }
-Write-Host "   [配置承接] 当前激活模式: $modeText" -ForegroundColor Green
+Write-Host "   [配置承接] 运行模式: $modeText | 目标语言: $lang | 处理器架构: $arch" -ForegroundColor Green
 
 # ----------------- 1. 动态生成应答 XML 架构片段 -----------------
 $userAccountsXmlFragment = ""
@@ -1020,23 +1137,23 @@ if ($mode -eq "1") {
     $hideLocalAccountScreenValue = "false"
 }
 
-# ----------------- 2. 纯字面量无损模板 -----------------
+# ----------------- 2. 纯字面量无损模板 (自适应架构与语言) -----------------
 $unattendTemplate = @'
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
 	<settings pass="offlineServicing"></settings>
 	<settings pass="windowsPE">
-		<!-- 1. WinPE 安装环境国际化 (跳过安装初始语言/键盘选择) -->
-		<component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+		<!-- 1. WinPE 安装环境国际化 (动态自适应母盘主语言) -->
+		<component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<SetupUILanguage>
-				<UILanguage>zh-CN</UILanguage>
+				<UILanguage>__LANG__</UILanguage>
 			</SetupUILanguage>
-			<InputLocale>zh-CN</InputLocale>
-			<SystemLocale>zh-CN</SystemLocale>
-			<UILanguage>zh-CN</UILanguage>
-			<UserLocale>zh-CN</UserLocale>
+			<InputLocale>__LANG__</InputLocale>
+			<SystemLocale>__LANG__</SystemLocale>
+			<UILanguage>__LANG__</UILanguage>
+			<UserLocale>__LANG__</UserLocale>
 		</component>
-		<component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+		<component name="Microsoft-Windows-Setup" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<UserData>
 				<AcceptEula>true</AcceptEula>
 			</UserData>
@@ -1071,10 +1188,10 @@ $unattendTemplate = @'
 	</settings>
 	<settings pass="generalize"></settings>
 	<settings pass="specialize">
-		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<ComputerName>DESKTOP-PC</ComputerName>
 		</component>
-		<component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+		<component name="Microsoft-Windows-Deployment" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<RunSynchronous>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>1</Order>
@@ -1103,13 +1220,13 @@ $unattendTemplate = @'
 	<settings pass="auditUser"></settings>
 	<settings pass="oobeSystem">
 		<!-- 2. OOBE 阶段国际化全自动闭环 -->
-		<component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<InputLocale>zh-CN</InputLocale>
-			<SystemLocale>zh-CN</SystemLocale>
-			<UILanguage>zh-CN</UILanguage>
-			<UserLocale>zh-CN</UserLocale>
+		<component name="Microsoft-Windows-International-Core" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+			<InputLocale>__LANG__</InputLocale>
+			<SystemLocale>__LANG__</SystemLocale>
+			<UILanguage>__LANG__</UILanguage>
+			<UserLocale>__LANG__</UserLocale>
 		</component>
-		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 __USER_ACCOUNTS__
 __AUTO_LOGON__
 			<OOBE>
@@ -1370,14 +1487,16 @@ $scripts = @(
 </unattend>
 '@
 
-# ----------------- 3. 单语句独立安全替换 (彻底免疫空格与反引号陷阱) -----------------
+# ----------------- 3. 安全替换变量占位符 -----------------
 $finalXml = $unattendTemplate
+$finalXml = $finalXml.Replace('__ARCH__', $arch)
+$finalXml = $finalXml.Replace('__LANG__', $lang)
 $finalXml = $finalXml.Replace('__USER_ACCOUNTS__', $userAccountsXmlFragment)
 $finalXml = $finalXml.Replace('__AUTO_LOGON__', $autoLogonXmlFragment)
 $finalXml = $finalXml.Replace('__HIDE_LOCAL_ACCOUNT_SCREEN__', $hideLocalAccountScreenValue)
 $finalXml = $finalXml.Replace('__DEPLOY_MODE_TEXT__', $modeText)
 
-# ----------------- 4. 多通道合规注入 -----------------
+# ----------------- 4. 多通道规范注入 -----------------
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
@@ -1392,10 +1511,10 @@ $utf8Encoding = [System.Text.Encoding]::UTF8
 # Panther 初始化通道
 [System.IO.File]::WriteAllText((Join-Path $pantherDir "unattend.xml"), $finalXml, $utf8Encoding)
 
-# ISO 可移动介质根目录自启动通道
+# ISO 介质根目录自启动通道
 [System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $finalXml, $utf8Encoding)
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (全自动运行，无需人工干预)。" -ForegroundColor Green
+Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自适应语言: $lang | 架构: $arch)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/07-UnattendInject.ps1
 
@@ -1403,66 +1522,54 @@ Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (全自
 # >>> [分块代码引入] 文件来源: src/08-WinSxSOptimize.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 9/11] 组件库瘦身与主映像提交 (src/08-WinSxSOptimize.ps1)
+#  win11 Builder - [模块 9/11] 组件库瘦身与主映像优化 (src/08-WinSxSOptimize.ps1)
 # ==============================================================================
 
-Write-Host "`n[步骤 10/11] 正在重置组件基线并执行 WinSxS 裁剪..." -ForegroundColor Cyan
+Write-Host "`n[步骤 10/11] 正在根据精简模式执行组件存储 (WinSxS) 优化..." -ForegroundColor Cyan
 
-# 关键：原版在动 WinSxS 前先由 DISM 做完整的基线重置，解决注册表引用与底层不一致
-Write-Host "Executing DISM StartComponentCleanup /ResetBase..." -ForegroundColor Yellow
-& dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase
+$currentTrimMode = if ($global:trimMode) { $global:trimMode } else { "1" }
+$currentArch     = if ($global:architecture) { $global:architecture } else { "amd64" }
 
-Write-Host "Taking ownership of the WinSxS folder. This might take a while..." -ForegroundColor Yellow
-& takeown.exe /f "$scratchDir\Windows\WinSxS" /r 2>$null | Out-Null
-& icacls.exe "$scratchDir\Windows\WinSxS" /grant "*S-1-5-32-544:F" /T /C 2>$null | Out-Null
+# ----------------- 1. 通用阶段：执行官方基线重置 -----------------
+Write-Host "正在执行 DISM 深度组件清理与基线重置 (/StartComponentCleanup /ResetBase)..." -ForegroundColor Yellow
+& dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase
 
-$folderPath = "$scratchDir\Windows\WinSxS_edit"
-$sourceDirectory = "$scratchDir\Windows\WinSxS"
-$destinationDirectory = "$scratchDir\Windows\WinSxS_edit"
-New-Item -Path $folderPath -ItemType Directory -Force | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[提示] DISM 组件重置退出码: $LASTEXITCODE (部分精简组件无需重置或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
+}
 
-if ($global:architecture -eq "amd64") {
-   $dirsToCopy = @(
-        "x86_microsoft.windows.common-controls_6595b64144ccf1df_*",
-        "x86_microsoft.windows.gdiplus_6595b64144ccf1df_*",    
-        "x86_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
-        "x86_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
-        "x86_microsoft-windows-s..ngstack-onecorebase_31bf3856ad364e35_*",
-        "x86_microsoft-windows-s..stack-termsrv-extra_31bf3856ad364e35_*",
-        "x86_microsoft-windows-servicingstack_31bf3856ad364e35_*",
-        "x86_microsoft-windows-servicingstack-inetsrv_*",
-        "x86_microsoft-windows-servicingstack-onecore_*",
-        "amd64_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
-        "amd64_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
-        "amd64_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*",
-        "amd64_microsoft.windows.common-controls_6595b64144ccf1df_*",
-        "amd64_microsoft.windows.gdiplus_6595b64144ccf1df_*",
-        "amd64_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
-        "amd64_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
-        "amd64_microsoft-windows-s..stack-inetsrv-extra_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-s..stack-msg.resources_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-s..stack-termsrv-extra_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-servicingstack_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-servicingstack-inetsrv_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*",
-        "amd64_microsoft-windows-servicingstack-onecore_31bf3856ad364e35_*",
-        "Catalogs",
-        "FileMaps",
-        "Fusion",
-        "InstallTemp",
-        "Manifests",
-        "x86_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
-        "x86_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
-        "x86_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*"
-    )
-    foreach ($dir in $dirsToCopy) {
-        $sourceDirs = Get-ChildItem -Path $sourceDirectory -Filter $dir -Directory -ErrorAction SilentlyContinue
-        foreach ($sDir in $sourceDirs) {
-            $destDir = Join-Path -Path $destinationDirectory -ChildPath $sDir.Name
-            Copy-Item -Path $sDir.FullName -Destination $destDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-} elseif ($global:architecture -eq "arm64") {
+# ----------------- 2. 分支处理：依据模式决定是否执行物理抹杀 -----------------
+if ($currentTrimMode -ne "2") {
+    Write-Host "[完成] 当前为【普通精简模式】，已保留完整 WinSxS 核心组件库以确保绝佳兼容性与可维护性。" -ForegroundColor Green
+    return
+}
+
+# ----------------- 3. 极限压榨模式专用：WinSxS 物理极限裁剪 -----------------
+Write-Host "`n>>> [警告] 当前为【极限压榨模式】，正在物理瘦身 WinSxS (架构: $currentArch)..." -ForegroundColor Red
+
+$winSxSDir     = Join-Path $scratchDir "Windows\WinSxS"
+$winSxSEditDir = Join-Path $scratchDir "Windows\WinSxS_edit"
+
+if (-not (Test-Path -LiteralPath $winSxSDir)) {
+    Write-Host "[错误] 未检测到 WinSxS 目录: $winSxSDir，跳过物理替换。" -ForegroundColor Red
+    return
+}
+
+# 获取 WinSxS 物理掌控权
+Write-Host "正在获取 WinSxS 目录物理所有权与完全控制权限..." -ForegroundColor Yellow
+& takeown.exe /F "$winSxSDir" /R /A /D Y 2>$null | Out-Null
+& icacls.exe "$winSxSDir" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
+
+# 重置并创建暂存目录
+if (Test-Path -LiteralPath $winSxSEditDir) {
+    Remove-Item -LiteralPath $winSxSEditDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -Path $winSxSEditDir -ItemType Directory -Force | Out-Null
+
+# 根据架构构建保活组件清单
+$dirsToCopy = @()
+
+if ($currentArch -eq "arm64") {
     $dirsToCopy = @(
         "arm64_microsoft-windows-servicingstack-onecore_31bf3856ad364e35_*",
         "Catalogs",
@@ -1498,20 +1605,70 @@ if ($global:architecture -eq "amd64") {
         "arm64_microsoft-windows-servicingstack-inetsrv_31bf3856ad364e35_*",
         "arm64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*"
     )
-    foreach ($dir in $dirsToCopy) {
-        $sourceDirs = Get-ChildItem -Path $sourceDirectory -Filter $dir -Directory -ErrorAction SilentlyContinue
-        foreach ($sDir in $sourceDirs) {
-            $destDir = Join-Path -Path $destinationDirectory -ChildPath $sDir.Name
-            Copy-Item -Path $sDir.FullName -Destination $destDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }  
+} else {
+    # 默认 amd64 体系
+    $dirsToCopy = @(
+        "x86_microsoft.windows.common-controls_6595b64144ccf1df_*",
+        "x86_microsoft.windows.gdiplus_6595b64144ccf1df_*",    
+        "x86_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
+        "x86_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
+        "x86_microsoft-windows-s..ngstack-onecorebase_31bf3856ad364e35_*",
+        "x86_microsoft-windows-s..stack-termsrv-extra_31bf3856ad364e35_*",
+        "x86_microsoft-windows-servicingstack_31bf3856ad364e35_*",
+        "x86_microsoft-windows-servicingstack-inetsrv_*",
+        "x86_microsoft-windows-servicingstack-onecore_*",
+        "amd64_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
+        "amd64_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
+        "amd64_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.common-controls_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.gdiplus_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
+        "amd64_microsoft-windows-s..stack-inetsrv-extra_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-s..stack-msg.resources_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-s..stack-termsrv-extra_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack-inetsrv_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack-onecore_31bf3856ad364e35_*",
+        "Catalogs",
+        "FileMaps",
+        "Fusion",
+        "InstallTemp",
+        "Manifests",
+        "x86_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
+        "x86_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
+        "x86_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*"
+    )
 }
 
-Write-Host "Deleting WinSxS. This may take a while..." -ForegroundColor Yellow
-Remove-Item -Path "$scratchDir\Windows\WinSxS" -Recurse -Force -ErrorAction SilentlyContinue
-Rename-Item -Path "$scratchDir\Windows\WinSxS_edit" -NewName "WinSxS" -Force
+# 复制保活核心清单
+Write-Host "正在提取基础运行库与核心服务依赖项..." -ForegroundColor Cyan
+foreach ($pattern in $dirsToCopy) {
+    $matchedDirs = Get-ChildItem -Path $winSxSDir -Filter $pattern -Directory -ErrorAction SilentlyContinue
+    if ($matchedDirs) {
+        foreach ($sDir in $matchedDirs) {
+            $destDir = Join-Path $winSxSEditDir $sDir.Name
+            Copy-Item -LiteralPath $sDir.FullName -Destination $destDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
 
-Write-Host "[完成] WinSxS 裁剪与置换完毕。" -ForegroundColor Green
+# 执行物理粉碎替换
+Write-Host "正在物理销毁原始 WinSxS 并置换轻量结构..." -ForegroundColor Yellow
+attrib.exe -R -S -H "$winSxSDir\*" /S /D 2>$null
+Remove-Item -LiteralPath $winSxSDir -Recurse -Force -ErrorAction SilentlyContinue
+
+if (Test-Path -LiteralPath $winSxSDir) {
+    cmd.exe /c "rd /s /q `"$winSxSDir`"" 2>$null
+}
+
+if (-not (Test-Path -LiteralPath $winSxSDir)) {
+    Rename-Item -LiteralPath $winSxSEditDir -NewName "WinSxS" -Force
+    Write-Host "[完成] WinSxS 极限置换完成，体积已大幅度压缩。" -ForegroundColor Green
+} else {
+    Write-Host "[警告] WinSxS 原始目录存在锁死残留，保留备份以防映像损坏。" -ForegroundColor Yellow
+}
 
 # <<< [分块结束] 文件来源: src/08-WinSxSOptimize.ps1
 
@@ -1522,86 +1679,182 @@ Write-Host "[完成] WinSxS 裁剪与置换完毕。" -ForegroundColor Green
 #  win11 Builder - [模块 10/11] 映像提交、二次重构与 WinPE 修补 (src/09-ExportAndPE.ps1)
 # ==============================================================================
 
-Write-Host "`n[步骤 11/11] 正在卸载主映像并二次导出重建 install.wim..." -ForegroundColor Cyan
+Write-Host "`n[步骤 11/11] 正在安全提交主映像并修补 WinPE 引导分卷..." -ForegroundColor Cyan
 
 $destWimPath   = Join-Path $sourcesDir "install.wim"
 $destWim2Path  = Join-Path $sourcesDir "install2.wim"
+$bootWimPath   = Join-Path $sourcesDir "boot.wim"
+$tempBootWim   = Join-Path $sourcesDir "boot_temp.wim"
 
-# 1. 提交并卸载主映像
-Write-Host "Cleaning up and unmounting install.wim..."
-& dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase
-& dism.exe /English /unmount-image "/mountdir:$scratchDir" /commit
+# ----------------- 1. 提交并卸载主映像 (install.wim) -----------------
+Write-Host "正在提交并卸载主系统映像 install.wim (请耐心等待写入磁盘)..." -ForegroundColor Yellow
 
-# 2. 导出并重构 install.wim 清理碎片 (完全移植原版)
-Write-Host "Exporting and compressing install.wim..."
-& dism.exe /English /Export-Image "/SourceImageFile:$destWimPath" "/SourceIndex:1" "/DestinationImageFile:$destWim2Path" /compress:max
-Remove-Item -Path $destWimPath -Force -ErrorAction SilentlyContinue
-Rename-Item -Path $destWim2Path -NewName "install.wim"
+# 强制垃圾回收以释放可能附着的目录句柄
+[System.GC]::Collect()
+[System.GC]::WaitForPendingFinalizers()
+Start-Sleep -Seconds 2
 
-# 3. 修补 boot.wim (完全移植原版：提取 Index 2，挂载，注入策略，二次导出为全新 boot.wim)
-Write-Host "`nShrinking boot.wim and bypassing requirements..." -ForegroundColor Cyan
-$bootWimPath      = Join-Path $sourcesDir "boot.wim"
-$newBootWimPath   = Join-Path $sourcesDir "boot_new.wim"
-$finalBootWimPath = Join-Path $sourcesDir "boot_final.wim"
+& dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
 
-Write-Host "Taking ownership of $bootWimPath..."
-& takeown.exe /F "$bootWimPath" 2>$null | Out-Null
-& icacls.exe "$bootWimPath" /grant "*S-1-5-32-544:F" 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[严重错误] install.wim 提交卸载失败，退出码: $LASTEXITCODE！正在尝试强制放弃挂载以保护环境..." -ForegroundColor Red
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>$null | Out-Null
+    Stop-Transcript
+    pause
+    exit 1
+}
+Write-Host "[完成] 主映像修改已持久化写入。" -ForegroundColor Green
+
+# ----------------- 2. 二次重构 install.wim 消除存储碎片 -----------------
+Write-Host "正在二次导出并重构压缩 install.wim (消除内部精简碎片)..." -ForegroundColor Cyan
+& dism.exe /English /Export-Image "/SourceImageFile:$destWimPath" "/SourceIndex:1" "/DestinationImageFile:$destWim2Path" /Compress:max /CheckIntegrity
+
+if (Test-Path -LiteralPath $destWim2Path) {
+    attrib.exe -R -S -H "$destWimPath" 2>$null
+    Remove-Item -LiteralPath $destWimPath -Force -ErrorAction SilentlyContinue
+    Rename-Item -LiteralPath $destWim2Path -NewName "install.wim" -Force
+    Write-Host "[完成] install.wim 导出重构完毕，体积已达最佳压缩状态。" -ForegroundColor Green
+} else {
+    Write-Host "[提示] 二次压缩镜像未能生成，安全保留原镜像继续推进。" -ForegroundColor Yellow
+}
+
+# ----------------- 3. 稳固修补 boot.wim (保持双卷 BCD 映射架构) -----------------
+Write-Host "`n正在修补 WinPE 引导与安装向导映像 (boot.wim)..." -ForegroundColor Cyan
+
+if (-not (Test-Path -LiteralPath $bootWimPath)) {
+    Write-Host "[严重错误] 未在 sources 目录中检测到 boot.wim，无法构建可引导介质！" -ForegroundColor Red
+    Stop-Transcript
+    pause
+    exit 1
+}
+
+# 接管 boot.wim 物理所有权与写入属性
+attrib.exe -R -S -H "$bootWimPath" 2>$null
+& takeown.exe /F "$bootWimPath" /A 2>$null | Out-Null
+& icacls.exe "$bootWimPath" /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
 try {
-    Set-ItemProperty -Path $bootWimPath -Name IsReadOnly -Value $false -ErrorAction Stop
+    (Get-Item -LiteralPath $bootWimPath).IsReadOnly = $false
 } catch {}
 
-Write-Host "Exporting modified setup image (index 2) from boot.wim..."
-& dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" /SourceIndex:2 "/DestinationImageFile:$newBootWimPath"
-& dism.exe /English /mount-image "/imagefile:$newBootWimPath" /index:1 "/mountdir:$scratchDir"
+# 解析 boot.wim 的分卷结构，确定需要注入硬件绕过的 Setup 卷
+$bootWimInfo = & dism.exe /English /Get-WimInfo "/WimFile:$bootWimPath"
+$totalBootIndexes = 1
+$setupIndex = 1
 
-# 加载 boot.wim 注册表配置单元 (使用统一变量 $scratchDir)
-reg load HKLM\zDEFAULT "$scratchDir\Windows\System32\config\default" | Out-Null
-reg load HKLM\zNTUSER "$scratchDir\Users\Default\ntuser.dat" | Out-Null
-reg load HKLM\zSOFTWARE "$scratchDir\Windows\System32\config\SOFTWARE" | Out-Null
-reg load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" | Out-Null
+$indexMatches = [regex]::Matches($bootWimInfo, 'Index\s*:\s*(\d+)')
+if ($indexMatches.Count -gt 0) {
+    $totalBootIndexes = $indexMatches.Count
+    # 标准双卷 Windows 介质中，Index 2 为 Setup 安装向导；若为单卷介质则为 Index 1
+    $setupIndex = if ($totalBootIndexes -ge 2) { 2 } else { 1 }
+}
 
-Write-Host "Bypassing system requirements(on the boot image):"
+Write-Host "检测到 boot.wim 共包含 $totalBootIndexes 个分卷，将对核心引导卷 [Index $setupIndex] 实施策略注入..." -ForegroundColor Green
+
+# 挂载指定的 Setup 引导分卷
+& dism.exe /English /Mount-Image "/ImageFile:$bootWimPath" "/Index:$setupIndex" "/MountDir:$scratchDir"
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[严重错误] boot.wim 分卷 $setupIndex 挂载失败！" -ForegroundColor Red
+    Stop-Transcript
+    pause
+    exit 1
+}
+
+# 加载 boot.wim 内部离线注册表配置单元
+Write-Host "正在加载 WinPE 离线注册表以注入硬件检测跳过策略..." -ForegroundColor Cyan
+& reg.exe load HKLM\zDEFAULT "$scratchDir\Windows\System32\config\default" | Out-Null
+& reg.exe load HKLM\zNTUSER "$scratchDir\Users\Default\ntuser.dat" | Out-Null
+& reg.exe load HKLM\zSOFTWARE "$scratchDir\Windows\System32\config\SOFTWARE" | Out-Null
+& reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" | Out-Null
+
+# 注入底层全套硬件要求绕过注册表策略 (WinPE Setup 阶段)
+Write-Host "正在写入硬件检测豁免与策略绕过规则 (CPU/TPM/RAM/SecureBoot/Disk)..." -ForegroundColor Yellow
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassCPUCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassRAMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassSecureBootCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassStorageCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassTPMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassDiskCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\MoSetup' '/v' 'AllowUpgradesWithUnsupportedTPMOrCPU' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
-Write-Host "Disabling BitLocker Device Encryption"
+
+# 禁用 WinPE 阶段的 BitLocker 设备自动加密
 & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker' '/v' 'PreventDeviceEncryption' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 
-Write-Host "Tweaking boot image complete!"
-Write-Host "Unmounting Registry..."
-reg unload HKLM\zNTUSER > $null
-reg unload HKLM\zDEFAULT > $null
-reg unload HKLM\zSOFTWARE > $null
-reg unload HKLM\zSYSTEM > $null
+# 安全卸载注册表并释放句柄
+Write-Host "正在安全卸载 WinPE 注册表配置单元..." -ForegroundColor DarkGray
+[System.GC]::Collect()
+[System.GC]::WaitForPendingFinalizers()
 
-Start-Sleep -Seconds 3
-& dism.exe /English /unmount-image "/mountdir:$scratchDir" /commit
-
-& takeown.exe /F "$bootWimPath" 2>$null | Out-Null
-& icacls.exe "$bootWimPath" /grant "*S-1-5-32-544:F" 2>$null | Out-Null
-Remove-Item -Path $bootWimPath -Force -ErrorAction SilentlyContinue
-
-& dism.exe /English /Export-Image "/SourceImageFile:$newBootWimPath" /SourceIndex:1 "/DestinationImageFile:$finalBootWimPath" /compress:max
-Remove-Item -Path $newBootWimPath -Force -ErrorAction SilentlyContinue
-Rename-Item -Path $finalBootWimPath -NewName "boot.wim"
-
-# 4. 根目录无用文件清理 (保持 ISO 极简结构)
-Write-Host "Performing final cleanup of installation folder root..."
-$keepList = @("boot", "efi", "sources", "bootmgr", "bootmgr.efi", "setup.exe", "autounattend.xml")
-Get-ChildItem -Path $workDir | Where-Object { $_.Name -notin $keepList } | ForEach-Object {
-    Write-Host "Removing non-essential file/folder from ISO root: $($_.Name)"
-    Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+$hivesToUnload = @("zNTUSER", "zDEFAULT", "zSOFTWARE", "zSYSTEM")
+foreach ($hive in $hivesToUnload) {
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        $null = & reg.exe unload "HKLM\$hive" 2>&1
+        if ($LASTEXITCODE -eq 0) { break }
+        Start-Sleep -Milliseconds 800
+    }
 }
 
-Write-Host "[完成] WinPE 引导重构与母盘清理全部完毕。" -ForegroundColor Green
+# 提交并卸载 WinPE 映像修改
+Write-Host "正在提交 boot.wim 修改..." -ForegroundColor Yellow
+Start-Sleep -Seconds 2
+& dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[严重错误] boot.wim 提交失败！" -ForegroundColor Red
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>$null | Out-Null
+    Stop-Transcript
+    pause
+    exit 1
+}
+
+# 二次结构化重构 boot.wim (严格按原生分卷拓扑原样导出，确保 BCD 索引与 GUID 绝对吻合)
+Write-Host "正在以原架构重构 boot.wim 保持 BCD 映射一致性..." -ForegroundColor Cyan
+if (Test-Path -LiteralPath $tempBootWim) { Remove-Item -LiteralPath $tempBootWim -Force -ErrorAction SilentlyContinue }
+
+for ($i = 1; $i -le $totalBootIndexes; $i++) {
+    Write-Host "   正在重构导出 boot.wim 分卷 [$i/$totalBootIndexes]..." -ForegroundColor DarkGray
+    $bootFlag = if ($i -eq $setupIndex) { "/Bootable" } else { "" }
+    if ($bootFlag) {
+        & dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" "/SourceIndex:$i" "/DestinationImageFile:$tempBootWim" /Compress:max /Bootable /CheckIntegrity
+    } else {
+        & dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" "/SourceIndex:$i" "/DestinationImageFile:$tempBootWim" /Compress:max /CheckIntegrity
+    }
+}
+
+if (Test-Path -LiteralPath $tempBootWim) {
+    attrib.exe -R -S -H "$bootWimPath" 2>$null
+    Remove-Item -LiteralPath $bootWimPath -Force -ErrorAction SilentlyContinue
+    Rename-Item -LiteralPath $tempBootWim -NewName "boot.wim" -Force
+    Write-Host "[完成] boot.wim 双卷结构完整保留并优化完毕。" -ForegroundColor Green
+} else {
+    Write-Host "[提示] boot.wim 原卷修改已就绪 (跳过二次重构)。" -ForegroundColor DarkGray
+}
+
+# ----------------- 4. ISO 根目录结构规范化清理 -----------------
+Write-Host "`n正在对 ISO 发行根目录执行合规性清洗..." -ForegroundColor Cyan
+$keepList = @(
+    "boot",
+    "efi",
+    "sources",
+    "support",
+    "bootmgr",
+    "bootmgr.efi",
+    "setup.exe",
+    "autorun.inf",
+    "autounattend.xml"
+)
+
+Get-ChildItem -Path $workDir | Where-Object { $_.Name -notin $keepList } | ForEach-Object {
+    Write-Host "   清除根目录多余文件/目录: $($_.Name)" -ForegroundColor DarkGray
+    Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "[完成] WinPE 引导重构与母盘清理全部就绪。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/09-ExportAndPE.ps1
 
@@ -1612,18 +1865,36 @@ Write-Host "[完成] WinPE 引导重构与母盘清理全部完毕。" -Foregrou
 #  win11 Builder - [模块 11/11] ISO 最终打包与临时缓存清理 (src/10-PackageAndClean.ps1)
 # ==============================================================================
 
-Write-Host "`n正在打包最终可引导 ISO 镜像 (兼容 BIOS + UEFI 双模引导)..." -ForegroundColor Cyan
+Write-Host "`n[步骤 12/12] 正在校验引导资产并打包最终 ISO 镜像..." -ForegroundColor Cyan
 
-# 1. 探测或自动获取 oscdimg.exe
+# ----------------- 0. 响应该阶段 ESD 极限高压转换开关 -----------------
+$destWimPath = Join-Path $sourcesDir "install.wim"
+$destEsdPath = Join-Path $sourcesDir "install.esd"
+
+if ($enableEsdConversion) {
+    if (Test-Path -LiteralPath $destWimPath) {
+        Write-Host ">>> [ESD 转换开启] 正在将 install.wim 高压转换为 install.esd (此过程需要较多 CPU 资源)..." -ForegroundColor Yellow
+        & dism.exe /English /Export-Image "/SourceImageFile:$destWimPath" "/SourceIndex:1" "/DestinationImageFile:$destEsdPath" /Compress:recovery /CheckIntegrity
+        
+        if (Test-Path -LiteralPath $destEsdPath) {
+            Remove-Item -LiteralPath $destWimPath -Force -ErrorAction SilentlyContinue
+            Write-Host "[完成] 最终映像已成功转换为 ESD 极限高压格式！" -ForegroundColor Green
+        } else {
+            Write-Host "[警告] ESD 转换异常，安全保留原始 install.wim 进行打包。" -ForegroundColor Yellow
+        }
+    }
+}
+
+# ----------------- 1. 探测或自动拉取现代化 Oscdimg.exe 打包引擎 -----------------
 $oscdimgExe = Join-Path $scriptDir "oscdimg.exe"
 
-if (-not (Test-Path $oscdimgExe)) {
+if (-not (Test-Path -LiteralPath $oscdimgExe)) {
     $adkOscdimg = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
-    if (Test-Path $adkOscdimg) {
+    if (Test-Path -LiteralPath $adkOscdimg) {
         Write-Host "从本地 Windows ADK 检测到 oscdimg.exe，正在提取..." -ForegroundColor Green
-        Copy-Item -Path $adkOscdimg -Destination $oscdimgExe -Force
+        Copy-Item -LiteralPath $adkOscdimg -Destination $oscdimgExe -Force
     } else {
-        Write-Host "正在拉取支持现代 UEFI 的 oscdimg.exe..." -ForegroundColor Yellow
+        Write-Host "正在拉取支持现代 UEFI/UDF 2.0 规范的 oscdimg.exe 打包内核..." -ForegroundColor Yellow
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
         $oscdimgUrl = "https://ghproxy.net/https://raw.githubusercontent.com/driver1998/oscdimg/master/oscdimg.exe"
         try {
@@ -1632,66 +1903,98 @@ if (-not (Test-Path $oscdimgExe)) {
             try {
                 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/driver1998/oscdimg/master/oscdimg.exe" -OutFile $oscdimgExe -UseBasicParsing -TimeoutSec 15
             } catch {
-                Write-Host "[严重错误] oscdimg.exe 自动下载失败！请手动将 Windows ADK 现代版的 oscdimg.exe 放入脚本目录后再运行！" -ForegroundColor Red
+                Write-Host "[严重错误] oscdimg.exe 自动下载失败！请手动将 Windows ADK 的 oscdimg.exe 放入脚本目录后再运行！" -ForegroundColor Red
                 Stop-Transcript
                 pause
-                exit
+                exit 1
             }
         }
     }
 }
 
-if (-not (Test-Path $oscdimgExe)) {
-    Write-Host "[严重错误] 缺失 oscdimg.exe，流程阻断！" -ForegroundColor Red
+if (-not (Test-Path -LiteralPath $oscdimgExe)) {
+    Write-Host "[严重错误] 缺失 oscdimg.exe 打包引擎，打包阻断！" -ForegroundColor Red
     Stop-Transcript
     pause
-    exit
+    exit 1
 }
 
-# 2. 校验关键引导记录文件
+# ----------------- 2. 严密校验 Legacy + UEFI 双模引导引导文件 -----------------
 $outputISO = Join-Path $scriptDir "win11_ultra_v7.iso"
-$etfsboot = Join-Path $workDir "boot\etfsboot.com"
+$etfsboot  = Join-Path $workDir "boot\etfsboot.com"
 
-# 优先选用免按任意键的 efisys_noprompt.bin
+# 优先选用免按任意键直进安装向导的 efisys_noprompt.bin
 $efisys = Join-Path $workDir "efi\microsoft\boot\efisys_noprompt.bin"
-if (-not (Test-Path $efisys)) {
+if (-not (Test-Path -LiteralPath $efisys)) {
     $efisys = Join-Path $workDir "efi\microsoft\boot\efisys.bin"
 }
 
-if (-not (Test-Path $etfsboot) -or -not (Test-Path $efisys)) {
-    Write-Host "[严重错误] 缺少关键引导文件 (etfsboot.com 或 efisys.bin)，无法创建 UEFI 镜像！" -ForegroundColor Red
+if (-not (Test-Path -LiteralPath $etfsboot) -or -not (Test-Path -LiteralPath $efisys)) {
+    Write-Host "[严重错误] 关键双模引导扇区镜像不存在！" -ForegroundColor Red
+    Write-Host "缺少文件: etfsboot.com (BIOS) 或 efisys.bin/efisys_noprompt.bin (UEFI)" -ForegroundColor Red
     Stop-Transcript
     pause
-    exit
+    exit 1
 }
 
-# 3. 构造双模启动参数并打包 ISO
-$bootData = "2#p0,e,b`"$etfsboot`"#pEF,e,b`"$efisys`""
+# ----------------- 3. 构建合规双模启动参数并打包生成 ISO -----------------
+Write-Host "正在合成 Legacy BIOS + UEFI 双模自启动引导扇区..." -ForegroundColor Yellow
 
+# 关键语法修正：剔除内嵌引号，使用 Oscdimg 原生合规格式传递引导路径
+$bootDataParam = "2#p0,e,b$etfsboot#pEF,e,b$efisys"
+
+# 参数解析:
+# -m: 允许生成大于 4.7GB 的 ISO
+# -o: 优化重复文件存储 (单实例优化)
+# -u2: 仅生成 UDF 文件系统
+# -udfver102: UDF 1.02 兼容格式 (兼容几乎所有 BIOS/UEFI 固件)
+# -h: 包含源目录中的所有隐藏文件 (关键！保证 boot.sdi 等不丢失)
+# -l: 指定 ISO 卷标
 $oscdimgArgs = @(
     "-m",
     "-o",
     "-u2",
     "-udfver102",
-    "-bootdata:$bootData",
+    "-h",
+    "-lWIN11_ULTRA",
+    "-bootdata:$bootDataParam",
     "$workDir",
     "$outputISO"
 )
 
+# 清理可能存在的旧镜像文件
+if (Test-Path -LiteralPath $outputISO) {
+    Remove-Item -LiteralPath $outputISO -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "正在执行 ISO 最终打包封装 (展示 Oscdimg 打包进度)..." -ForegroundColor Green
 & $oscdimgExe @oscdimgArgs
 
-# 4. 构建完成与提示
+if (-not (Test-Path -LiteralPath $outputISO)) {
+    Write-Host "[严重错误] ISO 打包生成失败！" -ForegroundColor Red
+    Stop-Transcript
+    pause
+    exit 1
+}
+
+# ----------------- 4. 汇总展示与收尾清理 -----------------
+$isoSizeMB = [math]::Round((Get-Item -LiteralPath $outputISO).Length / 1MB, 2)
+$isoSizeGB = [math]::Round((Get-Item -LiteralPath $outputISO).Length / 1GB, 2)
+
 Write-Host "`n==========================================================" -ForegroundColor Green
-Write-Host " 全部构建圆满完成！ISO 镜像输出路径:" -ForegroundColor Green
-Write-Host " $outputISO" -ForegroundColor Green
+Write-Host "      全部构建流程圆满完成！ISO 引导镜像已生成: " -ForegroundColor Green
+Write-Host "      路径: $outputISO" -ForegroundColor Yellow
+Write-Host "      体积: $isoSizeMB MB ($isoSizeGB GB)" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Green
 
-Read-Host "按回车键 [ENTER] 清理临时工作缓存并退出..."
+Write-Host "`n请按回车键 [ENTER] 执行临时挂载点清理并退出构建..." -ForegroundColor DarkGray
+pause
 
-# 5. 清理挂载点与临时缓存
-cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
+Write-Host "正在清理临时工作区与残留挂载点..." -ForegroundColor DarkGray
+& dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>$null | Out-Null
 Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+
 Stop-Transcript
 
 # <<< [分块结束] 文件来源: src/10-PackageAndClean.ps1
