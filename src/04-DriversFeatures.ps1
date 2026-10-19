@@ -1,45 +1,37 @@
 # ==============================================================================
-#  win11 Builder - [模块 5/11] 驱动压榨与老旧特性停用 (src/04-DriversFeatures.ps1)
+#  win11 Builder - [模块 5/11] 驱动仓库与 .NET 缓存清理 (src/04-DriversFeatures.ps1)
 # ==============================================================================
 
-# ----------------- 1. 安全驱动仓库压榨 (两模式均执行) -----------------
-Write-Host "`n[步骤 6/11] 正在执行安全驱动压榨 (剔除打印机/调制解调器/传真驱动)..." -ForegroundColor Cyan
-$driverStorePath = Join-Path $scratchDir "Windows\System32\DriverStore\FileRepository"
+Write-Host "`n[步骤 6/11] 正在执行 DriverStore 精简与 .NET 原生映像清理..." -ForegroundColor Cyan
 
-# 安全剔除模式列表 (保留显卡、芯片组、存储、声卡、网卡等核心驱动)
-$safeDriverPurgeList = @(
-    "prn*.inf_*",     # 冗余打印机驱动
-    "mdm*.inf_*",     # 调制解调器驱动
-    "fax*.inf_*",     # 传真驱动
-    "scancopy.inf_*", # 扫描仪复制驱动
-    "flpydisk.inf_*", # 软驱驱动
-    "brmf*.inf_*",    # Brother 打印机残留
-    "hpq*.inf_*"      # HP 打印机残留
+# 1. 移除 pre-compiled .NET assemblies (完全对齐原版)
+Write-Host "Removing pre-compiled .NET assemblies (Native Images)..."
+Remove-Item -Path "$scratchDir\Windows\assembly\NativeImages_*" -Recurse -Force -ErrorAction SilentlyContinue
+
+# 2. 驱动仓库激进瘦身
+$winDir = "$scratchDir\Windows"
+Write-Host "Slimming the DriverStore... (removing non-essential driver classes)"
+$driverRepo = Join-Path -Path $winDir -ChildPath "System32\DriverStore\FileRepository"
+$patternsToRemove = @(
+    'prn*',
+    'scan*',
+    'mfd*',
+    'wscsmd.inf*',
+    'tapdrv*',
+    'rdpbus.inf*',
+    'tdibth.inf*'
 )
 
-if (Test-Path $driverStorePath) {
-    foreach ($pat in $safeDriverPurgeList) {
-        Get-ChildItem -Path $driverStorePath -Filter $pat -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            Write-Host "   [清除冗余驱动] $($_.Name)" -ForegroundColor DarkGray
-            Force-NukeFolderOrFile $_.FullName
+if (Test-Path $driverRepo) {
+    Get-ChildItem -Path $driverRepo -Directory | ForEach-Object {
+        $driverFolder = $_.Name
+        foreach ($pattern in $patternsToRemove) {
+            if ($driverFolder -like $pattern) {
+                Write-Host "Removing non-essential driver package: $driverFolder"
+                Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                break
+            }
         }
     }
 }
-Write-Host "[完成] 驱动仓库深度压榨完毕。" -ForegroundColor Green
-
-# ----------------- 2. 停用冗余老旧 Windows 特性 (两模式均执行) -----------------
-Write-Host "   正在停用并移除老旧 Windows 特性 (WorkFolders/Fax 等)..." -ForegroundColor DarkGray
-
-$featuresToDisable = @(
-    "WorkFolders-Client",                   # 工作文件夹
-    "Printing-Foundation-Features",         # 打印基础服务
-    "Printing-PrintToPDFServices-Features", # 打印到 PDF 架构
-    "FaxServicesClientPackage",             # 传真客户端
-    "MSRDC-Infrastructure"                  # 远程桌面旧版基础设施
-)
-
-foreach ($feat in $featuresToDisable) {
-    Write-Host "   [停用特性] $feat" -ForegroundColor DarkGray
-    & dism.exe /English /Image:$scratchDir /Disable-Feature "/FeatureName:$feat" /Remove /NoRestart 2>$null | Out-Null
-}
-Write-Host "[完成] 老旧特性剥离完毕。" -ForegroundColor Green
+Write-Host "[完成] 驱动与底层运行库缓存精简完毕。" -ForegroundColor Green
