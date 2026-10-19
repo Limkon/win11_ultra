@@ -1,6 +1,5 @@
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
-#  [终极稳固]：消除反引号跨行隐患 + 单语句顺序安全替换 + 杜绝 ParserError
 # ==============================================================================
 
 Write-Host "`n[步骤 9/11] 正在加载全局配置并注入 Windows 安装引导应答文件..." -ForegroundColor Cyan
@@ -9,9 +8,11 @@ Write-Host "`n[步骤 9/11] 正在加载全局配置并注入 Windows 安装引�
 $mode = if ($global:unattendMode) { $global:unattendMode } else { "1" }
 $user = if ($global:customUser)   { $global:customUser }   else { "Admin" }
 $pass = if ($global:customPass)   { $global:customPass }   else { "" }
+$lang = if ($global:languageCode) { $global:languageCode } else { "zh-CN" }
+$arch = if ($global:architecture) { $global:architecture } else { "amd64" }
 
 $modeText = if ($mode -eq "2") { "半无人值守 (手动设置账户向导)" } else { "全无人值守 (自动配置并登录)" }
-Write-Host "   [配置承接] 当前激活模式: $modeText" -ForegroundColor Green
+Write-Host "   [配置承接] 运行模式: $modeText | 目标语言: $lang | 处理器架构: $arch" -ForegroundColor Green
 
 # ----------------- 1. 动态生成应答 XML 架构片段 -----------------
 $userAccountsXmlFragment = ""
@@ -62,23 +63,23 @@ if ($mode -eq "1") {
     $hideLocalAccountScreenValue = "false"
 }
 
-# ----------------- 2. 纯字面量无损模板 -----------------
+# ----------------- 2. 纯字面量无损模板 (自适应架构与语言) -----------------
 $unattendTemplate = @'
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
 	<settings pass="offlineServicing"></settings>
 	<settings pass="windowsPE">
-		<!-- 1. WinPE 安装环境国际化 (跳过安装初始语言/键盘选择) -->
-		<component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+		<!-- 1. WinPE 安装环境国际化 (动态自适应母盘主语言) -->
+		<component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<SetupUILanguage>
-				<UILanguage>zh-CN</UILanguage>
+				<UILanguage>__LANG__</UILanguage>
 			</SetupUILanguage>
-			<InputLocale>zh-CN</InputLocale>
-			<SystemLocale>zh-CN</SystemLocale>
-			<UILanguage>zh-CN</UILanguage>
-			<UserLocale>zh-CN</UserLocale>
+			<InputLocale>__LANG__</InputLocale>
+			<SystemLocale>__LANG__</SystemLocale>
+			<UILanguage>__LANG__</UILanguage>
+			<UserLocale>__LANG__</UserLocale>
 		</component>
-		<component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+		<component name="Microsoft-Windows-Setup" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<UserData>
 				<AcceptEula>true</AcceptEula>
 			</UserData>
@@ -113,10 +114,10 @@ $unattendTemplate = @'
 	</settings>
 	<settings pass="generalize"></settings>
 	<settings pass="specialize">
-		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<ComputerName>DESKTOP-PC</ComputerName>
 		</component>
-		<component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+		<component name="Microsoft-Windows-Deployment" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<RunSynchronous>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>1</Order>
@@ -145,13 +146,13 @@ $unattendTemplate = @'
 	<settings pass="auditUser"></settings>
 	<settings pass="oobeSystem">
 		<!-- 2. OOBE 阶段国际化全自动闭环 -->
-		<component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<InputLocale>zh-CN</InputLocale>
-			<SystemLocale>zh-CN</SystemLocale>
-			<UILanguage>zh-CN</UILanguage>
-			<UserLocale>zh-CN</UserLocale>
+		<component name="Microsoft-Windows-International-Core" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+			<InputLocale>__LANG__</InputLocale>
+			<SystemLocale>__LANG__</SystemLocale>
+			<UILanguage>__LANG__</UILanguage>
+			<UserLocale>__LANG__</UserLocale>
 		</component>
-		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 __USER_ACCOUNTS__
 __AUTO_LOGON__
 			<OOBE>
@@ -412,14 +413,16 @@ $scripts = @(
 </unattend>
 '@
 
-# ----------------- 3. 单语句独立安全替换 (彻底免疫空格与反引号陷阱) -----------------
+# ----------------- 3. 安全替换变量占位符 -----------------
 $finalXml = $unattendTemplate
+$finalXml = $finalXml.Replace('__ARCH__', $arch)
+$finalXml = $finalXml.Replace('__LANG__', $lang)
 $finalXml = $finalXml.Replace('__USER_ACCOUNTS__', $userAccountsXmlFragment)
 $finalXml = $finalXml.Replace('__AUTO_LOGON__', $autoLogonXmlFragment)
 $finalXml = $finalXml.Replace('__HIDE_LOCAL_ACCOUNT_SCREEN__', $hideLocalAccountScreenValue)
 $finalXml = $finalXml.Replace('__DEPLOY_MODE_TEXT__', $modeText)
 
-# ----------------- 4. 多通道合规注入 -----------------
+# ----------------- 4. 多通道规范注入 -----------------
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
@@ -434,7 +437,7 @@ $utf8Encoding = [System.Text.Encoding]::UTF8
 # Panther 初始化通道
 [System.IO.File]::WriteAllText((Join-Path $pantherDir "unattend.xml"), $finalXml, $utf8Encoding)
 
-# ISO 可移动介质根目录自启动通道
+# ISO 介质根目录自启动通道
 [System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $finalXml, $utf8Encoding)
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (全自动运行，无需人工干预)。" -ForegroundColor Green
+Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自适应语言: $lang | 架构: $arch)。" -ForegroundColor Green
