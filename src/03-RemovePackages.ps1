@@ -1,19 +1,37 @@
 # ==============================================================================
-#  win11 Builder - [模块 4/11] UWP 应用与可选功能包精简 (src/03-RemovePackages.ps1)
+#  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
 # ==============================================================================
 
-# ----------------- 0. 动态环境感知与主语言探测 -----------------
-Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行 UWP 应用精简..." -ForegroundColor Cyan
+Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
 
-$imageIntl = & dism.exe /English /Image:$scratchDir /Get-Intl
-$defaultLang = ($imageIntl -split '\r?\n' | Where-Object { $_ -match 'Default system UI language : ([a-zA-Z]{2}-[a-zA-Z]{2})' } | ForEach-Object { $Matches[1] })
-if ([string]::IsNullOrWhiteSpace($defaultLang)) {
-    $defaultLang = "zh-CN"
+# 1. 语言与架构探测 (完全对齐原版)
+$imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
+$languageLine = $imageIntl -split '\n' | Where-Object { $_ -match 'Default system UI language : ([a-zA-Z]{2}-[a-zA-Z]{2})' }
+if ($languageLine) { 
+    $languageCode = $Matches[1]
+    Write-Host "Default system UI language code: $languageCode" -ForegroundColor Green
+} else { 
+    Write-Host "Default system UI language code not found." -ForegroundColor Yellow
 }
-Write-Host "   [母盘语言检测] 锁定系统原生核心语言为: $defaultLang" -ForegroundColor Green
 
-# ----------------- 1. UWP 预装应用通配精简与物理清理 -----------------
-Write-Host "Removing provisioned AppX packages (bloatware)..."
+$destWimPath = Join-Path $sourcesDir "install.wim"
+$imageInfo = & dism.exe /English /Get-WimInfo "/wimFile:$destWimPath" "/index:1"
+$lines = $imageInfo -split '\r?\n'
+foreach ($line in $lines) { 
+    if ($line -like '*Architecture : *') { 
+        $global:architecture = $line -replace 'Architecture : ',''; 
+        if ($global:architecture -eq 'x64') { $global:architecture = 'amd64' }; 
+        Write-Host "Architecture: $global:architecture" -ForegroundColor Green
+        break 
+    } 
+}
+if (-not $global:architecture) { 
+    $global:architecture = "amd64"
+    Write-Host "Architecture information fallback: amd64" -ForegroundColor Yellow
+}
+
+# 2. 移除预装 AppX (Bloatware)
+Write-Host "Removing provisioned AppX packages (bloatware)..." -ForegroundColor Cyan
 $packagesToRemove = Get-AppxProvisionedPackage -Path $scratchDir | Where-Object { 
     $_.PackageName -like '*Zune*' -or 
     $_.PackageName -like '*Bing*' -or 
@@ -49,12 +67,12 @@ $packagesToRemove = Get-AppxProvisionedPackage -Path $scratchDir | Where-Object 
     $_.PackageName -like '*Photos*' -or 
     $_.PackageName -like '*Camera*' -or 
     $_.PackageName -like '*QuickAssist*' -or 
-    $_.PackageName -like '*CoreAI*'  -or 
+    $_.PackageName -like '*CoreAI*' -or 
     $_.PackageName -like '*PeopleExperienceHost*' -or 
     $_.PackageName -like '*PinningConfirmationDialog*' -or 
     $_.PackageName -like '*SecureAssessmentBrowser*' -or 
     $_.PackageName -like '*Paint*' -or 
-    $_.PackageName -like '*Notepad*'  
+    $_.PackageName -like '*Notepad*' 
 }
 
 foreach ($package in $packagesToRemove) { 
@@ -71,16 +89,10 @@ foreach ($package in $packagesToRemove) {
     } 
 }
 
-Write-Host "[完成] UWP 预装应用卸载与 WindowsApps 残留清理完毕。" -ForegroundColor Green
+# 3. 移除系统底层功能包 Packages (完全移植原版规则)
+Write-Host "Removing of system apps complete! Now proceeding to removal of system packages..." -ForegroundColor Cyan
 
-# ----------------- 2. 系统可选功能包精简 (保留 Search-Engine-Client 以固化属性页) -----------------
-Write-Host "`n[步骤 5/11] 正在检索系统组件包并执行深度可选功能精简..." -ForegroundColor Cyan
-
-$installedPackages = & dism.exe /English /Image:$scratchDir /Get-Packages /Format:Table
-$pkgLines = $installedPackages -split '\r?\n' | Select-Object -Skip 1
-
-# 基础需要剥离的无用功能包列表
-$basePackagesToRemove = @(
+$packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
@@ -88,62 +100,45 @@ $basePackagesToRemove = @(
     "Microsoft-Windows-MSPaint-FoD-Package~",
     "Microsoft-Windows-SnippingTool-FoD-Package~",
     "Microsoft-Windows-TabletPCMath-Package~",
+    "Microsoft-Windows-Xps-Xps-Viewer-Opt-Package~",
     "Microsoft-Windows-PowerShell-ISE-FOD-Package~",
     "OpenSSH-Client-Package~",
+    "*IME-ja-jp*",
+    "*IME-ko-kr*",
+    "*IME-zh-tw*",
+    "Windows-Defender-Client-Package~",
+    "Microsoft-Windows-Search-Engine-Client-Package~",
+    "Microsoft-Windows-Kernel-LA57-FoD-Package~",
     "Microsoft-Windows-Hello-Face-Package~",
+    "Microsoft-Windows-Hello-BioEnrollment-Package~",
     "Microsoft-Windows-BitLocker-DriveEncryption-FVE-Package~",
     "Microsoft-Windows-TPM-WMI-Provider-Package~",
-    "Microsoft-Windows-WebcamExperience-Package~"
+    "Microsoft-Windows-Narrator-App-Package~",
+    "Microsoft-Windows-Magnifier-App-Package~",
+    "Microsoft-Windows-Printing-PMCPPC-FoD-Package~",
+    "Microsoft-Windows-WebcamExperience-Package~",
+    "Microsoft-Media-MPEG2-Decoder-Package~",
+    "Microsoft-Windows-Wallpaper-Content-Extended-FoD-Package~"
 )
 
-$targetPkgs = New-Object System.Collections.Generic.List[string]
-
-foreach ($line in $pkgLines) {
-    $pkgId = ($line -split '\s+')[0]
-    if ([string]::IsNullOrWhiteSpace($pkgId) -or $pkgId -eq "Package" -or $pkgId -match "^-+$") { continue }
-
-    $shouldDelete = $false
-    foreach ($bp in $basePackagesToRemove) {
-        if ($pkgId -like "$bp*") {
-            $shouldDelete = $true
-            break
-        }
-    }
-
-    # 动态外语包判定：严格保护母盘核心主语言，非主语言组件包全量剔除
-    if (-not $shouldDelete) {
-        $isLangRelated = ($pkgId -match "LanguageFeatures" -or $pkgId -match "LanguagePack" -or $pkgId -match "TextToSpeech" -or $pkgId -match "Speech-" -or $pkgId -match "Handwriting-" -or $pkgId -match "OCR-")
-        if ($isLangRelated) {
-            $isCurrentLang = ($pkgId -like "*$defaultLang*")
-            if ($defaultLang -match "^zh-") {
-                if ($pkgId -match "zh-CN|zh-cn|Hans") { $isCurrentLang = $true }
-            }
-            if (-not $isCurrentLang) {
-                $shouldDelete = $true
-            }
-        }
-    }
-
-    # 冗余非主语言输入法包判定
-    if (-not $shouldDelete) {
-        if ($defaultLang -ne "ja-JP" -and $pkgId -match "IME-ja-jp") { $shouldDelete = $true }
-        if ($defaultLang -ne "ko-KR" -and $pkgId -match "IME-ko-kr") { $shouldDelete = $true }
-        if ($defaultLang -ne "zh-TW" -and $pkgId -match "IME-zh-tw") { $shouldDelete = $true }
-    }
-
-    if ($shouldDelete) { 
-        $targetPkgs.Add($pkgId) 
-    }
+if ($languageCode -and $languageCode -ne "zh-CN") {
+    $packagePatterns += "Microsoft-Windows-LanguageFeatures-Handwriting-$languageCode-Package~"
+    $packagePatterns += "Microsoft-Windows-LanguageFeatures-OCR-$languageCode-Package~"
+    $packagePatterns += "Microsoft-Windows-LanguageFeatures-Speech-$languageCode-Package~"
+    $packagePatterns += "Microsoft-Windows-LanguageFeatures-TextToSpeech-$languageCode-Package~"
 }
 
-$totalPkgs = $targetPkgs.Count
-$currPkg = 0
-foreach ($pkgId in $targetPkgs) {
-    $currPkg++
-    $pct = [math]::Round(($currPkg / [math]::Max(1, $totalPkgs)) * 100)
-    Write-Progress -Activity "正在剔除组件与外语包" -Status "[$currPkg/$totalPkgs] 正在移除: $pkgId" -PercentComplete $pct
-    Write-Host "   [$currPkg/$totalPkgs] 剔除组件/外语包: $pkgId" -ForegroundColor DarkYellow
-    & dism.exe /English /Image:$scratchDir /Remove-Package "/PackageName:$pkgId" /NoRestart 2>$null | Out-Null
+$allPackages = & dism.exe /English /Image:$scratchDir /Get-Packages /Format:Table
+$allPackages = $allPackages -split "`n" | Select-Object -Skip 1
+
+foreach ($packagePattern in $packagePatterns) {
+    $matchedPackages = $allPackages | Where-Object { $_ -like "$packagePattern*" }
+    foreach ($package in $matchedPackages) {
+        $packageIdentity = ($package -split "\s+")[0]
+        if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -ne "Package" -and $packageIdentity -notmatch "^-+$") {
+            Write-Host "Removing $packageIdentity..."
+            & dism.exe /English /Image:$scratchDir /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>$null | Out-Null
+        }
+    }
 }
-Write-Progress -Activity "正在剔除组件与外语包" -Completed
-Write-Host "[完成] 系统可选功能包精炼完毕 (Search-Engine-Client 核心底层接口已安全保留)。" -ForegroundColor Green
+Write-Host "[完成] 应用与系统组件包移除完毕。" -ForegroundColor Green
