@@ -2,18 +2,36 @@
 #  win11 Builder - [模块 11/11] ISO 最终打包与临时缓存清理 (src/10-PackageAndClean.ps1)
 # ==============================================================================
 
-Write-Host "`n正在打包最终可引导 ISO 镜像 (兼容 BIOS + UEFI 双模引导)..." -ForegroundColor Cyan
+Write-Host "`n[步骤 12/12] 正在校验引导资产并打包最终 ISO 镜像..." -ForegroundColor Cyan
 
-# 1. 探测或自动获取 oscdimg.exe
+# ----------------- 0. 响应该阶段 ESD 极限高压转换开关 -----------------
+$destWimPath = Join-Path $sourcesDir "install.wim"
+$destEsdPath = Join-Path $sourcesDir "install.esd"
+
+if ($enableEsdConversion) {
+    if (Test-Path -LiteralPath $destWimPath) {
+        Write-Host ">>> [ESD 转换开启] 正在将 install.wim 高压转换为 install.esd (此过程需要较多 CPU 资源)..." -ForegroundColor Yellow
+        & dism.exe /English /Export-Image "/SourceImageFile:$destWimPath" "/SourceIndex:1" "/DestinationImageFile:$destEsdPath" /Compress:recovery /CheckIntegrity
+        
+        if (Test-Path -LiteralPath $destEsdPath) {
+            Remove-Item -LiteralPath $destWimPath -Force -ErrorAction SilentlyContinue
+            Write-Host "[完成] 最终映像已成功转换为 ESD 极限高压格式！" -ForegroundColor Green
+        } else {
+            Write-Host "[警告] ESD 转换异常，安全保留原始 install.wim 进行打包。" -ForegroundColor Yellow
+        }
+    }
+}
+
+# ----------------- 1. 探测或自动拉取现代化 Oscdimg.exe 打包引擎 -----------------
 $oscdimgExe = Join-Path $scriptDir "oscdimg.exe"
 
-if (-not (Test-Path $oscdimgExe)) {
+if (-not (Test-Path -LiteralPath $oscdimgExe)) {
     $adkOscdimg = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
-    if (Test-Path $adkOscdimg) {
+    if (Test-Path -LiteralPath $adkOscdimg) {
         Write-Host "从本地 Windows ADK 检测到 oscdimg.exe，正在提取..." -ForegroundColor Green
-        Copy-Item -Path $adkOscdimg -Destination $oscdimgExe -Force
+        Copy-Item -LiteralPath $adkOscdimg -Destination $oscdimgExe -Force
     } else {
-        Write-Host "正在拉取支持现代 UEFI 的 oscdimg.exe..." -ForegroundColor Yellow
+        Write-Host "正在拉取支持现代 UEFI/UDF 2.0 规范的 oscdimg.exe 打包内核..." -ForegroundColor Yellow
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
         $oscdimgUrl = "https://ghproxy.net/https://raw.githubusercontent.com/driver1998/oscdimg/master/oscdimg.exe"
         try {
@@ -22,64 +40,96 @@ if (-not (Test-Path $oscdimgExe)) {
             try {
                 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/driver1998/oscdimg/master/oscdimg.exe" -OutFile $oscdimgExe -UseBasicParsing -TimeoutSec 15
             } catch {
-                Write-Host "[严重错误] oscdimg.exe 自动下载失败！请手动将 Windows ADK 现代版的 oscdimg.exe 放入脚本目录后再运行！" -ForegroundColor Red
+                Write-Host "[严重错误] oscdimg.exe 自动下载失败！请手动将 Windows ADK 的 oscdimg.exe 放入脚本目录后再运行！" -ForegroundColor Red
                 Stop-Transcript
                 pause
-                exit
+                exit 1
             }
         }
     }
 }
 
-if (-not (Test-Path $oscdimgExe)) {
-    Write-Host "[严重错误] 缺失 oscdimg.exe，流程阻断！" -ForegroundColor Red
+if (-not (Test-Path -LiteralPath $oscdimgExe)) {
+    Write-Host "[严重错误] 缺失 oscdimg.exe 打包引擎，打包阻断！" -ForegroundColor Red
     Stop-Transcript
     pause
-    exit
+    exit 1
 }
 
-# 2. 校验关键引导记录文件
+# ----------------- 2. 严密校验 Legacy + UEFI 双模引导引导文件 -----------------
 $outputISO = Join-Path $scriptDir "win11_ultra_v7.iso"
-$etfsboot = Join-Path $workDir "boot\etfsboot.com"
+$etfsboot  = Join-Path $workDir "boot\etfsboot.com"
 
-# 优先选用免按任意键的 efisys_noprompt.bin
+# 优先选用免按任意键直进安装向导的 efisys_noprompt.bin
 $efisys = Join-Path $workDir "efi\microsoft\boot\efisys_noprompt.bin"
-if (-not (Test-Path $efisys)) {
+if (-not (Test-Path -LiteralPath $efisys)) {
     $efisys = Join-Path $workDir "efi\microsoft\boot\efisys.bin"
 }
 
-if (-not (Test-Path $etfsboot) -or -not (Test-Path $efisys)) {
-    Write-Host "[严重错误] 缺少关键引导文件 (etfsboot.com 或 efisys.bin)，无法创建 UEFI 镜像！" -ForegroundColor Red
+if (-not (Test-Path -LiteralPath $etfsboot) -or -not (Test-Path -LiteralPath $efisys)) {
+    Write-Host "[严重错误] 关键双模引导扇区镜像不存在！" -ForegroundColor Red
+    Write-Host "缺少文件: etfsboot.com (BIOS) 或 efisys.bin/efisys_noprompt.bin (UEFI)" -ForegroundColor Red
     Stop-Transcript
     pause
-    exit
+    exit 1
 }
 
-# 3. 构造双模启动参数并打包 ISO
-$bootData = "2#p0,e,b`"$etfsboot`"#pEF,e,b`"$efisys`""
+# ----------------- 3. 构建合规双模启动参数并打包生成 ISO -----------------
+Write-Host "正在合成 Legacy BIOS + UEFI 双模自启动引导扇区..." -ForegroundColor Yellow
 
+# 关键语法修正：剔除内嵌引号，使用 Oscdimg 原生合规格式传递引导路径
+$bootDataParam = "2#p0,e,b$etfsboot#pEF,e,b$efisys"
+
+# 参数解析:
+# -m: 允许生成大于 4.7GB 的 ISO
+# -o: 优化重复文件存储 (单实例优化)
+# -u2: 仅生成 UDF 文件系统
+# -udfver102: UDF 1.02 兼容格式 (兼容几乎所有 BIOS/UEFI 固件)
+# -h: 包含源目录中的所有隐藏文件 (关键！保证 boot.sdi 等不丢失)
+# -l: 指定 ISO 卷标
 $oscdimgArgs = @(
     "-m",
     "-o",
     "-u2",
     "-udfver102",
-    "-bootdata:$bootData",
+    "-h",
+    "-lWIN11_ULTRA",
+    "-bootdata:$bootDataParam",
     "$workDir",
     "$outputISO"
 )
 
+# 清理可能存在的旧镜像文件
+if (Test-Path -LiteralPath $outputISO) {
+    Remove-Item -LiteralPath $outputISO -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "正在执行 ISO 最终打包封装 (展示 Oscdimg 打包进度)..." -ForegroundColor Green
 & $oscdimgExe @oscdimgArgs
 
-# 4. 构建完成与提示
+if (-not (Test-Path -LiteralPath $outputISO)) {
+    Write-Host "[严重错误] ISO 打包生成失败！" -ForegroundColor Red
+    Stop-Transcript
+    pause
+    exit 1
+}
+
+# ----------------- 4. 汇总展示与收尾清理 -----------------
+$isoSizeMB = [math]::Round((Get-Item -LiteralPath $outputISO).Length / 1MB, 2)
+$isoSizeGB = [math]::Round((Get-Item -LiteralPath $outputISO).Length / 1GB, 2)
+
 Write-Host "`n==========================================================" -ForegroundColor Green
-Write-Host " 全部构建圆满完成！ISO 镜像输出路径:" -ForegroundColor Green
-Write-Host " $outputISO" -ForegroundColor Green
+Write-Host "      全部构建流程圆满完成！ISO 引导镜像已生成: " -ForegroundColor Green
+Write-Host "      路径: $outputISO" -ForegroundColor Yellow
+Write-Host "      体积: $isoSizeMB MB ($isoSizeGB GB)" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Green
 
-Read-Host "按回车键 [ENTER] 清理临时工作缓存并退出..."
+Write-Host "`n请按回车键 [ENTER] 执行临时挂载点清理并退出构建..." -ForegroundColor DarkGray
+pause
 
-# 5. 清理挂载点与临时缓存
-cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
+Write-Host "正在清理临时工作区与残留挂载点..." -ForegroundColor DarkGray
+& dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>$null | Out-Null
 Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+
 Stop-Transcript
