@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-18 14:03:53 UTC
+#  生成时间: 2026-10-19 00:14:31 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -1062,33 +1062,31 @@ Write-Host "[完成] 注册表原生优化完成 (100% 遵照纯净标准，系�
 # >>> [分块代码引入] 文件来源: src/07-UnattendInject.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道静默注入 (src/07-UnattendInject.ps1)
-#  [企业级重构]：彻底拔除二次倒计时交互 + 100% 严格尊重前置选择 + 毫秒级静默直通
+#  win11 Builder - [模块 8/11] 完整无人值守应答模板与纯净介质注入 (src/07-UnattendInject.ps1)
+#  [企业级重构]：100% 还原原版纯净介质注入 + 彻底杜绝 XML 架构冲突 + 零倒计时静默直通
 # ==============================================================================
 
-Write-Host "`n[步骤 9/11] 正在承接全局配置并静默注入 Windows 安装应答文件..." -ForegroundColor Cyan
+Write-Host "`n[步骤 9/11] 正在加载全局配置并注入纯净安装介质应答文件..." -ForegroundColor Cyan
 
-# ----------------- 0. 严格承接前置模式配置 (绝不进行二次交互) -----------------
+# ----------------- 0. 承接前置模式配置 (零次生交互) -----------------
 $mode = if ($global:unattendMode) { [string]$global:unattendMode } else { "1" }
 $user = if ($global:customUser)   { [string]$global:customUser }   else { "Admin" }
 $pass = if ($global:customPass)   { [string]$global:customPass }   else { "" }
 
-# ----------------- 1. 动态生成应答 XML 架构片段 (全/半模式分支) -----------------
+# ----------------- 1. 动态生成应答 XML 架构片段 -----------------
 $userAccountsXmlFragment = ""
 $autoLogonXmlFragment    = ""
 
 if ($mode -eq "2") {
-    # 【模式 2：半无人值守】
-    # 彻底剥离内置账户与 AutoLogon 节点，允许 OOBE 显示原生手动创建账户界面
-    Write-Host "   -> [执行分支] 半无人值守模式已激活：彻底剥离预设账户，保留微软原生设置向导。" -ForegroundColor Yellow
+    # 【模式 2：半无人值守】剥离预设账户与 AutoLogon，保留微软原生 OOBE 设置向导
+    Write-Host "   -> [模式确认] 半无人值守：保留原生用户名/密码向导，跳过硬件与网络强制检测。" -ForegroundColor Yellow
     $userAccountsXmlFragment     = ""
     $autoLogonXmlFragment        = ""
     $hideLocalAccountScreenValue = "false"
     $modeText                    = "半无人值守 (跳过硬件限制，OOBE 阶段手动输入用户名/密码)"
 } else {
-    # 【模式 1：全无人值守】
-    # 直接使用 00 模块锁定的用户名/密码，绝不二次弹窗索取
-    Write-Host "   -> [执行分支] 全无人值守模式已激活：注入预设账户 [$user]，装机全自动登录。" -ForegroundColor Green
+    # 【模式 1：全无人值守】自动注入 00 模块锁定的账户密码
+    Write-Host "   -> [模式确认] 全无人值守：注入预置账户 [$user]，全自动登录。" -ForegroundColor Green
     $inputUserEscaped = [System.Security.SecurityElement]::Escape($user)
     $inputPassEscaped = [System.Security.SecurityElement]::Escape($pass)
 
@@ -1181,7 +1179,7 @@ $unattendTemplate = @'
 			<RunSynchronous>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>1</Order>
-					<Path>powershell.exe -WindowStyle Normal -NoProfile -Command "$xml = [xml]::new(); $p = if (Test-Path 'C:\Windows\Panther\unattend.xml') { 'C:\Windows\Panther\unattend.xml' } elseif (Test-Path 'C:\Windows\Panther\Unattend\unattend.xml') { 'C:\Windows\Panther\Unattend\unattend.xml' } else { 'C:\Windows\System32\Sysprep\unattend.xml' }; $xml.Load($p); $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml;"</Path>
+					<Path>powershell.exe -WindowStyle Normal -NoProfile -Command "$xml = [xml]::new(); $xml.Load('C:\Windows\Panther\unattend.xml'); $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml;"</Path>
 				</RunSynchronousCommand>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>2</Order>
@@ -1462,37 +1460,20 @@ $scripts = @(
 </unattend>
 '@
 
-# ----------------- 3. 动态插桩与安全置换 -----------------
+# ----------------- 3. 单语句独立安全置换 -----------------
 $finalXml = $unattendTemplate
 $finalXml = $finalXml.Replace('__USER_ACCOUNTS__', $userAccountsXmlFragment)
 $finalXml = $finalXml.Replace('__AUTO_LOGON__', $autoLogonXmlFragment)
 $finalXml = $finalXml.Replace('__HIDE_LOCAL_ACCOUNT_SCREEN__', $hideLocalAccountScreenValue)
 $finalXml = $finalXml.Replace('__DEPLOY_MODE_TEXT__', $modeText)
 
-# ----------------- 4. 全渠道静默固化写入 (0.1秒极速完成，零挂起) -----------------
+# ----------------- 4. 纯净 ISO 根目录注入 (遵照原生标准，绝不污染 install.wim 内部) -----------------
 $utf8Encoding = [System.Text.Encoding]::UTF8
 
-# [通道 1] ISO 介质根目录 (适配物理机、U盘直接 Setup 引导)
-$rootXmlPath = Join-Path $workDir "autounattend.xml"
-[System.IO.File]::WriteAllText($rootXmlPath, $finalXml, $utf8Encoding)
+# 严格仅写入 ISO 安装介质根目录，交由微软官方 Setup 引擎在内存中安全调度，100% 杜绝解析崩溃
+[System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $finalXml, $utf8Encoding)
 
-# [通道 2] 映像内部 Panther 目录 (核心保障：杜绝 PE/WinNTSetup/Dism++ 装机脱靶)
-$imagePanther = Join-Path $scratchDir "Windows\Panther"
-if (-not (Test-Path -LiteralPath $imagePanther)) {
-    New-Item -Path $imagePanther -ItemType Directory -Force | Out-Null
-}
-$pantherXmlPath = Join-Path $imagePanther "unattend.xml"
-[System.IO.File]::WriteAllText($pantherXmlPath, $finalXml, $utf8Encoding)
-
-# [通道 3] 映像内部 Sysprep 目录 (终极容灾备用)
-$imageSysprep = Join-Path $scratchDir "Windows\System32\Sysprep"
-if (-not (Test-Path -LiteralPath $imageSysprep)) {
-    New-Item -Path $imageSysprep -ItemType Directory -Force | Out-Null
-}
-$sysprepXmlPath = Join-Path $imageSysprep "unattend.xml"
-[System.IO.File]::WriteAllText($sysprepXmlPath, $finalXml, $utf8Encoding)
-
-Write-Host "[完成] 无人值守应答全通道配置完毕 (0秒静默直通，选定模式: $modeText)。" -ForegroundColor Green
+Write-Host "[完成] 无人值守应答文件已写入 ISO 根目录 (install.wim 内部保持 100% 纯净零冲突)。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/07-UnattendInject.ps1
 
@@ -1606,16 +1587,19 @@ Write-Host "`n正在提交映像更改并导出紧凑单卷..." -ForegroundColor
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
 
 $finalWim = Join-Path $sourcesDir "install_final.wim"
-$targetExportIndex = if ($global:targetIndex) { $global:targetIndex } elseif ($index) { $index } else { "1" }
-& dism.exe /English /Export-Image "/SourceImageFile:$wimFilePath" "/SourceIndex:$targetExportIndex" "/DestinationImageFile:$finalWim" /Compress:max
+# 确保目标临时文件干净
+if (Test-Path -LiteralPath $finalWim) { 
+    Remove-Item -LiteralPath $finalWim -Force -ErrorAction SilentlyContinue 
+}
 
-# 2. 导出目标分卷
+$targetExportIndex = if ($global:targetIndex) { $global:targetIndex } elseif ($index) { $index } else { "1" }
+
 & dism.exe /English /Export-Image "/SourceImageFile:$wimFilePath" "/SourceIndex:$targetExportIndex" "/DestinationImageFile:$finalWim" /Compress:max
 
 if ((Test-Path -LiteralPath $finalWim) -and ((Get-Item -LiteralPath $finalWim).Length -gt 500MB)) {
     Remove-Item -LiteralPath $wimFilePath -Force -ErrorAction SilentlyContinue
     Rename-Item -LiteralPath $finalWim -NewName "install.wim" -Force
-    Write-Host "[完成] 映像处理与提交导出完毕 (已生成纯净紧凑单卷)。" -ForegroundColor Green
+    Write-Host "[完成] 映像处理与提交导出完毕 (已生成唯一的专业版单卷)。" -ForegroundColor Green
 } else {
     Write-Host "[警告] 紧凑单卷导出校验异常，保留原映像以保全数据。" -ForegroundColor Yellow
 }
