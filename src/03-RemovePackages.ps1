@@ -73,7 +73,6 @@ $targetAppxPatterns = @(
     '*Alarms*',
     '*CommunicationsApps*',
     '*Copilot*',
-    '*CompatibilityEnhancements*',
     '*AV1VideoExtension*',
     '*AVCEncoderVideoExtension*',
     '*HEIFImageExtension*',
@@ -88,7 +87,6 @@ $targetAppxPatterns = @(
     '*Photos*',
     '*Camera*',
     '*QuickAssist*',
-    '*CoreAI*',
     '*PeopleExperienceHost*',
     '*PinningConfirmationDialog*',
     '*SecureAssessmentBrowser*',
@@ -96,11 +94,31 @@ $targetAppxPatterns = @(
     '*Notepad*'
 )
 
+# 框架组件保护白名单：任何通配符都不得误伤这些包
+$protectedFrameworkPatterns = @(
+    '*Microsoft.UI.Xaml*',
+    '*Microsoft.VCLibs*',
+    '*Microsoft.WindowsAppRuntime*',
+    '*Microsoft.NET.Native*',
+    '*Microsoft.Services.Store*'
+)
+
 $provisionedPackages = Get-AppxProvisionedPackage -Path $scratchDir -ErrorAction SilentlyContinue
 $packagesToRemove = @()
 
 if ($provisionedPackages) {
     foreach ($pkg in $provisionedPackages) {
+        $isProtected = $false
+        foreach ($prot in $protectedFrameworkPatterns) {
+            if ($pkg.PackageName -like $prot) {
+                $isProtected = $true
+                break
+            }
+        }
+        if ($isProtected) {
+            continue
+        }
+
         foreach ($pattern in $targetAppxPatterns) {
             if ($pkg.PackageName -like $pattern) {
                 $packagesToRemove += $pkg
@@ -138,6 +156,17 @@ if (Test-Path -LiteralPath $windowsAppsDir) {
     }
 }
 
+# 完整性校验：确保 OpenWith 对话框的核心宿主未被误伤
+$openWithExe = Join-Path $scratchDir "Windows\System32\OpenWith.exe"
+$shell32Dll  = Join-Path $scratchDir "Windows\System32\shell32.dll"
+$shCoreDll   = Join-Path $scratchDir "Windows\System32\shcore.dll"
+
+foreach ($critical in @($openWithExe, $shell32Dll, $shCoreDll)) {
+    if (-not (Test-Path -LiteralPath $critical)) {
+        Write-Host "[严重警告] 关键 Shell/OpenWith 组件缺失: $critical —— 精简过度，请检查 AppX/FOD 移除清单！" -ForegroundColor Red
+    }
+}
+
 # 释放内存引用
 $packagesToRemove = $null
 $provisionedPackages = $null
@@ -160,7 +189,6 @@ $packagePatterns = @(
     "*IME-ko-kr*",
     "*IME-zh-tw*",
     "Windows-Defender-Client-Package~",
-    "Microsoft-Windows-Search-Engine-Client-Package~",
     "Microsoft-Windows-Kernel-LA57-FoD-Package~",
     "Microsoft-Windows-Hello-Face-Package~",
     "Microsoft-Windows-Hello-BioEnrollment-Package~",
