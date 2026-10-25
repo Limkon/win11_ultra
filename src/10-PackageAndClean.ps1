@@ -5,14 +5,16 @@
 Write-Host "`n[步骤 12/12] 正在校验引导资产并打包最终 ISO 镜像..." -ForegroundColor Cyan
 
 # ----------------- 0. 响应该阶段 ESD 极限高压转换开关 -----------------
+$esdEnabled = if ($null -ne $global:enableEsdConversion) { [bool]$global:enableEsdConversion } else { $false }
+
 $destWimPath = Join-Path $sourcesDir "install.wim"
 $destEsdPath = Join-Path $sourcesDir "install.esd"
 
-if ($enableEsdConversion) {
+if ($esdEnabled) {
     if (Test-Path -LiteralPath $destWimPath) {
         Write-Host ">>> [ESD 转换开启] 正在将 install.wim 高压转换为 install.esd (此过程需要较多 CPU 资源)..." -ForegroundColor Yellow
         & dism.exe /English /Export-Image "/SourceImageFile:$destWimPath" "/SourceIndex:1" "/DestinationImageFile:$destEsdPath" /Compress:recovery /CheckIntegrity
-        
+
         if (Test-Path -LiteralPath $destEsdPath) {
             Remove-Item -LiteralPath $destWimPath -Force -ErrorAction SilentlyContinue
             Write-Host "[完成] 最终映像已成功转换为 ESD 极限高压格式！" -ForegroundColor Green
@@ -41,7 +43,7 @@ if (-not (Test-Path -LiteralPath $oscdimgExe)) {
                 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/driver1998/oscdimg/master/oscdimg.exe" -OutFile $oscdimgExe -UseBasicParsing -TimeoutSec 15
             } catch {
                 Write-Host "[严重错误] oscdimg.exe 自动下载失败！请手动将 Windows ADK 的 oscdimg.exe 放入脚本目录后再运行！" -ForegroundColor Red
-                Stop-Transcript
+                if ($global:transcriptActive) { Stop-Transcript }
                 pause
                 exit 1
             }
@@ -51,7 +53,26 @@ if (-not (Test-Path -LiteralPath $oscdimgExe)) {
 
 if (-not (Test-Path -LiteralPath $oscdimgExe)) {
     Write-Host "[严重错误] 缺失 oscdimg.exe 打包引擎，打包阻断！" -ForegroundColor Red
-    Stop-Transcript
+    if ($global:transcriptActive) { Stop-Transcript }
+    pause
+    exit 1
+}
+
+# 下载/复制后校验 PE 头与文件大小，防止 HTML 错误页或损坏文件被误用
+try {
+    $fi = Get-Item -LiteralPath $oscdimgExe
+    $headBytes = [System.IO.File]::ReadAllBytes($oscdimgExe)
+    $isPE = ($headBytes.Length -ge 2 -and $headBytes[0] -eq 0x4D -and $headBytes[1] -eq 0x5A)
+    if ($fi.Length -lt 100KB -or -not $isPE) {
+        Remove-Item -LiteralPath $oscdimgExe -Force -ErrorAction SilentlyContinue
+        Write-Host "[严重错误] oscdimg.exe 校验失败（文件过小或非 PE 可执行），请手动放置 ADK 的 oscdimg.exe！" -ForegroundColor Red
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+} catch {
+    Write-Host "[严重错误] oscdimg.exe 校验异常: $_" -ForegroundColor Red
+    if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
@@ -69,7 +90,7 @@ if (-not (Test-Path -LiteralPath $efisys)) {
 if (-not (Test-Path -LiteralPath $etfsboot) -or -not (Test-Path -LiteralPath $efisys)) {
     Write-Host "[严重错误] 关键双模引导扇区镜像不存在！" -ForegroundColor Red
     Write-Host "缺少文件: etfsboot.com (BIOS) 或 efisys.bin/efisys_noprompt.bin (UEFI)" -ForegroundColor Red
-    Stop-Transcript
+    if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
@@ -77,8 +98,8 @@ if (-not (Test-Path -LiteralPath $etfsboot) -or -not (Test-Path -LiteralPath $ef
 # ----------------- 3. 构建合规双模启动参数并打包生成 ISO -----------------
 Write-Host "正在合成 Legacy BIOS + UEFI 双模自启动引导扇区..." -ForegroundColor Yellow
 
-# 关键语法修正：剔除内嵌引号，使用 Oscdimg 原生合规格式传递引导路径
-$bootDataParam = "2#p0,e,b$etfsboot#pEF,e,b$efisys"
+# 路径加引号，支持工作目录含空格 (如 D:\My Build\win11)
+$bootDataParam = "2#p0,e,b`"$etfsboot`"#pEF,e,b`"$efisys`""
 
 # 参数解析:
 # -m: 允许生成大于 4.7GB 的 ISO
@@ -109,7 +130,7 @@ Write-Host "正在执行 ISO 最终打包封装 (展示 Oscdimg 打包进度)...
 
 if (-not (Test-Path -LiteralPath $outputISO)) {
     Write-Host "[严重错误] ISO 打包生成失败！" -ForegroundColor Red
-    Stop-Transcript
+    if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
@@ -128,8 +149,11 @@ Write-Host "`n请按回车键 [ENTER] 执行临时挂载点清理并退出构建
 pause
 
 Write-Host "正在清理临时工作区与残留挂载点..." -ForegroundColor DarkGray
-& dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>$null | Out-Null
+& dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
 Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
 
-Stop-Transcript
+if ($global:transcriptActive) {
+    Stop-Transcript
+    Start-Sleep -Milliseconds 300
+}
