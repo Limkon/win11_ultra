@@ -20,9 +20,15 @@ Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHT" -Recurse -Force
 Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\JPN" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force -ErrorAction SilentlyContinue
 
-# 3. 临时目录、Web、Help、Cursors
+# 3. 临时目录、Web 壁纸、Help、Cursors
 Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Web") -Recurse -Force -ErrorAction SilentlyContinue
+
+# 保留 Windows\Web 下的 Screen/Shell 等资源，仅清理 Wallpaper 大体积内容，避免 Shell 资源加载失败
+$webWallpaper = Join-Path $winDir "Web\Wallpaper"
+if (Test-Path -LiteralPath $webWallpaper) {
+    Remove-Item -Path $webWallpaper -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
 
