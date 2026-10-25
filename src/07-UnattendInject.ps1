@@ -18,6 +18,7 @@ Write-Host "   [配置承接] 运行模式: $modeText | 目标语言: $lang | �
 $userAccountsXmlFragment = ""
 $autoLogonXmlFragment    = ""
 $hideLocalAccountScreenValue = "true"
+$hideOnlineAccountScreensValue = "true"
 
 if ($mode -eq "1") {
     # 全无人值守：注入预设账户与自动登录节点
@@ -55,12 +56,15 @@ if ($mode -eq "1") {
 			</AutoLogon>
 "@
     $hideLocalAccountScreenValue = "true"
+    $hideOnlineAccountScreensValue = "true"
 } else {
-    # 半无人值守：剥离内置账户，开启本地账户输入屏
+    # 半无人值守：剥离内置账户，开启本地账户输入屏，同时放开在线账户屏，
+    # 让用户在 OOBE 原生界面自定用户名与密码，避免因 HideOnlineAccountScreens=true 跳过账户创建
     Write-Host "   [账户策略] 已剥离预置账户，装机后将由用户在 OOBE 原生界面自定用户名与密码。" -ForegroundColor DarkGray
     $userAccountsXmlFragment = ""
     $autoLogonXmlFragment    = ""
     $hideLocalAccountScreenValue = "false"
+    $hideOnlineAccountScreensValue = "false"
 }
 
 # ----------------- 2. 纯字面量无损模板 (自适应架构与语言) -----------------
@@ -159,7 +163,7 @@ __AUTO_LOGON__
 				<ProtectYourPC>3</ProtectYourPC>
 				<HideEULAPage>true</HideEULAPage>
 				<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-				<HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+				<HideOnlineAccountScreens>__HIDE_ONLINE_ACCOUNT_SCREENS__</HideOnlineAccountScreens>
 				<HideLocalAccountScreen>__HIDE_LOCAL_ACCOUNT_SCREEN__</HideLocalAccountScreen>
 			</OOBE>
 			<FirstLogonCommands>
@@ -241,6 +245,7 @@ $scripts = @(
 		Get-Process -Name 'explorer' -ErrorAction 'SilentlyContinue' | Where-Object -FilterScript {
 			$_.SessionId -eq ( Get-Process -Id $PID ).SessionId;
 		} | Stop-Process -Force;
+		Start-Sleep -Seconds 2;
 	};
 );
 &amp; {
@@ -328,7 +333,7 @@ $scripts = @(
 		Disable-ComputerRestore -Drive 'C:\';
 	};
 	{
-		cmd.exe /c "rmdir C:\Windows.old";
+		cmd.exe /c "rd /s /q C:\Windows.old 2>nul";
 	};
 	{
 		# 自动化稳定性测试探针
@@ -350,6 +355,8 @@ $scripts = @(
 		$txtAssoc = (cmd.exe /c "assoc .txt 2>nul");
 		$report.Add("[关联测试] .txt 扩展名关联项: $txtAssoc");
 
+		$crashCount = 0;
+		$dcomCount = 0;
 		try {
 			$appCrashes = Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 50 -ErrorAction SilentlyContinue;
 			$crashCount = if ($appCrashes) { $appCrashes.Count } else { 0 };
@@ -420,6 +427,7 @@ $finalXml = $finalXml.Replace('__LANG__', $lang)
 $finalXml = $finalXml.Replace('__USER_ACCOUNTS__', $userAccountsXmlFragment)
 $finalXml = $finalXml.Replace('__AUTO_LOGON__', $autoLogonXmlFragment)
 $finalXml = $finalXml.Replace('__HIDE_LOCAL_ACCOUNT_SCREEN__', $hideLocalAccountScreenValue)
+$finalXml = $finalXml.Replace('__HIDE_ONLINE_ACCOUNT_SCREENS__', $hideOnlineAccountScreensValue)
 $finalXml = $finalXml.Replace('__DEPLOY_MODE_TEXT__', $modeText)
 
 # ----------------- 4. 多通道规范注入 -----------------
