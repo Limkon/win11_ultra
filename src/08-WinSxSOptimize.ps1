@@ -32,6 +32,13 @@ if (-not (Test-Path -LiteralPath $winSxSDir)) {
     return
 }
 
+# 极限模式前置断言：OpenWith.exe 缺失时物理替换 WinSxS 将导致“打开方式”功能永久损坏
+$openWithExe = Join-Path $scratchDir "Windows\System32\OpenWith.exe"
+if (-not (Test-Path -LiteralPath $openWithExe)) {
+    Write-Host "[严重错误] 极限模式前置断言失败：OpenWith.exe 不存在，物理替换 WinSxS 将导致“打开方式”功能永久损坏。已中止极限模式，回退为普通精简。" -ForegroundColor Red
+    return
+}
+
 # 获取 WinSxS 物理掌控权
 Write-Host "正在获取 WinSxS 目录物理所有权与完全控制权限..." -ForegroundColor Yellow
 & takeown.exe /F "$winSxSDir" /R /A /D Y 2>$null | Out-Null
@@ -108,6 +115,12 @@ if ($currentArch -eq "arm64") {
         "amd64_microsoft-windows-servicingstack-inetsrv_31bf3856ad364e35_*",
         "amd64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*",
         "amd64_microsoft-windows-servicingstack-onecore_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-shell32_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-shcore_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-explorerframe_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-openwith_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-shell-experience_31bf3856ad364e35_*",
+        "x86_microsoft.windows.shell*",
         "Catalogs",
         "FileMaps",
         "Fusion",
