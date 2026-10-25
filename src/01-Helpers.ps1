@@ -18,20 +18,23 @@ function Force-NukeFolderOrFile {
         if ($null -eq $item) { return }
 
         if ($item.PSIsContainer) {
-            & takeown.exe /F "$Target" /A /R /D Y 2>$null | Out-Null
-            & icacls.exe "$Target" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
-            attrib.exe -R -S -H "$Target\*" /S /D 2>$null
+            & takeown.exe /F "$Target" /A /R /D Y 2>&1 | Out-Null
+            & icacls.exe "$Target" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+            # 仅当目录存在子项时才启动 attrib，避免空目录无谓进程启动
+            if (Get-ChildItem -LiteralPath $Target -Force -ErrorAction SilentlyContinue) {
+                attrib.exe -R -S -H "$Target\*" /S /D 2>&1 | Out-Null
+            }
             Remove-Item -LiteralPath $Target -Recurse -Force -ErrorAction SilentlyContinue
             if (Test-Path -LiteralPath $Target) {
-                cmd.exe /c "rd /s /q `"$Target`"" 2>$null
+                cmd.exe /c "rd /s /q `"$Target`"" 2>&1 | Out-Null
             }
         } else {
-            & takeown.exe /F "$Target" /A 2>$null | Out-Null
-            & icacls.exe "$Target" /grant "*S-1-5-32-544:F" /C /Q 2>$null | Out-Null
-            attrib.exe -R -S -H "$Target" 2>$null
+            & takeown.exe /F "$Target" /A 2>&1 | Out-Null
+            & icacls.exe "$Target" /grant "*S-1-5-32-544:F" /C /Q 2>&1 | Out-Null
+            attrib.exe -R -S -H "$Target" 2>&1 | Out-Null
             Remove-Item -LiteralPath $Target -Force -ErrorAction SilentlyContinue
             if (Test-Path -LiteralPath $Target) {
-                cmd.exe /c "del /f /q /a `"$Target`"" 2>$null
+                cmd.exe /c "del /f /q /a `"$Target`"" 2>&1 | Out-Null
             }
         }
     }
@@ -42,6 +45,8 @@ function Safely-UnloadHive {
     <#
     .SYNOPSIS
         带有垃圾回收与 5 次重试容错机制的离线注册表 Hive 卸载器
+    .PARAMETER HiveName
+        完整 Hive 路径，必须包含 HKLM\ 前缀（例如 "HKLM\zSYSTEM"）
     #>
     param (
         [Parameter(Mandatory = $true)]
@@ -64,74 +69,4 @@ function Safely-UnloadHive {
 
     Write-Host "   [警告] $HiveName 单元卸载超时，继续推进后续流程。" -ForegroundColor Yellow
     return $false
-}
-
-# ----------------- 3. 智能倒计时输入函数 (防跳行·回车符稳固版) -----------------
-function Read-InputWithTimeout {
-    <#
-    .SYNOPSIS
-        使用原生回车符 (\r) 替代光标位置坐标，彻底杜绝横向跳行并完美兼容中英文输入
-    #>
-    param (
-        [string]$Prompt = "请输入自定义用户名",
-        [int]$Seconds = 30,
-        [string]$Default = "Admin"
-    )
-
-    Write-Host "[提示] 倒计时进行中。若需自定义请输入（请切至英文输入法）；若不输入，30秒后默认采用 [$Default]。" -ForegroundColor DarkGray
-
-    try {
-        $null = [Console]::KeyAvailable
-    } catch {
-        $fallback = Read-Host "$Prompt (回车默认: $Default)"
-        if ([string]::IsNullOrWhiteSpace($fallback)) { return @{ TimedOut = $false; Value = $Default } }
-        return @{ TimedOut = $false; Value = $fallback.Trim() }
-    }
-
-    $inputStr = New-Object System.Text.StringBuilder
-    $startTime = [DateTime]::Now
-    $lastPrinted = -1
-
-    while ($true) {
-        $remaining = $Seconds - [int]([DateTime]::Now - $startTime).TotalSeconds
-        if ($remaining -le 0 -and $inputStr.Length -eq 0) {
-            Write-Host "`n>>> [超时] 超过 $Seconds 秒未输入，已自动采用默认用户名: $Default (密码自动留空)" -ForegroundColor Yellow
-            return @{ TimedOut = $true; Value = $Default }
-        }
-
-        # 使用 \r 回车符重置光标至行首，并用足够空格覆盖历史文字，彻底杜绝跳行追加
-        if ($inputStr.Length -eq 0 -and $remaining -ne $lastPrinted) {
-            $lastPrinted = $remaining
-            $statusLine = "`r$Prompt (默认: $Default) [剩余 $remaining 秒]: "
-            Write-Host -NoNewline ($statusLine.PadRight(65)) -ForegroundColor Cyan
-        }
-
-        if ([Console]::KeyAvailable) {
-            $key = [Console]::ReadKey($true)
-            if ($key.Key -eq [ConsoleKey]::Enter) {
-                Write-Host ""
-                $finalText = $inputStr.ToString().Trim()
-                if ([string]::IsNullOrWhiteSpace($finalText)) {
-                    return @{ TimedOut = $false; Value = $Default }
-                }
-                return @{ TimedOut = $false; Value = $finalText }
-            }
-            elseif ($key.Key -eq [ConsoleKey]::Backspace) {
-                if ($inputStr.Length -gt 0) {
-                    $inputStr.Remove($inputStr.Length - 1, 1) | Out-Null
-                    Write-Host -NoNewline "`b `b"
-                }
-            }
-            elseif ($key.KeyChar -ge 32) {
-                # 捕获到第一个有效字符时，彻底擦除倒计时字样，转为常规输入提示行
-                if ($inputStr.Length -eq 0) {
-                    Write-Host -NoNewline ("`r" + (" " * 75) + "`r")
-                    Write-Host -NoNewline "${Prompt}: " -ForegroundColor Cyan
-                }
-                $inputStr.Append($key.KeyChar) | Out-Null
-                Write-Host -NoNewline $key.KeyChar
-            }
-        }
-        Start-Sleep -Milliseconds 50
-    }
 }
