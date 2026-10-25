@@ -4,18 +4,31 @@
 
 Write-Host "`n[步骤 6/11] 正在执行 DriverStore 精简与 .NET 原生映像清理..." -ForegroundColor Cyan
 
-# 1. 移除 pre-compiled .NET assemblies (完全对齐原版)
+# 1. 移除 pre-compiled .NET assemblies (覆盖旧版与新路径)
 Write-Host "Removing pre-compiled .NET assemblies (Native Images)..."
-Remove-Item -Path "$scratchDir\Windows\assembly\NativeImages_*" -Recurse -Force -ErrorAction SilentlyContinue
+$nativeImagePaths = @(
+    "$scratchDir\Windows\assembly\NativeImages_*",
+    "$scratchDir\Windows\Microsoft.NET\assembly\NativeImages_*"
+)
+foreach ($p in $nativeImagePaths) {
+    Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # 2. 驱动仓库激进瘦身
+# 注：仅删除通用打印/扫描类 INF 前缀，保留厂商专用驱动；
+#     原 'scan*'、'mfd*' 通配符会误伤扫描仪与多功能设备核心驱动，已收窄。
 $winDir = "$scratchDir\Windows"
 Write-Host "Slimming the DriverStore... (removing non-essential driver classes)"
 $driverRepo = Join-Path -Path $winDir -ChildPath "System32\DriverStore\FileRepository"
 $patternsToRemove = @(
-    'prn*',
-    'scan*',
-    'mfd*',
+    'prnms00*',
+    'prnms001*',
+    'prnms002*',
+    'prnms003*',
+    'prnms004*',
+    'prnms005*',
+    'prnca00*',
+    'prnkm00*',
     'wscsmd.inf*',
     'tapdrv*',
     'rdpbus.inf*',
@@ -28,6 +41,7 @@ if (Test-Path $driverRepo) {
         foreach ($pattern in $patternsToRemove) {
             if ($driverFolder -like $pattern) {
                 Write-Host "Removing non-essential driver package: $driverFolder"
+                attrib.exe -R -S -H "$($_.FullName)\*" /S /D 2>&1 | Out-Null
                 Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
                 break
             }
