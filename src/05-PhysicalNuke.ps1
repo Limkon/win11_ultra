@@ -5,7 +5,7 @@
 Write-Host "`n[步骤 7/11] 正在执行系统冗余物理文件清理..." -ForegroundColor Cyan
 $winDir = "$scratchDir\Windows"
 
-# 1. 字体库精简 (保护微软雅黑与核心英文字体)
+# 1. 字体库精简
 $fontsPath = Join-Path -Path $winDir -ChildPath "Fonts"
 if (Test-Path $fontsPath) { 
     Write-Host "Cleaning up Fonts..."
@@ -22,30 +22,58 @@ Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force
 
 # 3. 临时目录、Web 壁纸、Help、Cursors
 Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
-
-# 保留 Windows\Web 下的 Screen/Shell 等资源，仅清理 Wallpaper 大体积内容，避免 Shell 资源加载失败
 $webWallpaper = Join-Path $winDir "Web\Wallpaper"
 if (Test-Path -LiteralPath $webWallpaper) {
     Remove-Item -Path $webWallpaper -Recurse -Force -ErrorAction SilentlyContinue
 }
-
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
 
 # 4. 移除 Edge, WinRE (建立 0 字节占位文件), 和 OneDrive
-Write-Host "Removing Edge, WinRE, and OneDrive..."
-Remove-Item -Path "$scratchDir\Program Files (x86)\Microsoft\Edge*" -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "Removing Edge, WinRE, and OneDrive..." -ForegroundColor Yellow
 
-if ($global:architecture -eq 'amd64') { 
-    $edgeFolder = Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "amd64_microsoft-edge-webview_31bf3856ad364e35*" -Directory | Select-Object -ExpandProperty FullName 
-    if ($edgeFolder) { Remove-Item -Path $edgeFolder -Recurse -Force -ErrorAction SilentlyContinue }
+# 彻底清理 Edge 相关的物理目录
+$edgePaths = @(
+    "$scratchDir\Program Files (x86)\Microsoft\Edge",
+    "$scratchDir\Program Files (x86)\Microsoft\EdgeCore",
+    "$scratchDir\Program Files (x86)\Microsoft\EdgeUpdate",
+    "$scratchDir\Program Files\Microsoft\Edge",
+    "$scratchDir\Windows\System32\Microsoft-Edge-Webview"
+)
+foreach ($path in $edgePaths) {
+    if (Test-Path -LiteralPath $path) {
+        Write-Host "   Deleting Edge path: $path" -ForegroundColor DarkGray
+        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
-Remove-Item -Path "$scratchDir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force -ErrorAction SilentlyContinue
 
-# WinRE 处置：物理删除并建立 0 字节文件占位 (原版核心防报错细节)
+# WinSxS 里的 Edge WebView
+if ($global:architecture -eq 'amd64') { 
+    $edgeFolders = Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*microsoft-edge-webview*" -Directory -ErrorAction SilentlyContinue
+    if ($edgeFolders) {
+        foreach ($folder in $edgeFolders) {
+            Write-Host "   Deleting WinSxS Edge: $($folder.Name)" -ForegroundColor DarkGray
+            Remove-Item -LiteralPath $folder.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# 彻底清理 OneDrive 相关的物理目录
+$oneDrivePaths = @(
+    "$scratchDir\Windows\System32\OneDriveSetup.exe",
+    "$scratchDir\Windows\SysWOW64\OneDriveSetup.exe",
+    "$scratchDir\Program Files\Microsoft OneDrive",
+    "$scratchDir\Program Files (x86)\Microsoft OneDrive"
+)
+foreach ($path in $oneDrivePaths) {
+    if (Test-Path -LiteralPath $path) {
+        Write-Host "   Deleting OneDrive path: $path" -ForegroundColor DarkGray
+        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# WinRE 处置：物理删除并建立 0 字节文件占位
 Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force | Out-Null
 
-Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
-
-Write-Host "[完成] 冗余物理文件与 Edge/WinRE 处理完毕。" -ForegroundColor Green
+Write-Host "[完成] 冗余物理文件与 Edge/WinRE/OneDrive 处理完毕。" -ForegroundColor Green
