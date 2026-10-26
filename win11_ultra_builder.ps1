@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-26 11:47:19 UTC
+#  生成时间: 2026-10-26 14:02:36 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -13,6 +13,8 @@
 # ==============================================================================
 
 # ----------------- 全局特性静态开关 -----------------
+# 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，直接打包 install.wim)
+# 消费方：10-PackageAndClean.ps1 开头读取 $global:enableEsdConversion
 $global:enableEsdConversion = $false
 # ----------------------------------------------------
 
@@ -108,6 +110,8 @@ Write-Host "工作目录锁定在: $workDir" -ForegroundColor Green
 Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 
 # ----------------- 7. 前置倒计时交互引擎函数 -----------------
+# 注：本函数与 01-Helpers.ps1 的 Read-InputWithTimeout 语义不同（本函数返回 Hashtable
+#     并区分 TimedOut/Value），且 00 先于 01 执行，故保留本地实现，请勿混用。
 function Read-ChoiceWithTimeout {
     param (
         [string]$PromptText = "请输入选项",
@@ -217,7 +221,7 @@ function Read-StringWithTimeout {
 # ----------------- 8. 前置配置 1：选择精简制作模式 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " [配置 1/2] 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
+Write-Host " [配置 1/3] 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
 Write-Host " [1] 普通精简 (推荐: 极速流畅、稳定平衡、保留组件服务架构)" -ForegroundColor Green
 Write-Host " [2] 极限压榨 (全版本自适应 WinSxS 瘦身 + 注册表物理抹杀服务)" -ForegroundColor Red
 Write-Host "==========================================================" -ForegroundColor Magenta
@@ -234,7 +238,7 @@ if ($trimChoice -eq "2") {
 # ----------------- 9. 前置配置 2：选择无人值守引导模式 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " [配置 2/2] 请选择 Windows 安装引导模式 (Unattend Mode):" -ForegroundColor Magenta
+Write-Host " [配置 2/3] 请选择 Windows 安装引导模式 (Unattend Mode):" -ForegroundColor Magenta
 Write-Host " [1] 全无人值守 (全自动安装、自动创建指定账户并自动登录)" -ForegroundColor Green
 Write-Host " [2] 半无人值守 (跳过硬件检测限制，在 OOBE 阶段手动输入用户名/密码)" -ForegroundColor Yellow
 Write-Host "==========================================================" -ForegroundColor Magenta
@@ -267,6 +271,52 @@ if ($unattendChoice -eq "2") {
     Write-Host ">>> [账户锁定] 用户名: $global:customUser | 密码: $(if ([string]::IsNullOrEmpty($global:customPass)) { '(留空)' } else { '******' })" -ForegroundColor DarkGray
 }
 
+# ----------------- 10. 前置配置 3：源文件获取方式 -----------------
+Write-Host ""
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host " [配置 3/3] 请选择 Windows 11 源文件获取方式:" -ForegroundColor Cyan
+Write-Host " [1] 输入光驱盘符 (适用于已挂载 ISO 的用户)" -ForegroundColor Green
+Write-Host " [2] 输入文件路径 (直接指定 .iso / .wim / .esd，支持拖拽)" -ForegroundColor Yellow
+Write-Host "==========================================================" -ForegroundColor Cyan
+
+$sourceChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2]" -Seconds 15 -DefaultChoice "1"
+$global:sourceMode = $sourceChoice
+$global:driveLetter = ""
+$global:sourceFile = ""
+
+if ($sourceChoice -eq "2") {
+    Write-Host "`n请将 .iso / .wim / .esd 文件拖拽到此处，或手动输入完整路径:" -ForegroundColor Yellow
+    $inputPath = Read-Host
+    $inputPath = $inputPath.Trim('"', ' ').Trim()
+    if (-not (Test-Path -LiteralPath $inputPath)) {
+        Write-Host "[严重错误] 文件不存在: $inputPath" -ForegroundColor Red
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+    $ext = [System.IO.Path]::GetExtension($inputPath).ToLower()
+    if ($ext -notin '.iso', '.wim', '.esd') {
+        Write-Host "[严重错误] 不支持的文件格式 ($ext)，仅限 .iso / .wim / .esd。" -ForegroundColor Red
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+    $global:sourceFile = $inputPath
+    Write-Host ">>> 已锁定源文件: $($global:sourceFile)" -ForegroundColor Green
+} else {
+    Write-Host "`n请输入 ISO 虚拟光驱盘符 (例如 E):" -ForegroundColor Yellow
+    $inputDrive = Read-Host
+    $normalized = $inputDrive.Trim().TrimEnd('\').TrimEnd(':').ToUpper()
+    if ($normalized -notmatch '^[A-Z]$') {
+        Write-Host "[严重错误] 盘符格式非法，请输入单个字母（如 E）！" -ForegroundColor Red
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+    $global:driveLetter = "$normalized`:"
+    Write-Host ">>> 已锁定挂载盘符: $($global:driveLetter)" -ForegroundColor Green
+}
+
 # 输出 ESD 开关状态
 Write-Host ""
 if ($global:enableEsdConversion) {
@@ -276,7 +326,7 @@ if ($global:enableEsdConversion) {
 }
 Write-Host "`n[就绪] 前置配置已全部锁定，后续构建流程将完全静默自动化运行！`n" -ForegroundColor Green
 
-# ----------------- 10. 环境深度解锁 (解决 Ctrl+C 导致的挂载死锁) -----------------
+# ----------------- 11. 环境深度解锁 (解决 Ctrl+C 导致的挂载死锁) -----------------
 Write-Host "[初始化] 正在深度清理历史挂载残留与注册表死锁..." -ForegroundColor DarkGray
 
 # 卸载可能残留的离线注册表
@@ -401,40 +451,68 @@ function Safely-UnloadHive {
 #  win11 Builder - [模块 3/11] 镜像定位、导出与挂载 (src/02-MountImage.ps1)
 # ==============================================================================
 
-# 1. 输入与校验 ISO 光驱盘符
-$rawDrive = Read-Host "请输入 Windows 11 ISO 虚拟光驱盘符 (例如 E)"
-if ([string]::IsNullOrWhiteSpace($rawDrive)) {
-    Write-Host "[严重错误] 未输入有效盘符！流程终止。" -ForegroundColor Red
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
+$sourceRoot = ""
+$bootWimSrc = ""
+$installWimSrc = ""
+$installEsdSrc = ""
+$isMountedISO = $false
+$fileExt = ""
+
+# 1. 智能定位源文件结构 (双模式)
+if ($global:sourceMode -eq "2") {
+    $sourceFile = $global:sourceFile
+    $fileExt = [System.IO.Path]::GetExtension($sourceFile).ToLower()
+    
+    if ($fileExt -eq '.iso') {
+        Write-Host "`n[步骤 1/11] 正在挂载 ISO 虚拟镜像..." -ForegroundColor Cyan
+        $isoMount = Mount-DiskImage -ImagePath $sourceFile -PassThru -ErrorAction SilentlyContinue
+        if (-not $isoMount) {
+            Write-Host "[严重错误] 无法挂载 ISO 文件！可能文件损坏或被占用。" -ForegroundColor Red
+            if ($global:transcriptActive) { Stop-Transcript }; pause; exit 1
+        }
+        Start-Sleep -Seconds 2
+        $driveLetter = ($isoMount | Get-Volume).DriveLetter
+        $sourceRoot = "$($driveLetter):"
+        $isMountedISO = $true
+    } else {
+        Write-Host "`n[步骤 1/11] 正在解析源文件..." -ForegroundColor Cyan
+        $sourceDir = Split-Path -Parent $sourceFile
+        if ($fileExt -eq '.wim') { $installWimSrc = $sourceFile } else { $installEsdSrc = $sourceFile }
+        
+        $possibleBootWims = @(
+            (Join-Path $sourceDir "boot.wim"),
+            (Join-Path $sourceDir "sources\boot.wim")
+        )
+        foreach ($bw in $possibleBootWims) {
+            if (Test-Path -LiteralPath $bw) { $bootWimSrc = $bw; break }
+        }
+        $sourceRoot = $sourceDir
+    }
+} else {
+    # 兼容盘符输入模式
+    $sourceRoot = $global:driveLetter
+    $fileExt = ".iso"
+    Write-Host "`n[步骤 1/11] 正在读取虚拟光驱盘符 $sourceRoot..." -ForegroundColor Cyan
 }
 
-$normalized = $rawDrive.Trim().TrimEnd('\').TrimEnd(':').ToUpper()
-if ($normalized -notmatch '^[A-Z]$') {
-    Write-Host "[严重错误] 盘符格式非法，请输入单个字母（如 E）！" -ForegroundColor Red
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
-}
-$DriveLetter = "$normalized`:"
+# 统一构建路径参数 (如果是 ISO 或 盘符模式)
+if ($fileExt -eq ".iso") {
+    $bootWimSrc    = "$sourceRoot\sources\boot.wim"
+    $installWimSrc = "$sourceRoot\sources\install.wim"
+    $installEsdSrc = "$sourceRoot\sources\install.esd"
 
-$bootWimSrc    = "$DriveLetter\sources\boot.wim"
-$installWimSrc = "$DriveLetter\sources\install.wim"
-$installEsdSrc = "$DriveLetter\sources\install.esd"
-
-if (-not (Test-Path -LiteralPath $bootWimSrc) -or (-not (Test-Path -LiteralPath $installWimSrc) -and -not (Test-Path -LiteralPath $installEsdSrc))) {
-    Write-Host "[严重错误] 在虚拟光驱 $DriveLetter 中未检测到有效的 Windows 安装介质结构！" -ForegroundColor Red
-    Write-Host "缺少关键文件: boot.wim 或 install.wim/install.esd，请确认 ISO 已正确挂载。" -ForegroundColor Yellow
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
+    if (-not (Test-Path -LiteralPath $bootWimSrc) -or (-not (Test-Path -LiteralPath $installWimSrc) -and -not (Test-Path -LiteralPath $installEsdSrc))) {
+        Write-Host "[严重错误] 在源 $sourceRoot 中未检测到有效的 Windows 安装介质结构！" -ForegroundColor Red
+        if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
+        if ($global:transcriptActive) { Stop-Transcript }; pause; exit 1
+    }
 }
 
 # 2. 复制 ISO 引导架构文件 (步骤 1/11)
+# 注意：路径严格规范化为不带尾部转义反斜杠的标准形式，杜绝 CRT 逃逸导致的复制失败
 Write-Host "`n[步骤 1/11] 正在复制 ISO 核心引导架构到工作区..." -ForegroundColor Cyan
-$sourceRoot = "$DriveLetter"
 
+# Robocopy 返回码 0-7 均代表正常/成功，8 及以上代表严重异常
 $null = & robocopy.exe "$sourceRoot" "$workDir" /E /XF "install.wim" "install.esd" /NDL /NFL /NC /NS /NP
 if ($LASTEXITCODE -ge 8) {
     $rcMsg = switch ($LASTEXITCODE) {
@@ -443,11 +521,13 @@ if ($LASTEXITCODE -ge 8) {
         default { "未知严重错误" }
     }
     Write-Host "[严重错误] 基础引导结构复制失败！Robocopy 退出码: $LASTEXITCODE ($rcMsg)" -ForegroundColor Red
+    if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
     if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
 
+# 校验关键引导链文件完整性
 $criticalBootFiles = @(
     (Join-Path $workDir "bootmgr"),
     (Join-Path $workDir "boot\bcd"),
@@ -464,6 +544,7 @@ foreach ($bf in $criticalBootFiles) {
 
 if ($missingBootFile) {
     Write-Host "[严重错误] 核心引导结构未能完整复制到工作区，无法支持后续引导生成！" -ForegroundColor Red
+    if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
     if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
@@ -472,13 +553,14 @@ Write-Host "[完成] ISO 核心引导架构复制完毕，引导链结构完整�
 
 # 3. 定位源映像文件并导出目标分卷 (步骤 2/11)
 $destWim = Join-Path $sourcesDir "install.wim"
+$imageSourceToUse = if ($installWimSrc -and (Test-Path -LiteralPath $installWimSrc)) { $installWimSrc } else { $installEsdSrc }
 
-if (Test-Path -LiteralPath $installWimSrc) {
+if ($installWimSrc -and (Test-Path -LiteralPath $installWimSrc)) {
     Write-Host "`n[步骤 2/11] 检测到 install.wim，正在解析映像分卷列表..." -ForegroundColor Cyan
     & dism.exe /English /Get-WimInfo "/WimFile:$installWimSrc"
     $index = Read-Host "请输入要精简的目标版本 Index 序号"
     if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
-
+    
     Write-Host "正在导出目标分卷 $index (展示原生导出进度条)..." -ForegroundColor Green
     & dism.exe /English /Export-Image "/SourceImageFile:$installWimSrc" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
 } else {
@@ -486,16 +568,22 @@ if (Test-Path -LiteralPath $installWimSrc) {
     & dism.exe /English /Get-WimInfo "/WimFile:$installEsdSrc"
     $index = Read-Host "请输入要精简的目标版本 Index 序号"
     if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
-
+    
     Write-Host "正在将目标分卷 $index 从 ESD 高压格式转换为 install.wim (展示原生进度条)..." -ForegroundColor Green
     & dism.exe /English /Export-Image "/SourceImageFile:$installEsdSrc" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
 }
 
 if (-not (Test-Path -LiteralPath $destWim)) {
     Write-Host "[严重错误] install.wim 导出生成失败！流程终止。" -ForegroundColor Red
+    if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
     if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
+}
+
+# 卸载 ISO
+if ($isMountedISO) {
+    Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null
 }
 
 # 导出后独立单一镜像的 Index 固定为 1
@@ -1198,7 +1286,6 @@ $hideLocalAccountScreenValue = "true"
 $hideOnlineAccountScreensValue = "true"
 
 if ($mode -eq "1") {
-    # 全无人值守：注入预设账户与自动登录节点
     $inputUserEscaped = [System.Security.SecurityElement]::Escape($user)
     $inputPassEscaped = [System.Security.SecurityElement]::Escape($pass)
 
@@ -1235,8 +1322,6 @@ if ($mode -eq "1") {
     $hideLocalAccountScreenValue = "true"
     $hideOnlineAccountScreensValue = "true"
 } else {
-    # 半无人值守：剥离内置账户，开启本地账户输入屏，同时放开在线账户屏，
-    # 让用户在 OOBE 原生界面自定用户名与密码，避免因 HideOnlineAccountScreens=true 跳过账户创建
     Write-Host "   [账户策略] 已剥离预置账户，装机后将由用户在 OOBE 原生界面自定用户名与密码。" -ForegroundColor DarkGray
     $userAccountsXmlFragment = ""
     $autoLogonXmlFragment    = ""
@@ -1553,6 +1638,7 @@ $scripts = @(
 
 		$reportPath = "C:\Windows\Temp\Trim_Stability_Report.log";
 		[System.IO.File]::WriteAllLines($reportPath, $report, [System.Text.Encoding]::UTF8);
+		$report = $null;
 	};
 	{
 		# 1. 彻底销毁包含配置的应答文件
@@ -1607,23 +1693,33 @@ $finalXml = $finalXml.Replace('__HIDE_LOCAL_ACCOUNT_SCREEN__', $hideLocalAccount
 $finalXml = $finalXml.Replace('__HIDE_ONLINE_ACCOUNT_SCREENS__', $hideOnlineAccountScreensValue)
 $finalXml = $finalXml.Replace('__DEPLOY_MODE_TEXT__', $modeText)
 
-# ----------------- 4. 多通道规范注入 -----------------
+# ----------------- 4. 多通道规范注入 (带强力防占用机制) -----------------
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
 if (-not (Test-Path -LiteralPath $pantherDir)) { New-Item -ItemType Directory -Path $pantherDir -Force | Out-Null }
 
-$utf8Encoding = [System.Text.Encoding]::UTF8
+$utf8Encoding = New-Object System.Text.UTF8Encoding($false)
 
-# Sysprep 核心规范通道
-[System.IO.File]::WriteAllText((Join-Path $sysprepDir "unattend.xml"), $finalXml, $utf8Encoding)
-[System.IO.File]::WriteAllText((Join-Path $sysprepDir "autounattend.xml"), $finalXml, $utf8Encoding)
+# 核心修复：强制解除只读并覆盖写入的通用函数
+function Write-XmlSafely {
+    param([string]$Path, [string]$Content)
+    if (Test-Path -LiteralPath $Path) {
+        attrib.exe -R -S -H "$Path" 2>&1 | Out-Null
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    }
+    try {
+        [System.IO.File]::WriteAllText($Path, $Content, $utf8Encoding)
+    } catch {
+        Write-Host "[警告] 写入 $Path 失败，尝试备用写入法..." -ForegroundColor Yellow
+        $Content | Out-File -FilePath $Path -Encoding UTF8 -Force
+    }
+}
 
-# Panther 初始化通道
-[System.IO.File]::WriteAllText((Join-Path $pantherDir "unattend.xml"), $finalXml, $utf8Encoding)
-
-# ISO 介质根目录自启动通道
-[System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $finalXml, $utf8Encoding)
+Write-XmlSafely -Path (Join-Path $sysprepDir "unattend.xml") -Content $finalXml
+Write-XmlSafely -Path (Join-Path $sysprepDir "autounattend.xml") -Content $finalXml
+Write-XmlSafely -Path (Join-Path $pantherDir "unattend.xml") -Content $finalXml
+Write-XmlSafely -Path (Join-Path $workDir "autounattend.xml") -Content $finalXml
 
 Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自适应语言: $lang | 架构: $arch)。" -ForegroundColor Green
 
@@ -1822,7 +1918,7 @@ Start-Sleep -Seconds 2
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[严重错误] install.wim 提交卸载失败，退出码: $LASTEXITCODE！正在尝试强制放弃挂载以保护母盘..." -ForegroundColor Red
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
-    Stop-Transcript
+    if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
@@ -1852,7 +1948,7 @@ Write-Host "`n正在以【原地修改提交】模式深度修补 boot.wim (彻�
 
 if (-not (Test-Path -LiteralPath $bootWimPath)) {
     Write-Host "[严重错误] 未在 sources 目录中检测到 boot.wim，无法构建可引导介质！" -ForegroundColor Red
-    Stop-Transcript
+    if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
@@ -1874,7 +1970,7 @@ if ($indexMatches.Count -gt 0) {
 }
 Write-Host "检测到 boot.wim 包含 $totalBootIndexes 个分卷，启动全卷深度渗透修补..." -ForegroundColor Green
 
-# 循环修补 boot.wim 的每个分卷（Index 1 和 Index 2 统一注入，杜绝引导盲区）
+# 循环修补 boot.wim 的每个分卷
 for ($idx = 1; $idx -le $totalBootIndexes; $idx++) {
     Write-Host "`n>>> 正在原地挂载修补 boot.wim 分卷 [$idx/$totalBootIndexes]..." -ForegroundColor Yellow
 
@@ -1943,7 +2039,7 @@ for ($idx = 1; $idx -le $totalBootIndexes; $idx++) {
         }
     }
 
-    # 原地安全提交修改 (保持微软原始 WIM 头与 Flags 元数据 100% 纯净无损)
+    # 原地安全提交修改
     Write-Host "   正在原地提交 boot.wim 分卷 $idx 修改..." -ForegroundColor DarkGray
     Start-Sleep -Seconds 2
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
@@ -1955,9 +2051,6 @@ for ($idx = 1; $idx -le $totalBootIndexes; $idx++) {
 Write-Host "[完成] boot.wim 所有分卷修补完成，原生架构与元数据完全保留。" -ForegroundColor Green
 
 # ----------------- 4. 修复 Legacy BCD 显卡防死锁参数 -----------------
-# 注：原脚本含 `bcdedit /set {default} winpe Yes`，该参数语义为“此启动项是 WinPE”，
-#     会改变 Legacy BCD 默认项类型，反而可能导致 setup 无法正常进入，故移除。
-#     仅保留 detecthal（强制 HAL 检测）与 displaybootmenu（关闭引导菜单）两项防死锁参数。
 if (Test-Path -LiteralPath $legacyBcdPath) {
     Write-Host "`n正在对 Legacy BIOS BCD 启动菜单注入兼容性保护..." -ForegroundColor Cyan
     attrib.exe -R -S -H "$legacyBcdPath" 2>&1 | Out-Null
@@ -1984,6 +2077,21 @@ $keepList = @(
 Get-ChildItem -Path $workDir | Where-Object { $_.Name -notin $keepList } | ForEach-Object {
     Write-Host "   清除根目录多余文件/目录: $($_.Name)" -ForegroundColor DarkGray
     Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ----------------- 6. 清理残留的 Edge 和 Cortana 快捷方式 -----------------
+Write-Host "`n正在清理可能残留的 Edge 和 Cortana 快捷方式..." -ForegroundColor Cyan
+$shortcutPaths = @(
+    "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk",
+    "$scratchDir\Users\Default\Desktop\Microsoft Edge.lnk",
+    "$scratchDir\Users\Public\Desktop\Microsoft Edge.lnk",
+    "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Cortana.lnk"
+)
+foreach ($sc in $shortcutPaths) {
+    if (Test-Path -LiteralPath $sc) {
+        Write-Host "   清理快捷方式: $sc" -ForegroundColor DarkGray
+        Remove-Item -LiteralPath $sc -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Host "[完成] WinPE 引导与 BCD 修补全部圆满就绪。" -ForegroundColor Green
