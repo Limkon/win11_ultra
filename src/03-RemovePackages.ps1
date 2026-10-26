@@ -5,7 +5,6 @@
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
 
 # ----------------- 1. 语言与硬件架构深度探针 -----------------
-# 探查默认 UI 语言并写入全局变量，确保跨模块引导与应答文件协同
 $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
 $matchedLang = $false
 foreach ($line in ($imageIntl -split '\r?\n')) {
@@ -52,9 +51,9 @@ if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
 # ----------------- 2. 移除预装 AppX (Bloatware) -----------------
 Write-Host "`n正在扫描并移除预装臃肿 AppX 应用包..." -ForegroundColor Cyan
 
-# 精确匹配待移除应用清单
-# 注：保留 *Camera*，因 WindowsCamera.exe 在 HKCR\Applications 有强关联，
-#     删除后若注册项残留会导致 OpenWith 枚举中断，使“更多应用”列表为空。
+# 注意：
+# 1. 保留了 *Paint* 和 *Notepad*，这二者包含深层文件关联，移除会导致“打开方式”列表渲染失败。
+# 2. 保留 *Camera*，防止 HKCR\Applications 下残留死链。
 $targetAppxPatterns = @(
     '*Zune*',
     '*Bing*',
@@ -90,9 +89,7 @@ $targetAppxPatterns = @(
     '*QuickAssist*',
     '*PeopleExperienceHost*',
     '*PinningConfirmationDialog*',
-    '*SecureAssessmentBrowser*',
-    '*Paint*',
-    '*Notepad*'
+    '*SecureAssessmentBrowser*'
 )
 
 # 框架组件保护白名单：任何通配符都不得误伤这些包
@@ -116,9 +113,7 @@ if ($provisionedPackages) {
                 break
             }
         }
-        if ($isProtected) {
-            continue
-        }
+        if ($isProtected) { continue }
 
         foreach ($pattern in $targetAppxPatterns) {
             if ($pkg.PackageName -like $pattern) {
@@ -130,16 +125,12 @@ if ($provisionedPackages) {
 }
 
 # AppX 包名 -> HKCR\Applications 下对应 exe 名的映射
-# 仅覆盖已知会注册文件关联的 AppX；未知包不盲猜，避免误删第三方应用关联
 $appxExeMap = @{
     'Microsoft.Windows.Photos'            = @('Photos.exe', 'Microsoft.Photos.exe')
-    'Microsoft.Paint'                      = @('mspaint.exe')
-    'Microsoft.WindowsNotepad'             = @('notepad.exe')
     'Microsoft.ScreenSketch'               = @('SnippingTool.exe', 'ScreenSketch.exe')
     'Microsoft.People'                     = @('People.exe')
     'Microsoft.WindowsMaps'                = @('Maps.exe')
     'Microsoft.MicrosoftStickyNotes'       = @('Microsoft.MicrosoftStickyNotes.exe')
-    'Microsoft.WindowsCalculator'          = @('Microsoft.WindowsCalculator.exe', 'Calculator.exe', 'calc.exe')
     'Microsoft.WindowsAlarms'              = @('WindowsAlarms.exe')
     'Microsoft.WindowsSoundRecorder'       = @('WindowsSoundRecorder.exe')
     'Microsoft.ZuneMusic'                  = @('Microsoft.ZuneMusic.exe')
@@ -160,7 +151,6 @@ foreach ($package in $packagesToRemove) {
     }
     $removedPackageNames.Add($package.PackageName)
 
-    # 收集该包可能注册的 exe 名，供 06 模块清理残留关联项
     foreach ($mapKey in $appxExeMap.Keys) {
         if ($package.PackageName -like "*$mapKey*") {
             foreach ($exeName in $appxExeMap[$mapKey]) {
@@ -173,7 +163,7 @@ foreach ($package in $packagesToRemove) {
     }
 }
 
-# 深度清理 WindowsApps 物理残留目录（夺权并硬核粉碎）
+# 深度清理 WindowsApps 物理残留目录
 Write-Host "正在扫描并清理 Program Files\WindowsApps 中的残留资产..." -ForegroundColor DarkGray
 $windowsAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
 
@@ -193,7 +183,7 @@ if (Test-Path -LiteralPath $windowsAppsDir) {
     }
 }
 
-# 完整性校验：确保 OpenWith 对话框的核心宿主未被误伤
+# 完整性校验
 $openWithExe = Join-Path $scratchDir "Windows\System32\OpenWith.exe"
 $shell32Dll  = Join-Path $scratchDir "Windows\System32\shell32.dll"
 $shCoreDll   = Join-Path $scratchDir "Windows\System32\shcore.dll"
@@ -211,6 +201,8 @@ $provisionedPackages = $null
 # ----------------- 3. 移除系统底层功能包 Packages -----------------
 Write-Host "`n系统应用精炼完毕，正在执行系统底层按需功能包 (FOD) 精简..." -ForegroundColor Cyan
 
+# 注意：绝对不能移除 Microsoft-Windows-Search-Engine-Client-Package~，
+# 它是“打开方式 -> 更多应用”列表的底层枚举 API 提供者，移除会导致点击无响应。
 $packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
