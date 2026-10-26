@@ -16,10 +16,48 @@ foreach ($h in $hiveLoads) {
     & reg.exe load $h.Name $h.Path 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[严重错误] 注册表配置单元加载失败: $($h.Name) <- $($h.Path)，退出码 $LASTEXITCODE" -ForegroundColor Red
-        Stop-Transcript
+        if ($global:transcriptActive) { Stop-Transcript }
         pause
         exit 1
     }
+}
+
+# ==============================================================================
+# 1.5 OpenWith 残留关联清理
+# 清理 03 模块已删除 AppX 在 HKCR\Applications、OpenWithList、OpenWithProgids 下的残留项，
+# 避免 OpenWith 枚举候选应用时因解析失败而中断，导致“更多应用”列表为空。
+# ==============================================================================
+if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
+    Write-Host "Cleaning up orphaned OpenWith associations for removed AppX packages..." -ForegroundColor Yellow
+
+    $commonExtensions = @(
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.heic', '.heif',
+        '.txt', '.log', '.ini', '.md', '.csv',
+        '.mp3', '.mp4', '.wav', '.avi', '.mkv', '.mov', '.wmv', '.flac', '.m4a',
+        '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'
+    )
+
+    # HKCR 在离线映像中对应 HKLM\zSOFTWARE\Classes，同时清理 WOW6432Node 影子副本
+    $classesRoots = @(
+        'HKLM\zSOFTWARE\Classes',
+        'HKLM\zSOFTWARE\WOW6432Node\Classes'
+    )
+
+    foreach ($exe in $global:removedAppxExeNames) {
+        foreach ($croot in $classesRoots) {
+            # 删除 Applications\<exe> 整键
+            & reg.exe delete "$croot\Applications\$exe" /f 2>&1 | Out-Null
+
+            # 遍历常见扩展名，清理 OpenWithList 与 OpenWithProgids
+            foreach ($ext in $commonExtensions) {
+                & reg.exe delete "$croot\$ext\OpenWithList\$exe" /f 2>&1 | Out-Null
+                & reg.exe delete "$croot\$ext\OpenWithProgids" /v $exe /f 2>&1 | Out-Null
+            }
+        }
+    }
+    Write-Host "[完成] OpenWith 残留关联清理完毕。" -ForegroundColor Green
+} else {
+    Write-Host "[跳过] 未检测到需清理的 AppX 关联项 (removedAppxExeNames 为空)。" -ForegroundColor DarkGray
 }
 
 # 【关键引导修复】：内核级 ELAM 启动策略豁免 (彻底杜绝物理删除 wdboot.sys 导致的启动卡图标死锁)
@@ -171,7 +209,7 @@ Write-Host "Loading registry hives to remove services..."
 & reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[严重错误] 重新装载 SYSTEM 配置单元失败，退出码 $LASTEXITCODE，服务删除阶段中止。" -ForegroundColor Red
-    Stop-Transcript
+    if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
