@@ -22,7 +22,7 @@ Start-Sleep -Seconds 2
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[严重错误] install.wim 提交卸载失败，退出码: $LASTEXITCODE！正在尝试强制放弃挂载以保护母盘..." -ForegroundColor Red
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
-    Stop-Transcript
+    if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
@@ -52,7 +52,7 @@ Write-Host "`n正在以【原地修改提交】模式深度修补 boot.wim (彻�
 
 if (-not (Test-Path -LiteralPath $bootWimPath)) {
     Write-Host "[严重错误] 未在 sources 目录中检测到 boot.wim，无法构建可引导介质！" -ForegroundColor Red
-    Stop-Transcript
+    if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
@@ -74,7 +74,7 @@ if ($indexMatches.Count -gt 0) {
 }
 Write-Host "检测到 boot.wim 包含 $totalBootIndexes 个分卷，启动全卷深度渗透修补..." -ForegroundColor Green
 
-# 循环修补 boot.wim 的每个分卷（Index 1 和 Index 2 统一注入，杜绝引导盲区）
+# 循环修补 boot.wim 的每个分卷
 for ($idx = 1; $idx -le $totalBootIndexes; $idx++) {
     Write-Host "`n>>> 正在原地挂载修补 boot.wim 分卷 [$idx/$totalBootIndexes]..." -ForegroundColor Yellow
 
@@ -143,7 +143,7 @@ for ($idx = 1; $idx -le $totalBootIndexes; $idx++) {
         }
     }
 
-    # 原地安全提交修改 (保持微软原始 WIM 头与 Flags 元数据 100% 纯净无损)
+    # 原地安全提交修改
     Write-Host "   正在原地提交 boot.wim 分卷 $idx 修改..." -ForegroundColor DarkGray
     Start-Sleep -Seconds 2
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
@@ -155,9 +155,6 @@ for ($idx = 1; $idx -le $totalBootIndexes; $idx++) {
 Write-Host "[完成] boot.wim 所有分卷修补完成，原生架构与元数据完全保留。" -ForegroundColor Green
 
 # ----------------- 4. 修复 Legacy BCD 显卡防死锁参数 -----------------
-# 注：原脚本含 `bcdedit /set {default} winpe Yes`，该参数语义为“此启动项是 WinPE”，
-#     会改变 Legacy BCD 默认项类型，反而可能导致 setup 无法正常进入，故移除。
-#     仅保留 detecthal（强制 HAL 检测）与 displaybootmenu（关闭引导菜单）两项防死锁参数。
 if (Test-Path -LiteralPath $legacyBcdPath) {
     Write-Host "`n正在对 Legacy BIOS BCD 启动菜单注入兼容性保护..." -ForegroundColor Cyan
     attrib.exe -R -S -H "$legacyBcdPath" 2>&1 | Out-Null
@@ -184,6 +181,21 @@ $keepList = @(
 Get-ChildItem -Path $workDir | Where-Object { $_.Name -notin $keepList } | ForEach-Object {
     Write-Host "   清除根目录多余文件/目录: $($_.Name)" -ForegroundColor DarkGray
     Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ----------------- 6. 清理残留的 Edge 和 Cortana 快捷方式 -----------------
+Write-Host "`n正在清理可能残留的 Edge 和 Cortana 快捷方式..." -ForegroundColor Cyan
+$shortcutPaths = @(
+    "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk",
+    "$scratchDir\Users\Default\Desktop\Microsoft Edge.lnk",
+    "$scratchDir\Users\Public\Desktop\Microsoft Edge.lnk",
+    "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Cortana.lnk"
+)
+foreach ($sc in $shortcutPaths) {
+    if (Test-Path -LiteralPath $sc) {
+        Write-Host "   清理快捷方式: $sc" -ForegroundColor DarkGray
+        Remove-Item -LiteralPath $sc -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Host "[完成] WinPE 引导与 BCD 修补全部圆满就绪。" -ForegroundColor Green
