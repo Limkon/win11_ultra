@@ -51,19 +51,18 @@ if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
 # ----------------- 2. 移除预装 AppX (Bloatware) -----------------
 Write-Host "`n[2.1] 正在动态扫描并移除预装臃肿 AppX 应用包..." -ForegroundColor Cyan
 
-# 注意：*Notepad* 和 *Photos* 不在此列表中，确保不被移除
 $targetAppxPatterns = @(
     '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', 
     '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*', 
     '*SoundRecorder*', '*Solitaire*', '*FeedbackHub*', '*Maps*', 
     '*OfficeHub*', '*Help*', '*Family*', '*Alarms*', '*Camera*', 
-    '*QuickAssist*', '*PeopleExperienceHost*', 
-    '*PinningConfirmationDialog*', '*SecureAssessmentBrowser*',
-    '*CommunicationsApps*', '*Copilot*', '*AV1VideoExtension*',
-    '*HEIFImageExtension*', '*HEVCVideoExtension*', '*WebpImageExtension*'
+    '*QuickAssist*', '*PeopleExperienceHost*', '*PinningConfirmationDialog*', 
+    '*SecureAssessmentBrowser*', '*CommunicationsApps*', '*Copilot*', 
+    '*AV1VideoExtension*', '*HEIFImageExtension*', '*HEVCVideoExtension*', 
+    '*WebpImageExtension*', '*Cortana*'
 )
 
-# 框架组件保护白名单
+# 框架组件保护白名单：任何通配符都不得误伤这些包
 $protectedFrameworkPatterns = @(
     '*Microsoft.UI.Xaml*', '*Microsoft.VCLibs*', '*Microsoft.WindowsAppRuntime*',
     '*Microsoft.NET.Native*', '*Microsoft.Services.Store*'
@@ -147,13 +146,39 @@ if (Test-Path -LiteralPath $windowsAppsDir) {
     }
 }
 
-# ----------------- 3. 移除系统底层功能包 Packages (FOD) -----------------
-Write-Host "`n[2.2] 正在动态扫描系统底层按需功能包 (FOD)..." -ForegroundColor Cyan
+# ----------------- 3. 暴力物理粉碎系统级残留 (彻底断根 Edge/Cortana) -----------------
+Write-Host "`n[2.2] 正在暴力物理粉碎 SystemApps 顽固组件..." -ForegroundColor Yellow
+$sysAppsPath = Join-Path $scratchDir "Windows\SystemApps"
+if (Test-Path -LiteralPath $sysAppsPath) {
+    $sysAppsToDelete = @("*Cortana*", "*Edge*", "*PeopleExperienceHost*", "*SecureAssessmentBrowser*")
+    foreach ($pattern in $sysAppsToDelete) {
+        $items = Get-ChildItem -Path $sysAppsPath -Filter $pattern -Directory -ErrorAction SilentlyContinue
+        foreach ($item in $items) {
+            Write-Host "   删除 SystemApps 目录: $($item.Name)" -ForegroundColor DarkGray
+            & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
+            & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+            Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
 
-# 注意：不包含 WordPad，但也绝不包含任何与记事本有关的 FOD 条目
+# 完整性校验
+$openWithExe = Join-Path $scratchDir "Windows\System32\OpenWith.exe"
+$shell32Dll  = Join-Path $scratchDir "Windows\System32\shell32.dll"
+$shCoreDll   = Join-Path $scratchDir "Windows\System32\shcore.dll"
+foreach ($critical in @($openWithExe, $shell32Dll, $shCoreDll)) {
+    if (-not (Test-Path -LiteralPath $critical)) {
+        Write-Host "[严重警告] 关键 Shell/OpenWith 组件缺失: $critical —— 精简过度！" -ForegroundColor Red
+    }
+}
+
+# ----------------- 4. 移除系统底层功能包 Packages (FOD) -----------------
+Write-Host "`n[2.3] 正在动态扫描系统底层按需功能包 (FOD)..." -ForegroundColor Cyan
+
 $packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
+    "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
     "Microsoft-Windows-MSPaint-FoD-Package~",
     "Microsoft-Windows-SnippingTool-FoD-Package~",
@@ -189,7 +214,7 @@ foreach ($pattern in $packagePatterns) {
     $matchedLines = $packageLines | Where-Object { $_ -like "$pattern*" }
     foreach ($mLine in $matchedLines) {
         $packageIdentity = ($mLine -split '\s+')[0]
-        if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -ne "Package" -and $packageIdentity -notmatch "^-+$") {
+        if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -notmatch "^-+$" -and $packageIdentity -ne "Package") {
             Write-Host "   正在移除 FOD: $packageIdentity" -ForegroundColor DarkGray
             & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>&1 | Out-Null
             $fodRemovedCount++
@@ -197,5 +222,4 @@ foreach ($pattern in $packagePatterns) {
     }
 }
 Write-Host "   [执行完毕] 共清理 $fodRemovedCount 个底层功能包。" -ForegroundColor Yellow
-
 Write-Host "[完成] 应用与系统组件包移除完毕。" -ForegroundColor Green
