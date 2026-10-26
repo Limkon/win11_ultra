@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-26 08:39:58 UTC
+#  生成时间: 2026-10-26 11:47:19 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -606,19 +606,18 @@ if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
 # ----------------- 2. 移除预装 AppX (Bloatware) -----------------
 Write-Host "`n[2.1] 正在动态扫描并移除预装臃肿 AppX 应用包..." -ForegroundColor Cyan
 
-# 注意：*Notepad* 和 *Photos* 不在此列表中，确保不被移除
 $targetAppxPatterns = @(
     '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', 
     '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*', 
     '*SoundRecorder*', '*Solitaire*', '*FeedbackHub*', '*Maps*', 
     '*OfficeHub*', '*Help*', '*Family*', '*Alarms*', '*Camera*', 
-    '*QuickAssist*', '*PeopleExperienceHost*', 
-    '*PinningConfirmationDialog*', '*SecureAssessmentBrowser*',
-    '*CommunicationsApps*', '*Copilot*', '*AV1VideoExtension*',
-    '*HEIFImageExtension*', '*HEVCVideoExtension*', '*WebpImageExtension*'
+    '*QuickAssist*', '*PeopleExperienceHost*', '*PinningConfirmationDialog*', 
+    '*SecureAssessmentBrowser*', '*CommunicationsApps*', '*Copilot*', 
+    '*AV1VideoExtension*', '*HEIFImageExtension*', '*HEVCVideoExtension*', 
+    '*WebpImageExtension*', '*Cortana*'
 )
 
-# 框架组件保护白名单
+# 框架组件保护白名单：任何通配符都不得误伤这些包
 $protectedFrameworkPatterns = @(
     '*Microsoft.UI.Xaml*', '*Microsoft.VCLibs*', '*Microsoft.WindowsAppRuntime*',
     '*Microsoft.NET.Native*', '*Microsoft.Services.Store*'
@@ -702,13 +701,39 @@ if (Test-Path -LiteralPath $windowsAppsDir) {
     }
 }
 
-# ----------------- 3. 移除系统底层功能包 Packages (FOD) -----------------
-Write-Host "`n[2.2] 正在动态扫描系统底层按需功能包 (FOD)..." -ForegroundColor Cyan
+# ----------------- 3. 暴力物理粉碎系统级残留 (彻底断根 Edge/Cortana) -----------------
+Write-Host "`n[2.2] 正在暴力物理粉碎 SystemApps 顽固组件..." -ForegroundColor Yellow
+$sysAppsPath = Join-Path $scratchDir "Windows\SystemApps"
+if (Test-Path -LiteralPath $sysAppsPath) {
+    $sysAppsToDelete = @("*Cortana*", "*Edge*", "*PeopleExperienceHost*", "*SecureAssessmentBrowser*")
+    foreach ($pattern in $sysAppsToDelete) {
+        $items = Get-ChildItem -Path $sysAppsPath -Filter $pattern -Directory -ErrorAction SilentlyContinue
+        foreach ($item in $items) {
+            Write-Host "   删除 SystemApps 目录: $($item.Name)" -ForegroundColor DarkGray
+            & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
+            & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+            Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
 
-# 注意：不包含 WordPad，但也绝不包含任何与记事本有关的 FOD 条目
+# 完整性校验
+$openWithExe = Join-Path $scratchDir "Windows\System32\OpenWith.exe"
+$shell32Dll  = Join-Path $scratchDir "Windows\System32\shell32.dll"
+$shCoreDll   = Join-Path $scratchDir "Windows\System32\shcore.dll"
+foreach ($critical in @($openWithExe, $shell32Dll, $shCoreDll)) {
+    if (-not (Test-Path -LiteralPath $critical)) {
+        Write-Host "[严重警告] 关键 Shell/OpenWith 组件缺失: $critical —— 精简过度！" -ForegroundColor Red
+    }
+}
+
+# ----------------- 4. 移除系统底层功能包 Packages (FOD) -----------------
+Write-Host "`n[2.3] 正在动态扫描系统底层按需功能包 (FOD)..." -ForegroundColor Cyan
+
 $packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
+    "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
     "Microsoft-Windows-MSPaint-FoD-Package~",
     "Microsoft-Windows-SnippingTool-FoD-Package~",
@@ -744,7 +769,7 @@ foreach ($pattern in $packagePatterns) {
     $matchedLines = $packageLines | Where-Object { $_ -like "$pattern*" }
     foreach ($mLine in $matchedLines) {
         $packageIdentity = ($mLine -split '\s+')[0]
-        if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -ne "Package" -and $packageIdentity -notmatch "^-+$") {
+        if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -notmatch "^-+$" -and $packageIdentity -ne "Package") {
             Write-Host "   正在移除 FOD: $packageIdentity" -ForegroundColor DarkGray
             & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>&1 | Out-Null
             $fodRemovedCount++
@@ -752,7 +777,6 @@ foreach ($pattern in $packagePatterns) {
     }
 }
 Write-Host "   [执行完毕] 共清理 $fodRemovedCount 个底层功能包。" -ForegroundColor Yellow
-
 Write-Host "[完成] 应用与系统组件包移除完毕。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/03-RemovePackages.ps1
@@ -819,13 +843,12 @@ Write-Host "[完成] 驱动与底层运行库缓存精简完毕。" -ForegroundC
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 物理文件实体清理 (src/05-PhysicalNuke.ps1)
-#  全版本通用：采用通配符地毯式搜索，不依赖具体目录名
 # ==============================================================================
 
 Write-Host "`n[步骤 7/11] 正在执行系统冗余物理文件清理..." -ForegroundColor Cyan
 $winDir = "$scratchDir\Windows"
 
-# 1. 字体库精简
+# 1. 字体库精简 (保护微软雅黑与核心英文字体)
 $fontsPath = Join-Path -Path $winDir -ChildPath "Fonts"
 if (Test-Path $fontsPath) { 
     Write-Host "Cleaning up Fonts..."
@@ -849,25 +872,36 @@ if (Test-Path -LiteralPath $webWallpaper) {
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
 
-# 4. 全版本通用：地毯式清理 Edge 和 OneDrive
-Write-Host "Removing Edge, WinRE, and OneDrive (Universal Search)..." -ForegroundColor Yellow
+# 4. 移除预编译 .NET 程序集 (Native Images)
+Write-Host "Removing pre-compiled .NET assemblies (Native Images)..."
+$nativeImagePaths = @(
+    "$scratchDir\Windows\assembly\NativeImages_*",
+    "$scratchDir\Windows\Microsoft.NET\assembly\NativeImages_*"
+)
+foreach ($p in $nativeImagePaths) {
+    Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 5. 全版本通用：地毯式清理 Edge、OneDrive、Defender 以及旧版残留
+Write-Host "Removing Edge, WinRE, OneDrive, and Defender (Universal Search)..." -ForegroundColor Yellow
 
 $searchBases = @(
     "$scratchDir\Program Files",
     "$scratchDir\Program Files (x86)",
     "$scratchDir\Windows\System32",
     "$scratchDir\Windows\SysWOW64",
-    "$scratchDir\Windows\WinSxS"
+    "$scratchDir\Windows\WinSxS",
+    "$scratchDir\Windows\SystemApps",
+    "$scratchDir\ProgramData\Microsoft\Windows Defender"
 )
-$edgePatterns = @("*Edge*", "*MicrosoftEdge*")
-$oneDrivePatterns = @("*OneDrive*")
+$patternsToDelete = @("*Edge*", "*MicrosoftEdge*", "*OneDrive*", "*Windows Defender*", "*WinDefend*")
 
 foreach ($base in $searchBases) {
     if (Test-Path -LiteralPath $base) {
-        foreach ($pattern in $edgePatterns) {
+        foreach ($pattern in $patternsToDelete) {
             $items = Get-ChildItem -Path $base -Filter $pattern -ErrorAction SilentlyContinue
             foreach ($item in $items) {
-                Write-Host "   Deleting Edge: $($item.FullName)" -ForegroundColor DarkGray
+                Write-Host "   粉碎底层残留: $($item.FullName)" -ForegroundColor DarkGray
                 if ($item.PSIsContainer) {
                     & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
                     & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
@@ -878,32 +912,15 @@ foreach ($base in $searchBases) {
     }
 }
 
-foreach ($base in $searchBases) {
-    if (Test-Path -LiteralPath $base) {
-        foreach ($pattern in $oneDrivePatterns) {
-            $items = Get-ChildItem -Path $base -Filter $pattern -ErrorAction SilentlyContinue
-            foreach ($item in $items) {
-                Write-Host "   Deleting OneDrive: $($item.FullName)" -ForegroundColor DarkGray
-                if ($item.PSIsContainer) {
-                    & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
-                    & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
-                }
-                Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        }
-    }
-}
-
+# 6. 处理用户目录下的 OneDrive 残留
 $userProfileOneDrive = "$scratchDir\Users\Default\AppData\Local\Microsoft\OneDrive"
-if (Test-Path $userProfileOneDrive) {
-    Write-Host "   Deleting Default User OneDrive..." -ForegroundColor DarkGray
-    Remove-Item -LiteralPath $userProfileOneDrive -Recurse -Force -ErrorAction SilentlyContinue
-}
+if (Test-Path $userProfileOneDrive) { Remove-Item -LiteralPath $userProfileOneDrive -Recurse -Force -ErrorAction SilentlyContinue }
 
+# 7. WinRE 零字节占位
 Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force | Out-Null
 
-Write-Host "[完成] 冗余物理文件与 Edge/WinRE/OneDrive 处理完毕。" -ForegroundColor Green
+Write-Host "[完成] 冗余物理文件与底层组件彻底清理完毕。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/05-PhysicalNuke.ps1
 
@@ -939,7 +956,6 @@ foreach ($h in $hiveLoads) {
 # ==============================================================================
 Write-Host "Repairing OpenWith application associations and restoring Photo Viewer..." -ForegroundColor Yellow
 
-# 步骤 A: 清理已删 AppX 产生的死链
 if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     $commonExtensions = @(
         '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.heic', '.heif',
@@ -958,7 +974,6 @@ if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     }
 }
 
-# 步骤 B: 强制恢复 Notepad 核心关联
 $essentialApps = @(
     @{ Exe = 'notepad.exe'; Name = 'Notepad' }
 )
@@ -971,20 +986,12 @@ foreach ($app in $essentialApps) {
 & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\.txt\OpenWithList\notepad.exe' '/ve' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\.txt\OpenWithProgids' '/v' 'txtfile' '/t' 'REG_NONE' '/d' '' '/f' 2>&1 | Out-Null
 
-# 步骤 C: 强制恢复 Windows 照片查看器 (Photo Viewer) 的注册与调用权限
+# 恢复 Windows 照片查看器
 $photoViewerCroot = 'HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities'
 & 'reg' 'add' "$photoViewerCroot" '/v' 'ApplicationName' '/t' 'REG_SZ' '/d' '@%SystemRoot%\System32\PhotoViewer.dll,-24513' '/f' 2>&1 | Out-Null
 & 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.bmp' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.dib' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.gif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpe' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpeg' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
 & 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpg' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jfif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
 & 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.png' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Png' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.tif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.tiff' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
-
 & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll' '/v' 'FriendlyAppName' '/t' 'REG_SZ' '/d' '@%SystemRoot%\System32\PhotoViewer.dll,-24513' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll\shell\open\command' '/ve' '/t' 'REG_SZ' '/d' 'rundll32.exe "%SystemRoot%\System32\PhotoViewer.dll", ImageView_Fullscreen %1' '/f' 2>&1 | Out-Null
 
@@ -999,9 +1006,7 @@ Write-Host "Configuring Kernel ELAM & EarlyLaunch bypass..." -ForegroundColor Ye
 
 Write-Host "Bypassing system requirements(on the system image):"
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassCPUCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassRAMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassSecureBootCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
@@ -1046,34 +1051,6 @@ Write-Host "Disabling Chat icon:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat' '/v' 'ChatIcon' '/t' 'REG_DWORD' '/d' '3' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' '/v' 'TaskbarMn' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 
-# ==============================================================================
-# 彻底封杀 Edge 自愈机制 (通用版)
-# ==============================================================================
-Write-Host "Removing Edge registries and disabling update mechanisms..." -ForegroundColor Yellow
-
-& reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
-& reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>&1 | Out-Null
-& reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
-& reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>&1 | Out-Null
-
-$edgeServices = @('edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService')
-foreach ($svc in $edgeServices) {
-    & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$svc" /f 2>&1 | Out-Null
-    & reg.exe delete "HKLM\zSYSTEM\ControlSet002\Services\$svc" /f 2>&1 | Out-Null
-}
-
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\EdgeUpdate' '/v' 'DoNotUpdateToEdgeWithChromium' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'UpdateDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'InstallDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-
-$tasksPath = "$scratchDir\Windows\System32\Tasks"
-$edgeTaskFiles = @("MicrosoftEdgeUpdateTaskMachineCore", "MicrosoftEdgeUpdateTaskMachineUA", "MicrosoftEdgeUpdateTaskMachineCore{*}", "MicrosoftEdgeUpdateTaskMachineUA{*}")
-foreach ($task in $edgeTaskFiles) {
-    Remove-Item -Path "$tasksPath\$task" -Force -ErrorAction SilentlyContinue
-}
-
-# ==============================================================================
-
 Write-Host "Disabling OneDrive folder backup"
 & 'reg' 'add' "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" '/v' 'DisableFileSyncNGSC' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
@@ -1103,7 +1080,39 @@ Write-Host "Prevents installation of Teams:"
 Write-Host "Prevent installation of New Outlook":
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail' '/v' 'PreventRun' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
+# ==============================================================================
+# 2.5 终极拔管：彻底封杀 Edge 和 Windows Defender
+# ==============================================================================
+Write-Host "Disabling Edge and Windows Defender at the kernel and policy level..." -ForegroundColor Yellow
+
+# Edge 策略拦截
+& reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
+& reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
+$edgeServices = @('edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService')
+foreach ($svc in $edgeServices) {
+    & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$svc" /f 2>&1 | Out-Null
+}
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\EdgeUpdate' '/v' 'DoNotUpdateToEdgeWithChromium' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'UpdateDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+
+# Defender 策略拦截
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender' '/v' 'DisableAntiSpyware' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender' '/v' 'DisableAntiVirus' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection' '/v' 'DisableBehaviorMonitoring' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows Defender\Features' '/v' 'TamperProtection' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\SecurityHealthService' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
+$defenderServices = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense", "WdBoot")
+foreach ($svc in $defenderServices) {
+    & 'reg' 'add' "HKLM\zSYSTEM\ControlSet001\Services\$svc" '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
+}
+
+# 屏蔽 UI 入口
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' '/v' 'SettingsPageVisibility' '/t' 'REG_SZ' '/d' 'hide:virus;windowsupdate' '/f' 2>&1 | Out-Null
+
+# ==============================================================================
+
 Write-Host "Deleting scheduled task definition files..."
+$tasksPath = "$scratchDir\Windows\System32\Tasks"
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Customer Experience Improvement Program" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\ProgramDataUpdater" -Force -ErrorAction SilentlyContinue
@@ -1129,30 +1138,19 @@ Write-Host "Disabling Windows Update..."
 & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /f 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' '/v' 'NoAutoUpdate' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-Write-Host "Disabling Windows Defender"
-$servicePaths = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense")
-foreach ($path in $servicePaths) {
-    & 'reg' 'add' "HKLM\zSYSTEM\ControlSet001\Services\$path" '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
-}
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' '/v' 'SettingsPageVisibility' '/t' 'REG_SZ' '/d' 'hide:virus;windowsupdate' '/f' 2>&1 | Out-Null
-
-Write-Host "Tweaking complete!"
-
 # ==============================================================================
-# 3. 卸载并释放离线配置单元 (带重试)
+# 3. 卸载并释放离线配置单元
 # ==============================================================================
 Write-Host "Unmounting Registry..."
 foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
     Safely-UnloadHive -HiveName $h | Out-Null
 }
 
-# ==============================================================================
 # 4. 重新装载 SYSTEM 单元以深度清除多余服务实体
-# ==============================================================================
 Write-Host "Loading registry hives to remove services..."
 & reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "[严重错误] 重新装载 SYSTEM 配置单元失败，退出码 $LASTEXITCODE，服务删除阶段中止。" -ForegroundColor Red
+    Write-Host "[严重错误] 重新装载 SYSTEM 配置单元失败。" -ForegroundColor Red
     if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
@@ -1161,7 +1159,8 @@ $servicesToRemove = @(
     'Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 
     'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
     'BluetoothUserService', 'wuauserv', 'UsoSvc', 'WaaSMedicSVC',
-    'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService'
+    'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService',
+    'WinDefend', 'WdNisSvc', 'SecurityHealthService'
 )
 foreach ($service in $servicesToRemove) { 
     Write-Host "Removing service: $service"
