@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-26 06:42:49 UTC
+#  生成时间: 2026-10-26 06:53:04 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -410,11 +410,9 @@ if (-not (Test-Path -LiteralPath $bootWimSrc) -or (-not (Test-Path -LiteralPath 
 }
 
 # 2. 复制 ISO 引导架构文件 (步骤 1/11)
-# 注意：路径严格规范化为不带尾部转义反斜杠的标准形式，杜绝 CRT 逃逸导致的复制失败
 Write-Host "`n[步骤 1/11] 正在复制 ISO 核心引导架构到工作区..." -ForegroundColor Cyan
 $sourceRoot = "$DriveLetter"
 
-# Robocopy 返回码 0-7 均代表正常/成功（存在新文件、复制成功等），8 及以上代表异常
 $null = & robocopy.exe "$sourceRoot" "$workDir" /E /XF "install.wim" "install.esd" /NDL /NFL /NC /NS /NP
 if ($LASTEXITCODE -ge 8) {
     $rcMsg = switch ($LASTEXITCODE) {
@@ -428,7 +426,6 @@ if ($LASTEXITCODE -ge 8) {
     exit 1
 }
 
-# 校验关键引导链文件完整性
 $criticalBootFiles = @(
     (Join-Path $workDir "bootmgr"),
     (Join-Path $workDir "boot\bcd"),
@@ -489,10 +486,25 @@ attrib.exe -R -S -H "$destWim" 2>&1 | Out-Null
 & icacls.exe "$destWim" /grant "*S-1-5-32-544:F" /C /Q 2>&1 | Out-Null
 (Get-Item -LiteralPath $destWim).IsReadOnly = $false
 
-# 挂载点初始化与清理 (改用 Force-NukeFolderOrFile 处理 DISM 句柄延迟残留)
+# 挂载点初始化与清理 (增强版：强制解除上次遗留的 DISM 挂载锁)
 if (Test-Path -LiteralPath $scratchDir) {
+    Write-Host "清理历史挂载残留..." -ForegroundColor DarkGray
+    
+    # 1. 尝试忽略挂载
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
-    Start-Sleep -Seconds 1
+    
+    # 2. 强制清理所有 DISM 挂载记录 (解决 0xc1420127 错误)
+    Write-Host "正在清理 DISM 挂载锁..." -ForegroundColor DarkYellow
+    & dism.exe /English /Cleanup-Wim 2>&1 | Out-Null
+    & dism.exe /English /Cleanup-Mountpoints 2>&1 | Out-Null
+    
+    # 3. 如果 DISM 服务被卡死，尝试重启该服务
+    $dismService = Get-Service -Name "Dism" -ErrorAction SilentlyContinue
+    if ($dismService -and $dismService.Status -eq 'Stopped') {
+        Start-Service -Name "Dism" -ErrorAction SilentlyContinue
+    }
+    
+    Start-Sleep -Seconds 2
     Force-NukeFolderOrFile -Target $scratchDir
 }
 New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
@@ -502,6 +514,7 @@ Write-Host "正在挂载目标映像到 $scratchDir (展示官方挂载进度条
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[严重错误] DISM 映像挂载失败，退出码: $LASTEXITCODE！" -ForegroundColor Red
+    Write-Host "建议手动重启计算机以释放残留的 WIM 文件句柄后重试。" -ForegroundColor Yellow
     if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
