@@ -23,10 +23,11 @@ foreach ($h in $hiveLoads) {
 }
 
 # ==============================================================================
-# 1.5 修复“打开方式 -> 更多应用”列表崩溃问题
+# 1.5 修复“打开方式 -> 更多应用” 及 恢复照片查看器
 # ==============================================================================
-Write-Host "Repairing OpenWith application associations..." -ForegroundColor Yellow
+Write-Host "Repairing OpenWith application associations and restoring Photo Viewer..." -ForegroundColor Yellow
 
+# 步骤 A: 清理已删 AppX 产生的死链
 if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     $commonExtensions = @(
         '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.heic', '.heif',
@@ -45,9 +46,9 @@ if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     }
 }
 
+# 步骤 B: 强制恢复 Notepad 核心关联
 $essentialApps = @(
-    @{ Exe = 'notepad.exe'; Name = 'Notepad' },
-    @{ Exe = 'mspaint.exe'; Name = 'Paint' }
+    @{ Exe = 'notepad.exe'; Name = 'Notepad' }
 )
 foreach ($app in $essentialApps) {
     foreach ($croot in @('HKLM\zSOFTWARE\Classes', 'HKLM\zSOFTWARE\WOW6432Node\Classes')) {
@@ -58,7 +59,24 @@ foreach ($app in $essentialApps) {
 & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\.txt\OpenWithList\notepad.exe' '/ve' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\.txt\OpenWithProgids' '/v' 'txtfile' '/t' 'REG_NONE' '/d' '' '/f' 2>&1 | Out-Null
 
-Write-Host "[完成] OpenWith 关联修复完毕。" -ForegroundColor Green
+# 步骤 C: 强制恢复 Windows 照片查看器 (Photo Viewer) 的注册与调用权限
+$photoViewerCroot = 'HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities'
+& 'reg' 'add' "$photoViewerCroot" '/v' 'ApplicationName' '/t' 'REG_SZ' '/d' '@%SystemRoot%\System32\PhotoViewer.dll,-24513' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.bmp' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.dib' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.gif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpe' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpeg' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpg' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jfif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.png' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Png' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.tif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.tiff' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
+
+& 'reg' 'add' 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll' '/v' 'FriendlyAppName' '/t' 'REG_SZ' '/d' '@%SystemRoot%\System32\PhotoViewer.dll,-24513' '/f' 2>&1 | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll\shell\open\command' '/ve' '/t' 'REG_SZ' '/d' 'rundll32.exe "%SystemRoot%\System32\PhotoViewer.dll", ImageView_Fullscreen %1' '/f' 2>&1 | Out-Null
+
+Write-Host "[完成] OpenWith 关联修复及照片查看器注册完毕。" -ForegroundColor Green
 
 # ==============================================================================
 # 2. 常规注册表精简与优化
@@ -208,13 +226,17 @@ foreach ($path in $servicePaths) {
 
 Write-Host "Tweaking complete!"
 
-# 14. 卸载并释放离线配置单元
+# ==============================================================================
+# 3. 卸载并释放离线配置单元 (带重试)
+# ==============================================================================
 Write-Host "Unmounting Registry..."
 foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
     Safely-UnloadHive -HiveName $h | Out-Null
 }
 
-# 15. 重新装载 SYSTEM 单元以深度清除多余服务实体
+# ==============================================================================
+# 4. 重新装载 SYSTEM 单元以深度清除多余服务实体
+# ==============================================================================
 Write-Host "Loading registry hives to remove services..."
 & reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
