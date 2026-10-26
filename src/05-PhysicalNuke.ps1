@@ -1,5 +1,6 @@
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 物理文件实体清理 (src/05-PhysicalNuke.ps1)
+#  全版本通用：采用通配符地毯式搜索，不依赖具体目录名
 # ==============================================================================
 
 Write-Host "`n[步骤 7/11] 正在执行系统冗余物理文件清理..." -ForegroundColor Cyan
@@ -29,41 +30,62 @@ if (Test-Path -LiteralPath $webWallpaper) {
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
 
-# 4. 移除 Edge, WinRE (建立 0 字节占位文件), 和 OneDrive
-Write-Host "Removing Edge, WinRE, and OneDrive..." -ForegroundColor Yellow
+# 4. 全版本通用：地毯式清理 Edge 和 OneDrive
+Write-Host "Removing Edge, WinRE, and OneDrive (Universal Search)..." -ForegroundColor Yellow
 
-# 彻底清理 Edge 相关的物理目录 (使用通配符摧毁整个 Microsoft 目录下的 Edge* 子目录)
-$edgeBasePaths = @(
-    "$scratchDir\Program Files (x86)\Microsoft",
-    "$scratchDir\Program Files\Microsoft",
+# 定义搜索池（涵盖所有可能安装的路径）
+$searchBases = @(
+    "$scratchDir\Program Files",
+    "$scratchDir\Program Files (x86)",
     "$scratchDir\Windows\System32",
-    "$scratchDir\Windows\SysWOW64"
+    "$scratchDir\Windows\SysWOW64",
+    "$scratchDir\Windows\WinSxS"
 )
-foreach ($base in $edgeBasePaths) {
+
+# 通配符匹配模式（无论目录叫什么，只要带这些关键字就干掉）
+$edgePatterns = @("*Edge*", "*MicrosoftEdge*")
+$oneDrivePatterns = @("*OneDrive*")
+
+# 开始地毯式搜索并删除 Edge
+foreach ($base in $searchBases) {
     if (Test-Path -LiteralPath $base) {
-        # 查找 Edge 相关的文件或目录
-        $edgeItems = Get-ChildItem -Path $base -Filter "*Edge*" -ErrorAction SilentlyContinue
-        foreach ($item in $edgeItems) {
-            Write-Host "   Deleting Edge path: $($item.FullName)" -ForegroundColor DarkGray
-            Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        foreach ($pattern in $edgePatterns) {
+            $items = Get-ChildItem -Path $base -Filter $pattern -ErrorAction SilentlyContinue
+            foreach ($item in $items) {
+                Write-Host "   Deleting Edge: $($item.FullName)" -ForegroundColor DarkGray
+                # 如果遇到受保护的文件夹，强行夺权后删除
+                if ($item.PSIsContainer) {
+                    & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
+                    & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+                }
+                Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }
 
-# 清理 OneDrive 相关的物理目录
-$oneDriveItems = Get-ChildItem -Path "$scratchDir\Windows\System32" -Filter "*OneDrive*" -ErrorAction SilentlyContinue
-foreach ($item in $oneDriveItems) {
-    Write-Host "   Deleting OneDrive path: $($item.FullName)" -ForegroundColor DarkGray
-    Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+# 开始地毯式搜索并删除 OneDrive
+foreach ($base in $searchBases) {
+    if (Test-Path -LiteralPath $base) {
+        foreach ($pattern in $oneDrivePatterns) {
+            $items = Get-ChildItem -Path $base -Filter $pattern -ErrorAction SilentlyContinue
+            foreach ($item in $items) {
+                Write-Host "   Deleting OneDrive: $($item.FullName)" -ForegroundColor DarkGray
+                if ($item.PSIsContainer) {
+                    & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
+                    & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+                }
+                Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 
-# 清理 Program Files 下的 OneDrive 目录
-$oneDriveProgPaths = @("$scratchDir\Program Files\Microsoft OneDrive", "$scratchDir\Program Files (x86)\Microsoft OneDrive")
-foreach ($path in $oneDriveProgPaths) {
-    if (Test-Path -LiteralPath $path) {
-        Write-Host "   Deleting OneDrive path: $path" -ForegroundColor DarkGray
-        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
-    }
+# 处理用户目录下的 OneDrive (默认用户配置)
+$userProfileOneDrive = "$scratchDir\Users\Default\AppData\Local\Microsoft\OneDrive"
+if (Test-Path $userProfileOneDrive) {
+    Write-Host "   Deleting Default User OneDrive..." -ForegroundColor DarkGray
+    Remove-Item -LiteralPath $userProfileOneDrive -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # WinRE 处置
