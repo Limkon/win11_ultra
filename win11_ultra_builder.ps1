@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-26 06:26:58 UTC
+#  生成时间: 2026-10-26 06:42:49 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -840,6 +840,7 @@ Write-Host "[完成] 驱动与底层运行库缓存精简完毕。" -ForegroundC
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 物理文件实体清理 (src/05-PhysicalNuke.ps1)
+#  全版本通用：采用通配符地毯式搜索，不依赖具体目录名
 # ==============================================================================
 
 Write-Host "`n[步骤 7/11] 正在执行系统冗余物理文件清理..." -ForegroundColor Cyan
@@ -869,50 +870,65 @@ if (Test-Path -LiteralPath $webWallpaper) {
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
 
-# 4. 移除 Edge, WinRE (建立 0 字节占位文件), 和 OneDrive
-Write-Host "Removing Edge, WinRE, and OneDrive..." -ForegroundColor Yellow
+# 4. 全版本通用：地毯式清理 Edge 和 OneDrive
+Write-Host "Removing Edge, WinRE, and OneDrive (Universal Search)..." -ForegroundColor Yellow
 
-# 彻底清理 Edge 相关的物理目录
-$edgePaths = @(
-    "$scratchDir\Program Files (x86)\Microsoft\Edge",
-    "$scratchDir\Program Files (x86)\Microsoft\EdgeCore",
-    "$scratchDir\Program Files (x86)\Microsoft\EdgeUpdate",
-    "$scratchDir\Program Files\Microsoft\Edge",
-    "$scratchDir\Windows\System32\Microsoft-Edge-Webview"
+# 定义搜索池（涵盖所有可能安装的路径）
+$searchBases = @(
+    "$scratchDir\Program Files",
+    "$scratchDir\Program Files (x86)",
+    "$scratchDir\Windows\System32",
+    "$scratchDir\Windows\SysWOW64",
+    "$scratchDir\Windows\WinSxS"
 )
-foreach ($path in $edgePaths) {
-    if (Test-Path -LiteralPath $path) {
-        Write-Host "   Deleting Edge path: $path" -ForegroundColor DarkGray
-        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
 
-# WinSxS 里的 Edge WebView
-if ($global:architecture -eq 'amd64') { 
-    $edgeFolders = Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*microsoft-edge-webview*" -Directory -ErrorAction SilentlyContinue
-    if ($edgeFolders) {
-        foreach ($folder in $edgeFolders) {
-            Write-Host "   Deleting WinSxS Edge: $($folder.Name)" -ForegroundColor DarkGray
-            Remove-Item -LiteralPath $folder.FullName -Recurse -Force -ErrorAction SilentlyContinue
+# 通配符匹配模式（无论目录叫什么，只要带这些关键字就干掉）
+$edgePatterns = @("*Edge*", "*MicrosoftEdge*")
+$oneDrivePatterns = @("*OneDrive*")
+
+# 开始地毯式搜索并删除 Edge
+foreach ($base in $searchBases) {
+    if (Test-Path -LiteralPath $base) {
+        foreach ($pattern in $edgePatterns) {
+            $items = Get-ChildItem -Path $base -Filter $pattern -ErrorAction SilentlyContinue
+            foreach ($item in $items) {
+                Write-Host "   Deleting Edge: $($item.FullName)" -ForegroundColor DarkGray
+                # 如果遇到受保护的文件夹，强行夺权后删除
+                if ($item.PSIsContainer) {
+                    & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
+                    & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+                }
+                Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }
 
-# 彻底清理 OneDrive 相关的物理目录
-$oneDrivePaths = @(
-    "$scratchDir\Windows\System32\OneDriveSetup.exe",
-    "$scratchDir\Windows\SysWOW64\OneDriveSetup.exe",
-    "$scratchDir\Program Files\Microsoft OneDrive",
-    "$scratchDir\Program Files (x86)\Microsoft OneDrive"
-)
-foreach ($path in $oneDrivePaths) {
-    if (Test-Path -LiteralPath $path) {
-        Write-Host "   Deleting OneDrive path: $path" -ForegroundColor DarkGray
-        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+# 开始地毯式搜索并删除 OneDrive
+foreach ($base in $searchBases) {
+    if (Test-Path -LiteralPath $base) {
+        foreach ($pattern in $oneDrivePatterns) {
+            $items = Get-ChildItem -Path $base -Filter $pattern -ErrorAction SilentlyContinue
+            foreach ($item in $items) {
+                Write-Host "   Deleting OneDrive: $($item.FullName)" -ForegroundColor DarkGray
+                if ($item.PSIsContainer) {
+                    & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
+                    & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+                }
+                Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 
-# WinRE 处置：物理删除并建立 0 字节文件占位
+# 处理用户目录下的 OneDrive (默认用户配置)
+$userProfileOneDrive = "$scratchDir\Users\Default\AppData\Local\Microsoft\OneDrive"
+if (Test-Path $userProfileOneDrive) {
+    Write-Host "   Deleting Default User OneDrive..." -ForegroundColor DarkGray
+    Remove-Item -LiteralPath $userProfileOneDrive -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# WinRE 处置
 Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force | Out-Null
 
@@ -948,11 +964,10 @@ foreach ($h in $hiveLoads) {
 }
 
 # ==============================================================================
-# 1.5 修复“打开方式 -> 更多应用”列表崩溃问题
+# 1.5 修复“打开方式 -> 更多应用”列表崩溃问题 (保持不变)
 # ==============================================================================
 Write-Host "Repairing OpenWith application associations..." -ForegroundColor Yellow
 
-# 步骤 A: 清理已删 AppX 产生的死链
 if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     $commonExtensions = @(
         '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.heic', '.heif',
@@ -971,7 +986,6 @@ if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     }
 }
 
-# 步骤 B: 强制恢复 Notepad 和 Paint 的核心关联
 $essentialApps = @(
     @{ Exe = 'notepad.exe'; Name = 'Notepad' },
     @{ Exe = 'mspaint.exe'; Name = 'Paint' }
@@ -991,11 +1005,9 @@ Write-Host "[完成] OpenWith 关联修复完毕。" -ForegroundColor Green
 # 2. 常规注册表精简与优化
 # ==============================================================================
 
-# ELAM 启动策略豁免
 Write-Host "Configuring Kernel ELAM & EarlyLaunch bypass..." -ForegroundColor Yellow
 & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch' '/v' 'DriverLoadPolicy' '/t' 'REG_DWORD' '/d' '8' '/f' 2>&1 | Out-Null
 
-# 绕过硬件检测限制
 Write-Host "Bypassing system requirements(on the system image):"
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
@@ -1008,7 +1020,6 @@ Write-Host "Bypassing system requirements(on the system image):"
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassTPMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\MoSetup' '/v' 'AllowUpgradesWithUnsupportedTPMOrCPU' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 禁用推广应用、云端内容与建议
 Write-Host "Disabling Sponsored Apps:"
 & 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'OemPreInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'PreInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
@@ -1034,51 +1045,53 @@ Write-Host "Disabling Sponsored Apps:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableConsumerAccountStateContent' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableCloudOptimizedContent' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 开启 OOBE 本地账户跳过支持
 Write-Host "Enabling Local Accounts on OOBE:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'BypassNRO' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 禁用预留存储与 BitLocker 自动设备加密
 Write-Host "Disabling Reserved Storage:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager' '/v' 'ShippedWithReserves' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 Write-Host "Disabling BitLocker Device Encryption"
 & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker' '/v' 'PreventDeviceEncryption' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 禁用任务栏 Chat 图标
 Write-Host "Disabling Chat icon:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat' '/v' 'ChatIcon' '/t' 'REG_DWORD' '/d' '3' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' '/v' 'TaskbarMn' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 
 # ==============================================================================
-# 彻底清理并禁用 Edge 自愈 / 更新机制
+# 彻底封杀 Edge 自愈机制 (通用版)
 # ==============================================================================
 Write-Host "Removing Edge registries and disabling update mechanisms..." -ForegroundColor Yellow
 
-# 1. 删除卸载项
+# 1. 删除卸载项 (x86 / x64 / 各个版本)
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>&1 | Out-Null
+& reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
+& reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>&1 | Out-Null
 
-# 2. 禁用 Edge 更新服务和计划任务
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\edgeupdate' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\edgeupdatem' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\MicrosoftEdgeElevationService' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
+# 2. 全局封杀所有包含 edgeupdate 的服务
+$edgeServices = @('edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService')
+foreach ($svc in $edgeServices) {
+    & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$svc" /f 2>&1 | Out-Null
+    & reg.exe delete "HKLM\zSYSTEM\ControlSet002\Services\$svc" /f 2>&1 | Out-Null
+}
 
-# 3. 阻止系统静默重装 Edge 的策略
+# 3. 策略级封杀静默安装
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\EdgeUpdate' '/v' 'DoNotUpdateToEdgeWithChromium' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'UpdateDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'InstallDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 
-# 删除 Edge 相关的任务文件
+# 4. 删除 Edge 计划任务
 $tasksPath = "$scratchDir\Windows\System32\Tasks"
-Remove-Item -Path "$tasksPath\MicrosoftEdgeUpdateTaskMachineCore" -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$tasksPath\MicrosoftEdgeUpdateTaskMachineUA" -Force -ErrorAction SilentlyContinue
+$edgeTaskFiles = @("MicrosoftEdgeUpdateTaskMachineCore", "MicrosoftEdgeUpdateTaskMachineUA", "MicrosoftEdgeUpdateTaskMachineCore{*}", "MicrosoftEdgeUpdateTaskMachineUA{*}")
+foreach ($task in $edgeTaskFiles) {
+    Remove-Item -Path "$tasksPath\$task" -Force -ErrorAction SilentlyContinue
+}
 
 # ==============================================================================
 
-# 禁用 OneDrive 文件夹同步
 Write-Host "Disabling OneDrive folder backup"
 & 'reg' 'add' "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" '/v' 'DisableFileSyncNGSC' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 禁用隐私遥测与数据收集
 Write-Host "Disabling Telemetry:"
 & 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo' '/v' 'Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Privacy' '/v' 'TailoredExperiencesWithDiagnosticDataEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
@@ -1091,7 +1104,6 @@ Write-Host "Disabling Telemetry:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection' '/v' 'AllowTelemetry' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
 
-# 阻止 DevHome、Outlook、Copilot 及 Teams 自动安装
 Write-Host "Prevents installation or DevHome and Outlook:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate' '/v' 'workCompleted' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate' '/v' 'workCompleted' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
@@ -1106,7 +1118,6 @@ Write-Host "Prevents installation of Teams:"
 Write-Host "Prevent installation of New Outlook":
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail' '/v' 'PreventRun' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 删除计划任务定义文件 (遥测相关)
 Write-Host "Deleting scheduled task definition files..."
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Customer Experience Improvement Program" -Recurse -Force -ErrorAction SilentlyContinue
@@ -1115,7 +1126,6 @@ Remove-Item -Path "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorActio
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
 Write-Host "Task files have been deleted."
 
-# 彻底禁用 Windows Update 自动更新服务与策略
 Write-Host "Disabling Windows Update..."
 & 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'StopWUPostOOBE1' '/t' 'REG_SZ' '/d' 'net stop wuauserv' '/f' 2>&1 | Out-Null
 & 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'StopWUPostOOBE2' '/t' 'REG_SZ' '/d' 'sc stop wuauserv' '/f' 2>&1 | Out-Null
@@ -1134,7 +1144,6 @@ Write-Host "Disabling Windows Update..."
 & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /f 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' '/v' 'NoAutoUpdate' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 停用 Windows Defender 核心服务并隐藏设置页入口
 Write-Host "Disabling Windows Defender"
 $servicePaths = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense")
 foreach ($path in $servicePaths) {
@@ -1144,13 +1153,11 @@ foreach ($path in $servicePaths) {
 
 Write-Host "Tweaking complete!"
 
-# 卸载并释放离线配置单元
 Write-Host "Unmounting Registry..."
 foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
     Safely-UnloadHive -HiveName $h | Out-Null
 }
 
-# 重新装载 SYSTEM 单元以深度清除多余服务实体
 Write-Host "Loading registry hives to remove services..."
 & reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
@@ -1162,7 +1169,8 @@ if ($LASTEXITCODE -ne 0) {
 $servicesToRemove = @( 
     'Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 
     'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
-    'BluetoothUserService', 'wuauserv', 'UsoSvc', 'WaaSMedicSvc' 
+    'BluetoothUserService', 'wuauserv', 'UsoSvc', 'WaaSMedicSVC',
+    'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService'
 )
 foreach ($service in $servicesToRemove) { 
     Write-Host "Removing service: $service"
