@@ -32,47 +32,41 @@ Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force
 # 4. 移除 Edge, WinRE (建立 0 字节占位文件), 和 OneDrive
 Write-Host "Removing Edge, WinRE, and OneDrive..." -ForegroundColor Yellow
 
-# 彻底清理 Edge 相关的物理目录
-$edgePaths = @(
-    "$scratchDir\Program Files (x86)\Microsoft\Edge",
-    "$scratchDir\Program Files (x86)\Microsoft\EdgeCore",
-    "$scratchDir\Program Files (x86)\Microsoft\EdgeUpdate",
-    "$scratchDir\Program Files\Microsoft\Edge",
-    "$scratchDir\Windows\System32\Microsoft-Edge-Webview"
+# 彻底清理 Edge 相关的物理目录 (使用通配符摧毁整个 Microsoft 目录下的 Edge* 子目录)
+$edgeBasePaths = @(
+    "$scratchDir\Program Files (x86)\Microsoft",
+    "$scratchDir\Program Files\Microsoft",
+    "$scratchDir\Windows\System32",
+    "$scratchDir\Windows\SysWOW64"
 )
-foreach ($path in $edgePaths) {
-    if (Test-Path -LiteralPath $path) {
-        Write-Host "   Deleting Edge path: $path" -ForegroundColor DarkGray
-        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-# WinSxS 里的 Edge WebView
-if ($global:architecture -eq 'amd64') { 
-    $edgeFolders = Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*microsoft-edge-webview*" -Directory -ErrorAction SilentlyContinue
-    if ($edgeFolders) {
-        foreach ($folder in $edgeFolders) {
-            Write-Host "   Deleting WinSxS Edge: $($folder.Name)" -ForegroundColor DarkGray
-            Remove-Item -LiteralPath $folder.FullName -Recurse -Force -ErrorAction SilentlyContinue
+foreach ($base in $edgeBasePaths) {
+    if (Test-Path -LiteralPath $base) {
+        # 查找 Edge 相关的文件或目录
+        $edgeItems = Get-ChildItem -Path $base -Filter "*Edge*" -ErrorAction SilentlyContinue
+        foreach ($item in $edgeItems) {
+            Write-Host "   Deleting Edge path: $($item.FullName)" -ForegroundColor DarkGray
+            Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }
 
-# 彻底清理 OneDrive 相关的物理目录
-$oneDrivePaths = @(
-    "$scratchDir\Windows\System32\OneDriveSetup.exe",
-    "$scratchDir\Windows\SysWOW64\OneDriveSetup.exe",
-    "$scratchDir\Program Files\Microsoft OneDrive",
-    "$scratchDir\Program Files (x86)\Microsoft OneDrive"
-)
-foreach ($path in $oneDrivePaths) {
+# 清理 OneDrive 相关的物理目录
+$oneDriveItems = Get-ChildItem -Path "$scratchDir\Windows\System32" -Filter "*OneDrive*" -ErrorAction SilentlyContinue
+foreach ($item in $oneDriveItems) {
+    Write-Host "   Deleting OneDrive path: $($item.FullName)" -ForegroundColor DarkGray
+    Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 清理 Program Files 下的 OneDrive 目录
+$oneDriveProgPaths = @("$scratchDir\Program Files\Microsoft OneDrive", "$scratchDir\Program Files (x86)\Microsoft OneDrive")
+foreach ($path in $oneDriveProgPaths) {
     if (Test-Path -LiteralPath $path) {
         Write-Host "   Deleting OneDrive path: $path" -ForegroundColor DarkGray
         Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-# WinRE 处置：物理删除并建立 0 字节文件占位
+# WinRE 处置
 Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force | Out-Null
 
