@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-26 06:53:04 UTC
+#  生成时间: 2026-10-26 07:40:54 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -489,16 +489,10 @@ attrib.exe -R -S -H "$destWim" 2>&1 | Out-Null
 # 挂载点初始化与清理 (增强版：强制解除上次遗留的 DISM 挂载锁)
 if (Test-Path -LiteralPath $scratchDir) {
     Write-Host "清理历史挂载残留..." -ForegroundColor DarkGray
-    
-    # 1. 尝试忽略挂载
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
-    
-    # 2. 强制清理所有 DISM 挂载记录 (解决 0xc1420127 错误)
-    Write-Host "正在清理 DISM 挂载锁..." -ForegroundColor DarkYellow
     & dism.exe /English /Cleanup-Wim 2>&1 | Out-Null
     & dism.exe /English /Cleanup-Mountpoints 2>&1 | Out-Null
     
-    # 3. 如果 DISM 服务被卡死，尝试重启该服务
     $dismService = Get-Service -Name "Dism" -ErrorAction SilentlyContinue
     if ($dismService -and $dismService.Status -eq 'Stopped') {
         Start-Service -Name "Dism" -ErrorAction SilentlyContinue
@@ -886,7 +880,6 @@ Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force
 # 4. 全版本通用：地毯式清理 Edge 和 OneDrive
 Write-Host "Removing Edge, WinRE, and OneDrive (Universal Search)..." -ForegroundColor Yellow
 
-# 定义搜索池（涵盖所有可能安装的路径）
 $searchBases = @(
     "$scratchDir\Program Files",
     "$scratchDir\Program Files (x86)",
@@ -894,19 +887,15 @@ $searchBases = @(
     "$scratchDir\Windows\SysWOW64",
     "$scratchDir\Windows\WinSxS"
 )
-
-# 通配符匹配模式（无论目录叫什么，只要带这些关键字就干掉）
 $edgePatterns = @("*Edge*", "*MicrosoftEdge*")
 $oneDrivePatterns = @("*OneDrive*")
 
-# 开始地毯式搜索并删除 Edge
 foreach ($base in $searchBases) {
     if (Test-Path -LiteralPath $base) {
         foreach ($pattern in $edgePatterns) {
             $items = Get-ChildItem -Path $base -Filter $pattern -ErrorAction SilentlyContinue
             foreach ($item in $items) {
                 Write-Host "   Deleting Edge: $($item.FullName)" -ForegroundColor DarkGray
-                # 如果遇到受保护的文件夹，强行夺权后删除
                 if ($item.PSIsContainer) {
                     & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
                     & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
@@ -917,7 +906,6 @@ foreach ($base in $searchBases) {
     }
 }
 
-# 开始地毯式搜索并删除 OneDrive
 foreach ($base in $searchBases) {
     if (Test-Path -LiteralPath $base) {
         foreach ($pattern in $oneDrivePatterns) {
@@ -934,14 +922,12 @@ foreach ($base in $searchBases) {
     }
 }
 
-# 处理用户目录下的 OneDrive (默认用户配置)
 $userProfileOneDrive = "$scratchDir\Users\Default\AppData\Local\Microsoft\OneDrive"
 if (Test-Path $userProfileOneDrive) {
     Write-Host "   Deleting Default User OneDrive..." -ForegroundColor DarkGray
     Remove-Item -LiteralPath $userProfileOneDrive -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# WinRE 处置
 Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force | Out-Null
 
@@ -977,7 +963,7 @@ foreach ($h in $hiveLoads) {
 }
 
 # ==============================================================================
-# 1.5 修复“打开方式 -> 更多应用”列表崩溃问题 (保持不变)
+# 1.5 修复“打开方式 -> 更多应用”列表崩溃问题
 # ==============================================================================
 Write-Host "Repairing OpenWith application associations..." -ForegroundColor Yellow
 
@@ -1075,25 +1061,21 @@ Write-Host "Disabling Chat icon:"
 # ==============================================================================
 Write-Host "Removing Edge registries and disabling update mechanisms..." -ForegroundColor Yellow
 
-# 1. 删除卸载项 (x86 / x64 / 各个版本)
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>&1 | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>&1 | Out-Null
 
-# 2. 全局封杀所有包含 edgeupdate 的服务
 $edgeServices = @('edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService')
 foreach ($svc in $edgeServices) {
     & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$svc" /f 2>&1 | Out-Null
     & reg.exe delete "HKLM\zSYSTEM\ControlSet002\Services\$svc" /f 2>&1 | Out-Null
 }
 
-# 3. 策略级封杀静默安装
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\EdgeUpdate' '/v' 'DoNotUpdateToEdgeWithChromium' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'UpdateDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'InstallDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 
-# 4. 删除 Edge 计划任务
 $tasksPath = "$scratchDir\Windows\System32\Tasks"
 $edgeTaskFiles = @("MicrosoftEdgeUpdateTaskMachineCore", "MicrosoftEdgeUpdateTaskMachineUA", "MicrosoftEdgeUpdateTaskMachineCore{*}", "MicrosoftEdgeUpdateTaskMachineUA{*}")
 foreach ($task in $edgeTaskFiles) {
@@ -1166,11 +1148,13 @@ foreach ($path in $servicePaths) {
 
 Write-Host "Tweaking complete!"
 
+# 14. 卸载并释放离线配置单元
 Write-Host "Unmounting Registry..."
 foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
     Safely-UnloadHive -HiveName $h | Out-Null
 }
 
+# 15. 重新装载 SYSTEM 单元以深度清除多余服务实体
 Write-Host "Loading registry hives to remove services..."
 & reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
