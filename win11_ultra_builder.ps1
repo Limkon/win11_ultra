@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-25 13:04:06 UTC
+#  生成时间: 2026-10-26 01:29:04 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -579,6 +579,8 @@ if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
 Write-Host "`n正在扫描并移除预装臃肿 AppX 应用包..." -ForegroundColor Cyan
 
 # 精确匹配待移除应用清单
+# 注：保留 *Camera*，因 WindowsCamera.exe 在 HKCR\Applications 有强关联，
+#     删除后若注册项残留会导致 OpenWith 枚举中断，使“更多应用”列表为空。
 $targetAppxPatterns = @(
     '*Zune*',
     '*Bing*',
@@ -611,7 +613,6 @@ $targetAppxPatterns = @(
     '*WebpImageExtension*',
     '*DevHome*',
     '*Photos*',
-    '*Camera*',
     '*QuickAssist*',
     '*PeopleExperienceHost*',
     '*PinningConfirmationDialog*',
@@ -654,12 +655,48 @@ if ($provisionedPackages) {
     }
 }
 
+# AppX 包名 -> HKCR\Applications 下对应 exe 名的映射
+# 仅覆盖已知会注册文件关联的 AppX；未知包不盲猜，避免误删第三方应用关联
+$appxExeMap = @{
+    'Microsoft.Windows.Photos'            = @('Photos.exe', 'Microsoft.Photos.exe')
+    'Microsoft.Paint'                      = @('mspaint.exe')
+    'Microsoft.WindowsNotepad'             = @('notepad.exe')
+    'Microsoft.ScreenSketch'               = @('SnippingTool.exe', 'ScreenSketch.exe')
+    'Microsoft.People'                     = @('People.exe')
+    'Microsoft.WindowsMaps'                = @('Maps.exe')
+    'Microsoft.MicrosoftStickyNotes'       = @('Microsoft.MicrosoftStickyNotes.exe')
+    'Microsoft.WindowsCalculator'          = @('Microsoft.WindowsCalculator.exe', 'Calculator.exe', 'calc.exe')
+    'Microsoft.WindowsAlarms'              = @('WindowsAlarms.exe')
+    'Microsoft.WindowsSoundRecorder'       = @('WindowsSoundRecorder.exe')
+    'Microsoft.ZuneMusic'                  = @('Microsoft.ZuneMusic.exe')
+    'Microsoft.ZuneVideo'                  = @('Microsoft.ZuneVideo.exe')
+    'Microsoft.BingNews'                   = @('Microsoft.BingNews.exe')
+    'Microsoft.BingWeather'                = @('Microsoft.BingWeather.exe')
+}
+
 $removedPackageNames = New-Object System.Collections.Generic.List[string]
+$global:removedAppxExeNames = New-Object System.Collections.Generic.List[string]
 
 foreach ($package in $packagesToRemove) {
     Write-Host "   正在移除应用: $($package.DisplayName) [$($package.PackageName)]" -ForegroundColor DarkGray
-    $null = Remove-AppxProvisionedPackage -Path $scratchDir -PackageName $package.PackageName -ErrorAction SilentlyContinue
+    try {
+        $null = Remove-AppxProvisionedPackage -Path $scratchDir -PackageName $package.PackageName -ErrorAction Stop
+    } catch {
+        Write-Host "   [警告] 该包受系统保护或已被占用，跳过: $($package.PackageName)" -ForegroundColor DarkYellow
+    }
     $removedPackageNames.Add($package.PackageName)
+
+    # 收集该包可能注册的 exe 名，供 06 模块清理残留关联项
+    foreach ($mapKey in $appxExeMap.Keys) {
+        if ($package.PackageName -like "*$mapKey*") {
+            foreach ($exeName in $appxExeMap[$mapKey]) {
+                if (-not $global:removedAppxExeNames.Contains($exeName)) {
+                    $global:removedAppxExeNames.Add($exeName)
+                }
+            }
+            break
+        }
+    }
 }
 
 # 深度清理 WindowsApps 物理残留目录（夺权并硬核粉碎）
@@ -671,12 +708,12 @@ if (Test-Path -LiteralPath $windowsAppsDir) {
         $candidateFolder = Join-Path $windowsAppsDir $pkgName
         if (Test-Path -LiteralPath $candidateFolder) {
             Write-Host "   粉碎残留资产目录: $pkgName" -ForegroundColor DarkGray
-            & takeown.exe /F "$candidateFolder" /A /R /D Y 2>$null | Out-Null
-            & icacls.exe "$candidateFolder" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
-            attrib.exe -R -S -H "$candidateFolder\*" /S /D 2>$null
+            & takeown.exe /F "$candidateFolder" /A /R /D Y 2>&1 | Out-Null
+            & icacls.exe "$candidateFolder" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+            attrib.exe -R -S -H "$candidateFolder\*" /S /D 2>&1 | Out-Null
             Remove-Item -LiteralPath $candidateFolder -Recurse -Force -ErrorAction SilentlyContinue
             if (Test-Path -LiteralPath $candidateFolder) {
-                cmd.exe /c "rd /s /q `"$candidateFolder`"" 2>$null
+                cmd.exe /c "rd /s /q `"$candidateFolder`"" 2>&1 | Out-Null
             }
         }
     }
@@ -746,7 +783,7 @@ foreach ($pattern in $packagePatterns) {
         $packageIdentity = ($mLine -split '\s+')[0]
         if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -ne "Package" -and $packageIdentity -notmatch "^-+$") {
             Write-Host "   正在移除底层功能包: $packageIdentity..." -ForegroundColor DarkGray
-            & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>$null | Out-Null
+            & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>&1 | Out-Null
         }
     }
 }
@@ -890,10 +927,48 @@ foreach ($h in $hiveLoads) {
     & reg.exe load $h.Name $h.Path 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[严重错误] 注册表配置单元加载失败: $($h.Name) <- $($h.Path)，退出码 $LASTEXITCODE" -ForegroundColor Red
-        Stop-Transcript
+        if ($global:transcriptActive) { Stop-Transcript }
         pause
         exit 1
     }
+}
+
+# ==============================================================================
+# 1.5 OpenWith 残留关联清理
+# 清理 03 模块已删除 AppX 在 HKCR\Applications、OpenWithList、OpenWithProgids 下的残留项，
+# 避免 OpenWith 枚举候选应用时因解析失败而中断，导致“更多应用”列表为空。
+# ==============================================================================
+if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
+    Write-Host "Cleaning up orphaned OpenWith associations for removed AppX packages..." -ForegroundColor Yellow
+
+    $commonExtensions = @(
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.heic', '.heif',
+        '.txt', '.log', '.ini', '.md', '.csv',
+        '.mp3', '.mp4', '.wav', '.avi', '.mkv', '.mov', '.wmv', '.flac', '.m4a',
+        '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'
+    )
+
+    # HKCR 在离线映像中对应 HKLM\zSOFTWARE\Classes，同时清理 WOW6432Node 影子副本
+    $classesRoots = @(
+        'HKLM\zSOFTWARE\Classes',
+        'HKLM\zSOFTWARE\WOW6432Node\Classes'
+    )
+
+    foreach ($exe in $global:removedAppxExeNames) {
+        foreach ($croot in $classesRoots) {
+            # 删除 Applications\<exe> 整键
+            & reg.exe delete "$croot\Applications\$exe" /f 2>&1 | Out-Null
+
+            # 遍历常见扩展名，清理 OpenWithList 与 OpenWithProgids
+            foreach ($ext in $commonExtensions) {
+                & reg.exe delete "$croot\$ext\OpenWithList\$exe" /f 2>&1 | Out-Null
+                & reg.exe delete "$croot\$ext\OpenWithProgids" /v $exe /f 2>&1 | Out-Null
+            }
+        }
+    }
+    Write-Host "[完成] OpenWith 残留关联清理完毕。" -ForegroundColor Green
+} else {
+    Write-Host "[跳过] 未检测到需清理的 AppX 关联项 (removedAppxExeNames 为空)。" -ForegroundColor DarkGray
 }
 
 # 【关键引导修复】：内核级 ELAM 启动策略豁免 (彻底杜绝物理删除 wdboot.sys 导致的启动卡图标死锁)
@@ -1045,7 +1120,7 @@ Write-Host "Loading registry hives to remove services..."
 & reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[严重错误] 重新装载 SYSTEM 配置单元失败，退出码 $LASTEXITCODE，服务删除阶段中止。" -ForegroundColor Red
-    Stop-Transcript
+    if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
