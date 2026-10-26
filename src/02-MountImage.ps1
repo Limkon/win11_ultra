@@ -112,16 +112,10 @@ attrib.exe -R -S -H "$destWim" 2>&1 | Out-Null
 # 挂载点初始化与清理 (增强版：强制解除上次遗留的 DISM 挂载锁)
 if (Test-Path -LiteralPath $scratchDir) {
     Write-Host "清理历史挂载残留..." -ForegroundColor DarkGray
-    
-    # 1. 尝试忽略挂载
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
-    
-    # 2. 强制清理所有 DISM 挂载记录 (解决 0xc1420127 错误)
-    Write-Host "正在清理 DISM 挂载锁..." -ForegroundColor DarkYellow
     & dism.exe /English /Cleanup-Wim 2>&1 | Out-Null
     & dism.exe /English /Cleanup-Mountpoints 2>&1 | Out-Null
     
-    # 3. 如果 DISM 服务被卡死，尝试重启该服务
     $dismService = Get-Service -Name "Dism" -ErrorAction SilentlyContinue
     if ($dismService -and $dismService.Status -eq 'Stopped') {
         Start-Service -Name "Dism" -ErrorAction SilentlyContinue
