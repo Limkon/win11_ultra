@@ -7,6 +7,7 @@ $bootWimSrc = ""
 $installWimSrc = ""
 $installEsdSrc = ""
 $isMountedISO = $false
+$isoMount = $null
 $fileExt = ""
 
 # 1. 智能定位源文件结构 (双模式)
@@ -16,14 +17,36 @@ if ($global:sourceMode -eq "2") {
     
     if ($fileExt -eq '.iso') {
         Write-Host "`n[步骤 1/11] 正在挂载 ISO 虚拟镜像..." -ForegroundColor Cyan
+        
+        # 挂载 ISO
         $isoMount = Mount-DiskImage -ImagePath $sourceFile -PassThru -ErrorAction SilentlyContinue
         if (-not $isoMount) {
             Write-Host "[严重错误] 无法挂载 ISO 文件！可能文件损坏或被占用。" -ForegroundColor Red
             if ($global:transcriptActive) { Stop-Transcript }; pause; exit 1
         }
-        Start-Sleep -Seconds 2
-        $driveLetter = ($isoMount | Get-Volume).DriveLetter
+        
+        # 【修复核心】使用轮询机制等待光驱盘符分配 (最多等待 10 秒)
+        Write-Host "   等待系统分配光驱盘符..." -ForegroundColor DarkGray
+        $driveLetter = $null
+        for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Milliseconds 500
+            $vol = Get-Volume -DriveLetter ($isoMount | Get-DiskImage | Get-Volume).DriveLetter -ErrorAction SilentlyContinue
+            if (-not $vol) {
+                $driveLetter = ($isoMount | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
+            } else {
+                $driveLetter = $vol.DriveLetter
+            }
+            if ($driveLetter) { break }
+        }
+        
+        if (-not $driveLetter) {
+            Write-Host "[严重错误] ISO 挂载后未能获取到有效的盘符，请检查虚拟光驱驱动是否正常。" -ForegroundColor Red
+            Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null
+            if ($global:transcriptActive) { Stop-Transcript }; pause; exit 1
+        }
+        
         $sourceRoot = "$($driveLetter):"
+        Write-Host "   ISO 成功挂载到: $sourceRoot" -ForegroundColor Green
         $isMountedISO = $true
     } else {
         Write-Host "`n[步骤 1/11] 正在解析源文件..." -ForegroundColor Cyan
@@ -60,7 +83,6 @@ if ($fileExt -eq ".iso") {
 }
 
 # 2. 复制 ISO 引导架构文件 (步骤 1/11)
-# 注意：路径严格规范化为不带尾部转义反斜杠的标准形式，杜绝 CRT 逃逸导致的复制失败
 Write-Host "`n[步骤 1/11] 正在复制 ISO 核心引导架构到工作区..." -ForegroundColor Cyan
 
 # Robocopy 返回码 0-7 均代表正常/成功，8 及以上代表严重异常
@@ -73,9 +95,7 @@ if ($LASTEXITCODE -ge 8) {
     }
     Write-Host "[严重错误] 基础引导结构复制失败！Robocopy 退出码: $LASTEXITCODE ($rcMsg)" -ForegroundColor Red
     if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
+    if ($global:transcriptActive) { Stop-Transcript }; pause; exit 1
 }
 
 # 校验关键引导链文件完整性
@@ -96,9 +116,7 @@ foreach ($bf in $criticalBootFiles) {
 if ($missingBootFile) {
     Write-Host "[严重错误] 核心引导结构未能完整复制到工作区，无法支持后续引导生成！" -ForegroundColor Red
     if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
+    if ($global:transcriptActive) { Stop-Transcript }; pause; exit 1
 }
 Write-Host "[完成] ISO 核心引导架构复制完毕，引导链结构完整有效。" -ForegroundColor Green
 
@@ -127,9 +145,7 @@ if ($installWimSrc -and (Test-Path -LiteralPath $installWimSrc)) {
 if (-not (Test-Path -LiteralPath $destWim)) {
     Write-Host "[严重错误] install.wim 导出生成失败！流程终止。" -ForegroundColor Red
     if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
+    if ($global:transcriptActive) { Stop-Transcript }; pause; exit 1
 }
 
 # 卸载 ISO
@@ -147,7 +163,7 @@ attrib.exe -R -S -H "$destWim" 2>&1 | Out-Null
 & icacls.exe "$destWim" /grant "*S-1-5-32-544:F" /C /Q 2>&1 | Out-Null
 (Get-Item -LiteralPath $destWim).IsReadOnly = $false
 
-# 挂载点初始化与清理 (增强版：强制解除上次遗留的 DISM 挂载锁)
+# 挂载点初始化与清理
 if (Test-Path -LiteralPath $scratchDir) {
     Write-Host "清理历史挂载残留..." -ForegroundColor DarkGray
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
