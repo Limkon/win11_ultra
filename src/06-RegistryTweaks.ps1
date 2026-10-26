@@ -23,48 +23,56 @@ foreach ($h in $hiveLoads) {
 }
 
 # ==============================================================================
-# 1.5 OpenWith 残留关联清理
-# 清理 03 模块已删除 AppX 在 HKCR\Applications、OpenWithList、OpenWithProgids 下的残留项，
-# 避免 OpenWith 枚举候选应用时因解析失败而中断，导致“更多应用”列表为空。
+# 1.5 修复“打开方式 -> 更多应用”列表崩溃问题
 # ==============================================================================
-if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
-    Write-Host "Cleaning up orphaned OpenWith associations for removed AppX packages..." -ForegroundColor Yellow
+Write-Host "Repairing OpenWith application associations..." -ForegroundColor Yellow
 
+# 步骤 A: 清理已删 AppX 产生的死链 (防止 OpenWith 渲染时解析失败直接崩溃)
+if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     $commonExtensions = @(
         '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.heic', '.heif',
-        '.txt', '.log', '.ini', '.md', '.csv',
-        '.mp3', '.mp4', '.wav', '.avi', '.mkv', '.mov', '.wmv', '.flac', '.m4a',
-        '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'
+        '.txt', '.log', '.ini', '.md', '.csv', '.mp3', '.mp4', '.wav', '.avi', '.mkv', '.mov'
     )
-
-    # HKCR 在离线映像中对应 HKLM\zSOFTWARE\Classes，同时清理 WOW6432Node 影子副本
-    $classesRoots = @(
-        'HKLM\zSOFTWARE\Classes',
-        'HKLM\zSOFTWARE\WOW6432Node\Classes'
-    )
+    $classesRoots = @('HKLM\zSOFTWARE\Classes', 'HKLM\zSOFTWARE\WOW6432Node\Classes')
 
     foreach ($exe in $global:removedAppxExeNames) {
         foreach ($croot in $classesRoots) {
-            # 删除 Applications\<exe> 整键
             & reg.exe delete "$croot\Applications\$exe" /f 2>&1 | Out-Null
-
-            # 遍历常见扩展名，清理 OpenWithList 与 OpenWithProgids
             foreach ($ext in $commonExtensions) {
                 & reg.exe delete "$croot\$ext\OpenWithList\$exe" /f 2>&1 | Out-Null
                 & reg.exe delete "$croot\$ext\OpenWithProgids" /v $exe /f 2>&1 | Out-Null
             }
         }
     }
-    Write-Host "[完成] OpenWith 残留关联清理完毕。" -ForegroundColor Green
-} else {
-    Write-Host "[跳过] 未检测到需清理的 AppX 关联项 (removedAppxExeNames 为空)。" -ForegroundColor DarkGray
 }
+
+# 步骤 B: 强制恢复 Notepad 和 Paint 的核心关联，确保列表至少能正常渲染
+$essentialApps = @(
+    @{ Exe = 'notepad.exe'; Name = 'Notepad' },
+    @{ Exe = 'mspaint.exe'; Name = 'Paint' }
+)
+foreach ($app in $essentialApps) {
+    foreach ($croot in @('HKLM\zSOFTWARE\Classes', 'HKLM\zSOFTWARE\WOW6432Node\Classes')) {
+        # 重建 Application 节点
+        & 'reg' 'add' "$croot\Applications\$($app.Exe)\shell\open\command" '/ve' '/t' 'REG_SZ' '/d' "`"%SystemRoot%\system32\$($app.Exe)`" `"%1`"" '/f' 2>&1 | Out-Null
+        & 'reg' 'add' "$croot\Applications\$($app.Exe)" '/v' 'FriendlyAppName' '/t' 'REG_SZ' '/d' $app.Name '/f' 2>&1 | Out-Null
+    }
+}
+# 确保 .txt 关联列表里有记事本
+& 'reg' 'add' 'HKLM\zSOFTWARE\Classes\.txt\OpenWithList\notepad.exe' '/ve' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Classes\.txt\OpenWithProgids' '/v' 'txtfile' '/t' 'REG_NONE' '/d' '' '/f' 2>&1 | Out-Null
+
+Write-Host "[完成] OpenWith 关联修复完毕。" -ForegroundColor Green
+
+# ==============================================================================
+# 2. 常规注册表精简与优化
+# ==============================================================================
 
 # 【关键引导修复】：内核级 ELAM 启动策略豁免 (彻底杜绝物理删除 wdboot.sys 导致的启动卡图标死锁)
 Write-Host "Configuring Kernel ELAM & EarlyLaunch bypass..." -ForegroundColor Yellow
 & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch' '/v' 'DriverLoadPolicy' '/t' 'REG_DWORD' '/d' '8' '/f' 2>&1 | Out-Null
 
-# 2. 绕过硬件检测限制 (母盘离线注册表注入)
+# 绕过硬件检测限制 (母盘离线注册表注入)
 Write-Host "Bypassing system requirements(on the system image):"
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
@@ -77,7 +85,7 @@ Write-Host "Bypassing system requirements(on the system image):"
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassTPMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\MoSetup' '/v' 'AllowUpgradesWithUnsupportedTPMOrCPU' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 3. 禁用推广应用、云端内容与建议
+# 禁用推广应用、云端内容与建议
 Write-Host "Disabling Sponsored Apps:"
 & 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'OemPreInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'PreInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
@@ -103,31 +111,31 @@ Write-Host "Disabling Sponsored Apps:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableConsumerAccountStateContent' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableCloudOptimizedContent' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 4. 开启 OOBE 本地账户跳过支持
+# 开启 OOBE 本地账户跳过支持
 Write-Host "Enabling Local Accounts on OOBE:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'BypassNRO' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 5. 禁用预留存储与 BitLocker 自动设备加密
+# 禁用预留存储与 BitLocker 自动设备加密
 Write-Host "Disabling Reserved Storage:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager' '/v' 'ShippedWithReserves' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 Write-Host "Disabling BitLocker Device Encryption"
 & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker' '/v' 'PreventDeviceEncryption' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 6. 禁用任务栏 Chat 图标
+# 禁用任务栏 Chat 图标
 Write-Host "Disabling Chat icon:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat' '/v' 'ChatIcon' '/t' 'REG_DWORD' '/d' '3' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' '/v' 'TaskbarMn' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 
-# 7. 清理 Edge 遗留注册表与幽灵 COM
+# 清理 Edge 遗留注册表与幽灵 COM
 Write-Host "Removing Edge related registries"
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>&1 | Out-Null
 
-# 8. 禁用 OneDrive 文件夹同步
+# 禁用 OneDrive 文件夹同步
 Write-Host "Disabling OneDrive folder backup"
 & 'reg' 'add' "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" '/v' 'DisableFileSyncNGSC' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 9. 禁用隐私遥测与数据收集
+# 禁用隐私遥测与数据收集
 Write-Host "Disabling Telemetry:"
 & 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo' '/v' 'Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Privacy' '/v' 'TailoredExperiencesWithDiagnosticDataEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
@@ -140,7 +148,7 @@ Write-Host "Disabling Telemetry:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection' '/v' 'AllowTelemetry' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
 
-# 10. 阻止 DevHome、Outlook、Copilot 及 Teams 自动安装
+# 阻止 DevHome、Outlook、Copilot 及 Teams 自动安装
 Write-Host "Prevents installation or DevHome and Outlook:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate' '/v' 'workCompleted' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate' '/v' 'workCompleted' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
@@ -155,9 +163,7 @@ Write-Host "Prevents installation of Teams:"
 Write-Host "Prevent installation of New Outlook":
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail' '/v' 'PreventRun' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 11. 删除计划任务定义文件
-# 注：Customer Experience Improvement Program 目录下含 Consolidator/UsbCeip/KernelCeipTask 等多个遥测任务，
-#     整目录删除符合“彻底禁用遥测”意图；系统组件后续记录“任务不存在”事件属预期行为。
+# 删除计划任务定义文件
 $tasksPath = "$scratchDir\Windows\System32\Tasks"
 Write-Host "Deleting scheduled task definition files..."
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" -Force -ErrorAction SilentlyContinue
@@ -167,7 +173,7 @@ Remove-Item -Path "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorActio
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
 Write-Host "Task files have been deleted."
 
-# 12. 彻底禁用 Windows Update 自动更新服务与策略
+# 彻底禁用 Windows Update 自动更新服务与策略
 Write-Host "Disabling Windows Update..."
 & 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'StopWUPostOOBE1' '/t' 'REG_SZ' '/d' 'net stop wuauserv' '/f' 2>&1 | Out-Null
 & 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'StopWUPostOOBE2' '/t' 'REG_SZ' '/d' 'sc stop wuauserv' '/f' 2>&1 | Out-Null
@@ -186,9 +192,7 @@ Write-Host "Disabling Windows Update..."
 & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /f 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' '/v' 'NoAutoUpdate' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 13. 停用 Windows Defender 核心服务并隐藏设置页入口
-# 注：SettingsPageVisibility 同时隐藏“病毒防护”与“Windows 更新”设置页，属“彻底锁定”设计选择；
-#     若需保留更新设置页可手动恢复，将值改为 hide:virus 即可。
+# 停用 Windows Defender 核心服务并隐藏设置页入口
 Write-Host "Disabling Windows Defender"
 $servicePaths = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense")
 foreach ($path in $servicePaths) {
@@ -198,7 +202,7 @@ foreach ($path in $servicePaths) {
 
 Write-Host "Tweaking complete!"
 
-# 14. 卸载并释放离线配置单元 (带重试，先非 SYSTEM 后 SYSTEM，避免 zNTUSER 句柄死锁)
+# 14. 卸载并释放离线配置单元
 Write-Host "Unmounting Registry..."
 foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
     Safely-UnloadHive -HiveName $h | Out-Null
@@ -214,20 +218,9 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 $servicesToRemove = @( 
-    'Spooler', 
-    'PrintNotify', 
-    'Fax', 
-    'RemoteRegistry', 
-    'diagsvc', 
-    'WerSvc', 
-    'PcaSvc', 
-    'MapsBroker', 
-    'WalletService', 
-    'BthAvctpSvc', 
-    'BluetoothUserService', 
-    'wuauserv', 
-    'UsoSvc', 
-    'WaaSMedicSvc' 
+    'Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 
+    'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
+    'BluetoothUserService', 'wuauserv', 'UsoSvc', 'WaaSMedicSvc' 
 )
 foreach ($service in $servicesToRemove) { 
     Write-Host "Removing service: $service"
