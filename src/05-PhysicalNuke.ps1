@@ -33,7 +33,6 @@ Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force
 # 4. 全版本通用：地毯式清理 Edge 和 OneDrive
 Write-Host "Removing Edge, WinRE, and OneDrive (Universal Search)..." -ForegroundColor Yellow
 
-# 定义搜索池（涵盖所有可能安装的路径）
 $searchBases = @(
     "$scratchDir\Program Files",
     "$scratchDir\Program Files (x86)",
@@ -41,19 +40,15 @@ $searchBases = @(
     "$scratchDir\Windows\SysWOW64",
     "$scratchDir\Windows\WinSxS"
 )
-
-# 通配符匹配模式（无论目录叫什么，只要带这些关键字就干掉）
 $edgePatterns = @("*Edge*", "*MicrosoftEdge*")
 $oneDrivePatterns = @("*OneDrive*")
 
-# 开始地毯式搜索并删除 Edge
 foreach ($base in $searchBases) {
     if (Test-Path -LiteralPath $base) {
         foreach ($pattern in $edgePatterns) {
             $items = Get-ChildItem -Path $base -Filter $pattern -ErrorAction SilentlyContinue
             foreach ($item in $items) {
                 Write-Host "   Deleting Edge: $($item.FullName)" -ForegroundColor DarkGray
-                # 如果遇到受保护的文件夹，强行夺权后删除
                 if ($item.PSIsContainer) {
                     & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
                     & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
@@ -64,7 +59,6 @@ foreach ($base in $searchBases) {
     }
 }
 
-# 开始地毯式搜索并删除 OneDrive
 foreach ($base in $searchBases) {
     if (Test-Path -LiteralPath $base) {
         foreach ($pattern in $oneDrivePatterns) {
@@ -81,14 +75,12 @@ foreach ($base in $searchBases) {
     }
 }
 
-# 处理用户目录下的 OneDrive (默认用户配置)
 $userProfileOneDrive = "$scratchDir\Users\Default\AppData\Local\Microsoft\OneDrive"
 if (Test-Path $userProfileOneDrive) {
     Write-Host "   Deleting Default User OneDrive..." -ForegroundColor DarkGray
     Remove-Item -LiteralPath $userProfileOneDrive -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# WinRE 处置
 Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force | Out-Null
 
