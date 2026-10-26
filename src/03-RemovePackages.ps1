@@ -51,9 +51,7 @@ if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
 # ----------------- 2. 移除预装 AppX (Bloatware) -----------------
 Write-Host "`n正在扫描并移除预装臃肿 AppX 应用包..." -ForegroundColor Cyan
 
-# 注意：
-# 1. 保留了 *Paint* 和 *Notepad*，这二者包含深层文件关联，移除会导致“打开方式”列表渲染失败。
-# 2. 保留 *Camera*，防止 HKCR\Applications 下残留死链。
+# 注意：保留 *Paint* 和 *Notepad*，防止 OpenWith 列表崩溃；相机已恢复移除。
 $targetAppxPatterns = @(
     '*Zune*',
     '*Bing*',
@@ -86,13 +84,14 @@ $targetAppxPatterns = @(
     '*WebpImageExtension*',
     '*DevHome*',
     '*Photos*',
+    '*Camera*', # 恢复相机移除
     '*QuickAssist*',
     '*PeopleExperienceHost*',
     '*PinningConfirmationDialog*',
     '*SecureAssessmentBrowser*'
 )
 
-# 框架组件保护白名单：任何通配符都不得误伤这些包
+# 框架组件保护白名单
 $protectedFrameworkPatterns = @(
     '*Microsoft.UI.Xaml*',
     '*Microsoft.VCLibs*',
@@ -108,10 +107,7 @@ if ($provisionedPackages) {
     foreach ($pkg in $provisionedPackages) {
         $isProtected = $false
         foreach ($prot in $protectedFrameworkPatterns) {
-            if ($pkg.PackageName -like $prot) {
-                $isProtected = $true
-                break
-            }
+            if ($pkg.PackageName -like $prot) { $isProtected = $true; break }
         }
         if ($isProtected) { continue }
 
@@ -127,16 +123,17 @@ if ($provisionedPackages) {
 # AppX 包名 -> HKCR\Applications 下对应 exe 名的映射
 $appxExeMap = @{
     'Microsoft.Windows.Photos'            = @('Photos.exe', 'Microsoft.Photos.exe')
-    'Microsoft.ScreenSketch'               = @('SnippingTool.exe', 'ScreenSketch.exe')
-    'Microsoft.People'                     = @('People.exe')
-    'Microsoft.WindowsMaps'                = @('Maps.exe')
-    'Microsoft.MicrosoftStickyNotes'       = @('Microsoft.MicrosoftStickyNotes.exe')
-    'Microsoft.WindowsAlarms'              = @('WindowsAlarms.exe')
-    'Microsoft.WindowsSoundRecorder'       = @('WindowsSoundRecorder.exe')
-    'Microsoft.ZuneMusic'                  = @('Microsoft.ZuneMusic.exe')
-    'Microsoft.ZuneVideo'                  = @('Microsoft.ZuneVideo.exe')
-    'Microsoft.BingNews'                   = @('Microsoft.BingNews.exe')
-    'Microsoft.BingWeather'                = @('Microsoft.BingWeather.exe')
+    'Microsoft.ScreenSketch'              = @('SnippingTool.exe', 'ScreenSketch.exe')
+    'Microsoft.People'                    = @('People.exe')
+    'Microsoft.WindowsMaps'               = @('Maps.exe')
+    'Microsoft.MicrosoftStickyNotes'      = @('Microsoft.MicrosoftStickyNotes.exe')
+    'Microsoft.WindowsAlarms'             = @('WindowsAlarms.exe')
+    'Microsoft.WindowsSoundRecorder'      = @('WindowsSoundRecorder.exe')
+    'Microsoft.ZuneMusic'                 = @('Microsoft.ZuneMusic.exe')
+    'Microsoft.ZuneVideo'                 = @('Microsoft.ZuneVideo.exe')
+    'Microsoft.BingNews'                  = @('Microsoft.BingNews.exe')
+    'Microsoft.BingWeather'               = @('Microsoft.BingWeather.exe')
+    'Microsoft.WindowsCamera'             = @('WindowsCamera.exe') # 补充相机关联清理
 }
 
 $removedPackageNames = New-Object System.Collections.Generic.List[string]
@@ -201,8 +198,7 @@ $provisionedPackages = $null
 # ----------------- 3. 移除系统底层功能包 Packages -----------------
 Write-Host "`n系统应用精炼完毕，正在执行系统底层按需功能包 (FOD) 精简..." -ForegroundColor Cyan
 
-# 注意：绝对不能移除 Microsoft-Windows-Search-Engine-Client-Package~，
-# 它是“打开方式 -> 更多应用”列表的底层枚举 API 提供者，移除会导致点击无响应。
+# 绝对不能移除 Microsoft-Windows-Search-Engine-Client-Package~
 $packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
@@ -231,7 +227,6 @@ $packagePatterns = @(
     "Microsoft-Windows-Wallpaper-Content-Extended-FoD-Package~"
 )
 
-# 动态扩展：非当前语言的冗余输入/语音语言包
 if ($global:languageCode -ne "zh-CN") {
     $packagePatterns += "Microsoft-Windows-LanguageFeatures-Handwriting-$($global:languageCode)-Package~"
     $packagePatterns += "Microsoft-Windows-LanguageFeatures-OCR-$($global:languageCode)-Package~"
@@ -239,7 +234,6 @@ if ($global:languageCode -ne "zh-CN") {
     $packagePatterns += "Microsoft-Windows-LanguageFeatures-TextToSpeech-$($global:languageCode)-Package~"
 }
 
-# 抓取当前系统所有功能包列表
 $rawPackageOutput = & dism.exe /English "/Image:$scratchDir" /Get-Packages /Format:Table
 $packageLines = ($rawPackageOutput -split '\r?\n') | Select-Object -Skip 1
 
