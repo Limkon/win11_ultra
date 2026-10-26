@@ -53,6 +53,8 @@ if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
 Write-Host "`n正在扫描并移除预装臃肿 AppX 应用包..." -ForegroundColor Cyan
 
 # 精确匹配待移除应用清单
+# 注：保留 *Camera*，因 WindowsCamera.exe 在 HKCR\Applications 有强关联，
+#     删除后若注册项残留会导致 OpenWith 枚举中断，使“更多应用”列表为空。
 $targetAppxPatterns = @(
     '*Zune*',
     '*Bing*',
@@ -85,7 +87,6 @@ $targetAppxPatterns = @(
     '*WebpImageExtension*',
     '*DevHome*',
     '*Photos*',
-    '*Camera*',
     '*QuickAssist*',
     '*PeopleExperienceHost*',
     '*PinningConfirmationDialog*',
@@ -128,12 +129,48 @@ if ($provisionedPackages) {
     }
 }
 
+# AppX 包名 -> HKCR\Applications 下对应 exe 名的映射
+# 仅覆盖已知会注册文件关联的 AppX；未知包不盲猜，避免误删第三方应用关联
+$appxExeMap = @{
+    'Microsoft.Windows.Photos'            = @('Photos.exe', 'Microsoft.Photos.exe')
+    'Microsoft.Paint'                      = @('mspaint.exe')
+    'Microsoft.WindowsNotepad'             = @('notepad.exe')
+    'Microsoft.ScreenSketch'               = @('SnippingTool.exe', 'ScreenSketch.exe')
+    'Microsoft.People'                     = @('People.exe')
+    'Microsoft.WindowsMaps'                = @('Maps.exe')
+    'Microsoft.MicrosoftStickyNotes'       = @('Microsoft.MicrosoftStickyNotes.exe')
+    'Microsoft.WindowsCalculator'          = @('Microsoft.WindowsCalculator.exe', 'Calculator.exe', 'calc.exe')
+    'Microsoft.WindowsAlarms'              = @('WindowsAlarms.exe')
+    'Microsoft.WindowsSoundRecorder'       = @('WindowsSoundRecorder.exe')
+    'Microsoft.ZuneMusic'                  = @('Microsoft.ZuneMusic.exe')
+    'Microsoft.ZuneVideo'                  = @('Microsoft.ZuneVideo.exe')
+    'Microsoft.BingNews'                   = @('Microsoft.BingNews.exe')
+    'Microsoft.BingWeather'                = @('Microsoft.BingWeather.exe')
+}
+
 $removedPackageNames = New-Object System.Collections.Generic.List[string]
+$global:removedAppxExeNames = New-Object System.Collections.Generic.List[string]
 
 foreach ($package in $packagesToRemove) {
     Write-Host "   正在移除应用: $($package.DisplayName) [$($package.PackageName)]" -ForegroundColor DarkGray
-    $null = Remove-AppxProvisionedPackage -Path $scratchDir -PackageName $package.PackageName -ErrorAction SilentlyContinue
+    try {
+        $null = Remove-AppxProvisionedPackage -Path $scratchDir -PackageName $package.PackageName -ErrorAction Stop
+    } catch {
+        Write-Host "   [警告] 该包受系统保护或已被占用，跳过: $($package.PackageName)" -ForegroundColor DarkYellow
+    }
     $removedPackageNames.Add($package.PackageName)
+
+    # 收集该包可能注册的 exe 名，供 06 模块清理残留关联项
+    foreach ($mapKey in $appxExeMap.Keys) {
+        if ($package.PackageName -like "*$mapKey*") {
+            foreach ($exeName in $appxExeMap[$mapKey]) {
+                if (-not $global:removedAppxExeNames.Contains($exeName)) {
+                    $global:removedAppxExeNames.Add($exeName)
+                }
+            }
+            break
+        }
+    }
 }
 
 # 深度清理 WindowsApps 物理残留目录（夺权并硬核粉碎）
@@ -145,12 +182,12 @@ if (Test-Path -LiteralPath $windowsAppsDir) {
         $candidateFolder = Join-Path $windowsAppsDir $pkgName
         if (Test-Path -LiteralPath $candidateFolder) {
             Write-Host "   粉碎残留资产目录: $pkgName" -ForegroundColor DarkGray
-            & takeown.exe /F "$candidateFolder" /A /R /D Y 2>$null | Out-Null
-            & icacls.exe "$candidateFolder" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
-            attrib.exe -R -S -H "$candidateFolder\*" /S /D 2>$null
+            & takeown.exe /F "$candidateFolder" /A /R /D Y 2>&1 | Out-Null
+            & icacls.exe "$candidateFolder" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+            attrib.exe -R -S -H "$candidateFolder\*" /S /D 2>&1 | Out-Null
             Remove-Item -LiteralPath $candidateFolder -Recurse -Force -ErrorAction SilentlyContinue
             if (Test-Path -LiteralPath $candidateFolder) {
-                cmd.exe /c "rd /s /q `"$candidateFolder`"" 2>$null
+                cmd.exe /c "rd /s /q `"$candidateFolder`"" 2>&1 | Out-Null
             }
         }
     }
@@ -220,7 +257,7 @@ foreach ($pattern in $packagePatterns) {
         $packageIdentity = ($mLine -split '\s+')[0]
         if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -ne "Package" -and $packageIdentity -notmatch "^-+$") {
             Write-Host "   正在移除底层功能包: $packageIdentity..." -ForegroundColor DarkGray
-            & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>$null | Out-Null
+            & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>&1 | Out-Null
         }
     }
 }
