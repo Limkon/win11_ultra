@@ -23,7 +23,7 @@ foreach ($h in $hiveLoads) {
 }
 
 # ==============================================================================
-# 1.5 修复“打开方式 -> 更多应用”列表崩溃问题 (保持不变)
+# 1.5 修复“打开方式 -> 更多应用”列表崩溃问题
 # ==============================================================================
 Write-Host "Repairing OpenWith application associations..." -ForegroundColor Yellow
 
@@ -121,25 +121,21 @@ Write-Host "Disabling Chat icon:"
 # ==============================================================================
 Write-Host "Removing Edge registries and disabling update mechanisms..." -ForegroundColor Yellow
 
-# 1. 删除卸载项 (x86 / x64 / 各个版本)
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>&1 | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>&1 | Out-Null
 
-# 2. 全局封杀所有包含 edgeupdate 的服务
 $edgeServices = @('edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService')
 foreach ($svc in $edgeServices) {
     & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$svc" /f 2>&1 | Out-Null
     & reg.exe delete "HKLM\zSYSTEM\ControlSet002\Services\$svc" /f 2>&1 | Out-Null
 }
 
-# 3. 策略级封杀静默安装
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\EdgeUpdate' '/v' 'DoNotUpdateToEdgeWithChromium' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'UpdateDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'InstallDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 
-# 4. 删除 Edge 计划任务
 $tasksPath = "$scratchDir\Windows\System32\Tasks"
 $edgeTaskFiles = @("MicrosoftEdgeUpdateTaskMachineCore", "MicrosoftEdgeUpdateTaskMachineUA", "MicrosoftEdgeUpdateTaskMachineCore{*}", "MicrosoftEdgeUpdateTaskMachineUA{*}")
 foreach ($task in $edgeTaskFiles) {
@@ -212,11 +208,13 @@ foreach ($path in $servicePaths) {
 
 Write-Host "Tweaking complete!"
 
+# 14. 卸载并释放离线配置单元
 Write-Host "Unmounting Registry..."
 foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
     Safely-UnloadHive -HiveName $h | Out-Null
 }
 
+# 15. 重新装载 SYSTEM 单元以深度清除多余服务实体
 Write-Host "Loading registry hives to remove services..."
 & reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
