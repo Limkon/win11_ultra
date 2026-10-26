@@ -49,78 +49,51 @@ if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
 }
 
 # ----------------- 2. 移除预装 AppX (Bloatware) -----------------
-Write-Host "`n正在扫描并移除预装臃肿 AppX 应用包..." -ForegroundColor Cyan
+Write-Host "`n[2.1] 正在动态扫描并移除预装臃肿 AppX 应用包..." -ForegroundColor Cyan
 
-# 注意：保留 *Paint* 和 *Notepad*，防止 OpenWith 列表崩溃；相机已恢复移除。
+# 注意：*Notepad* 和 *Photos* 不在此列表中，确保不被移除
 $targetAppxPatterns = @(
-    '*Zune*',
-    '*Bing*',
-    '*Clipchamp*',
-    '*Gaming*',
-    '*People*',
-    '*PowerAutomate*',
-    '*Teams*',
-    '*Todos*',
-    '*YourPhone*',
-    '*SoundRecorder*',
-    '*Solitaire*',
-    '*FeedbackHub*',
-    '*Maps*',
-    '*OfficeHub*',
-    '*Help*',
-    '*Family*',
-    '*Alarms*',
-    '*CommunicationsApps*',
-    '*Copilot*',
-    '*AV1VideoExtension*',
-    '*AVCEncoderVideoExtension*',
-    '*HEIFImageExtension*',
-    '*HEVCVideoExtension*',
-    '*MicrosoftStickyNotes*',
-    '*OutlookForWindows*',
-    '*RawImageExtension*',
-    '*SecHealthUI*',
-    '*VP9VideoExtensions*',
-    '*WebpImageExtension*',
-    '*DevHome*',
-    '*Photos*',
-    '*Camera*', # 恢复相机移除
-    '*QuickAssist*',
-    '*PeopleExperienceHost*',
-    '*PinningConfirmationDialog*',
-    '*SecureAssessmentBrowser*'
+    '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', 
+    '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*', 
+    '*SoundRecorder*', '*Solitaire*', '*FeedbackHub*', '*Maps*', 
+    '*OfficeHub*', '*Help*', '*Family*', '*Alarms*', '*Camera*', 
+    '*QuickAssist*', '*PeopleExperienceHost*', 
+    '*PinningConfirmationDialog*', '*SecureAssessmentBrowser*',
+    '*CommunicationsApps*', '*Copilot*', '*AV1VideoExtension*',
+    '*HEIFImageExtension*', '*HEVCVideoExtension*', '*WebpImageExtension*'
 )
 
 # 框架组件保护白名单
 $protectedFrameworkPatterns = @(
-    '*Microsoft.UI.Xaml*',
-    '*Microsoft.VCLibs*',
-    '*Microsoft.WindowsAppRuntime*',
-    '*Microsoft.NET.Native*',
-    '*Microsoft.Services.Store*'
+    '*Microsoft.UI.Xaml*', '*Microsoft.VCLibs*', '*Microsoft.WindowsAppRuntime*',
+    '*Microsoft.NET.Native*', '*Microsoft.Services.Store*'
 )
 
 $provisionedPackages = Get-AppxProvisionedPackage -Path $scratchDir -ErrorAction SilentlyContinue
-$packagesToRemove = @()
+$appxToRemove = @()
+$appxToKeep = @()
 
-if ($provisionedPackages) {
-    foreach ($pkg in $provisionedPackages) {
-        $isProtected = $false
-        foreach ($prot in $protectedFrameworkPatterns) {
-            if ($pkg.PackageName -like $prot) { $isProtected = $true; break }
-        }
-        if ($isProtected) { continue }
+foreach ($pkg in $provisionedPackages) {
+    $isProtected = $false
+    foreach ($prot in $protectedFrameworkPatterns) {
+        if ($pkg.PackageName -like $prot) { $isProtected = $true; break }
+    }
+    if ($isProtected) {
+        $appxToKeep += $pkg
+        continue
+    }
 
-        foreach ($pattern in $targetAppxPatterns) {
-            if ($pkg.PackageName -like $pattern) {
-                $packagesToRemove += $pkg
-                break
-            }
+    foreach ($pattern in $targetAppxPatterns) {
+        if ($pkg.PackageName -like $pattern) {
+            $appxToRemove += $pkg
+            break
         }
     }
 }
 
-# AppX 包名 -> HKCR\Applications 下对应 exe 名的映射
+Write-Host "   [框架保护] 已自动拦截保留 $($appxToKeep.Count) 个核心依赖框架。" -ForegroundColor DarkGray
+Write-Host "   [准备移除] 检测到 $($appxToRemove.Count) 个预装应用符合精简规则。" -ForegroundColor Yellow
+
 $appxExeMap = @{
     'Microsoft.Windows.Photos'            = @('Photos.exe', 'Microsoft.Photos.exe')
     'Microsoft.ScreenSketch'              = @('SnippingTool.exe', 'ScreenSketch.exe')
@@ -133,14 +106,14 @@ $appxExeMap = @{
     'Microsoft.ZuneVideo'                 = @('Microsoft.ZuneVideo.exe')
     'Microsoft.BingNews'                  = @('Microsoft.BingNews.exe')
     'Microsoft.BingWeather'               = @('Microsoft.BingWeather.exe')
-    'Microsoft.WindowsCamera'             = @('WindowsCamera.exe') # 补充相机关联清理
+    'Microsoft.WindowsCamera'             = @('WindowsCamera.exe')
 }
 
 $removedPackageNames = New-Object System.Collections.Generic.List[string]
 $global:removedAppxExeNames = New-Object System.Collections.Generic.List[string]
 
-foreach ($package in $packagesToRemove) {
-    Write-Host "   正在移除应用: $($package.DisplayName) [$($package.PackageName)]" -ForegroundColor DarkGray
+foreach ($package in $appxToRemove) {
+    Write-Host "   正在移除应用: $($package.DisplayName)" -ForegroundColor DarkGray
     try {
         $null = Remove-AppxProvisionedPackage -Path $scratchDir -PackageName $package.PackageName -ErrorAction Stop
     } catch {
@@ -161,9 +134,7 @@ foreach ($package in $packagesToRemove) {
 }
 
 # 深度清理 WindowsApps 物理残留目录
-Write-Host "正在扫描并清理 Program Files\WindowsApps 中的残留资产..." -ForegroundColor DarkGray
 $windowsAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
-
 if (Test-Path -LiteralPath $windowsAppsDir) {
     foreach ($pkgName in $removedPackageNames) {
         $candidateFolder = Join-Path $windowsAppsDir $pkgName
@@ -171,38 +142,18 @@ if (Test-Path -LiteralPath $windowsAppsDir) {
             Write-Host "   粉碎残留资产目录: $pkgName" -ForegroundColor DarkGray
             & takeown.exe /F "$candidateFolder" /A /R /D Y 2>&1 | Out-Null
             & icacls.exe "$candidateFolder" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
-            attrib.exe -R -S -H "$candidateFolder\*" /S /D 2>&1 | Out-Null
             Remove-Item -LiteralPath $candidateFolder -Recurse -Force -ErrorAction SilentlyContinue
-            if (Test-Path -LiteralPath $candidateFolder) {
-                cmd.exe /c "rd /s /q `"$candidateFolder`"" 2>&1 | Out-Null
-            }
         }
     }
 }
 
-# 完整性校验
-$openWithExe = Join-Path $scratchDir "Windows\System32\OpenWith.exe"
-$shell32Dll  = Join-Path $scratchDir "Windows\System32\shell32.dll"
-$shCoreDll   = Join-Path $scratchDir "Windows\System32\shcore.dll"
+# ----------------- 3. 移除系统底层功能包 Packages (FOD) -----------------
+Write-Host "`n[2.2] 正在动态扫描系统底层按需功能包 (FOD)..." -ForegroundColor Cyan
 
-foreach ($critical in @($openWithExe, $shell32Dll, $shCoreDll)) {
-    if (-not (Test-Path -LiteralPath $critical)) {
-        Write-Host "[严重警告] 关键 Shell/OpenWith 组件缺失: $critical —— 精简过度，请检查 AppX/FOD 移除清单！" -ForegroundColor Red
-    }
-}
-
-# 释放内存引用
-$packagesToRemove = $null
-$provisionedPackages = $null
-
-# ----------------- 3. 移除系统底层功能包 Packages -----------------
-Write-Host "`n系统应用精炼完毕，正在执行系统底层按需功能包 (FOD) 精简..." -ForegroundColor Cyan
-
-# 绝对不能移除 Microsoft-Windows-Search-Engine-Client-Package~
+# 注意：不包含 WordPad，但也绝不包含任何与记事本有关的 FOD 条目
 $packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
-    "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
     "Microsoft-Windows-MSPaint-FoD-Package~",
     "Microsoft-Windows-SnippingTool-FoD-Package~",
@@ -210,9 +161,7 @@ $packagePatterns = @(
     "Microsoft-Windows-Xps-Xps-Viewer-Opt-Package~",
     "Microsoft-Windows-PowerShell-ISE-FOD-Package~",
     "OpenSSH-Client-Package~",
-    "*IME-ja-jp*",
-    "*IME-ko-kr*",
-    "*IME-zh-tw*",
+    "*IME-ja-jp*", "*IME-ko-kr*", "*IME-zh-tw*",
     "Windows-Defender-Client-Package~",
     "Microsoft-Windows-Kernel-LA57-FoD-Package~",
     "Microsoft-Windows-Hello-Face-Package~",
@@ -230,22 +179,23 @@ $packagePatterns = @(
 if ($global:languageCode -ne "zh-CN") {
     $packagePatterns += "Microsoft-Windows-LanguageFeatures-Handwriting-$($global:languageCode)-Package~"
     $packagePatterns += "Microsoft-Windows-LanguageFeatures-OCR-$($global:languageCode)-Package~"
-    $packagePatterns += "Microsoft-Windows-LanguageFeatures-Speech-$($global:languageCode)-Package~"
-    $packagePatterns += "Microsoft-Windows-LanguageFeatures-TextToSpeech-$($global:languageCode)-Package~"
 }
 
 $rawPackageOutput = & dism.exe /English "/Image:$scratchDir" /Get-Packages /Format:Table
 $packageLines = ($rawPackageOutput -split '\r?\n') | Select-Object -Skip 1
+$fodRemovedCount = 0
 
 foreach ($pattern in $packagePatterns) {
     $matchedLines = $packageLines | Where-Object { $_ -like "$pattern*" }
     foreach ($mLine in $matchedLines) {
         $packageIdentity = ($mLine -split '\s+')[0]
         if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -ne "Package" -and $packageIdentity -notmatch "^-+$") {
-            Write-Host "   正在移除底层功能包: $packageIdentity..." -ForegroundColor DarkGray
+            Write-Host "   正在移除 FOD: $packageIdentity" -ForegroundColor DarkGray
             & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>&1 | Out-Null
+            $fodRemovedCount++
         }
     }
 }
+Write-Host "   [执行完毕] 共清理 $fodRemovedCount 个底层功能包。" -ForegroundColor Yellow
 
 Write-Host "[完成] 应用与系统组件包移除完毕。" -ForegroundColor Green
