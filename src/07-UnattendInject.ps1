@@ -21,7 +21,6 @@ $hideLocalAccountScreenValue = "true"
 $hideOnlineAccountScreensValue = "true"
 
 if ($mode -eq "1") {
-    # 全无人值守：注入预设账户与自动登录节点
     $inputUserEscaped = [System.Security.SecurityElement]::Escape($user)
     $inputPassEscaped = [System.Security.SecurityElement]::Escape($pass)
 
@@ -58,8 +57,6 @@ if ($mode -eq "1") {
     $hideLocalAccountScreenValue = "true"
     $hideOnlineAccountScreensValue = "true"
 } else {
-    # 半无人值守：剥离内置账户，开启本地账户输入屏，同时放开在线账户屏，
-    # 让用户在 OOBE 原生界面自定用户名与密码，避免因 HideOnlineAccountScreens=true 跳过账户创建
     Write-Host "   [账户策略] 已剥离预置账户，装机后将由用户在 OOBE 原生界面自定用户名与密码。" -ForegroundColor DarkGray
     $userAccountsXmlFragment = ""
     $autoLogonXmlFragment    = ""
@@ -376,6 +373,7 @@ $scripts = @(
 
 		$reportPath = "C:\Windows\Temp\Trim_Stability_Report.log";
 		[System.IO.File]::WriteAllLines($reportPath, $report, [System.Text.Encoding]::UTF8);
+		$report = $null;
 	};
 	{
 		# 1. 彻底销毁包含配置的应答文件
@@ -430,22 +428,32 @@ $finalXml = $finalXml.Replace('__HIDE_LOCAL_ACCOUNT_SCREEN__', $hideLocalAccount
 $finalXml = $finalXml.Replace('__HIDE_ONLINE_ACCOUNT_SCREENS__', $hideOnlineAccountScreensValue)
 $finalXml = $finalXml.Replace('__DEPLOY_MODE_TEXT__', $modeText)
 
-# ----------------- 4. 多通道规范注入 -----------------
+# ----------------- 4. 多通道规范注入 (带强力防占用机制) -----------------
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
 if (-not (Test-Path -LiteralPath $pantherDir)) { New-Item -ItemType Directory -Path $pantherDir -Force | Out-Null }
 
-$utf8Encoding = [System.Text.Encoding]::UTF8
+$utf8Encoding = New-Object System.Text.UTF8Encoding($false)
 
-# Sysprep 核心规范通道
-[System.IO.File]::WriteAllText((Join-Path $sysprepDir "unattend.xml"), $finalXml, $utf8Encoding)
-[System.IO.File]::WriteAllText((Join-Path $sysprepDir "autounattend.xml"), $finalXml, $utf8Encoding)
+# 核心修复：强制解除只读并覆盖写入的通用函数
+function Write-XmlSafely {
+    param([string]$Path, [string]$Content)
+    if (Test-Path -LiteralPath $Path) {
+        attrib.exe -R -S -H "$Path" 2>&1 | Out-Null
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    }
+    try {
+        [System.IO.File]::WriteAllText($Path, $Content, $utf8Encoding)
+    } catch {
+        Write-Host "[警告] 写入 $Path 失败，尝试备用写入法..." -ForegroundColor Yellow
+        $Content | Out-File -FilePath $Path -Encoding UTF8 -Force
+    }
+}
 
-# Panther 初始化通道
-[System.IO.File]::WriteAllText((Join-Path $pantherDir "unattend.xml"), $finalXml, $utf8Encoding)
-
-# ISO 介质根目录自启动通道
-[System.IO.File]::WriteAllText((Join-Path $workDir "autounattend.xml"), $finalXml, $utf8Encoding)
+Write-XmlSafely -Path (Join-Path $sysprepDir "unattend.xml") -Content $finalXml
+Write-XmlSafely -Path (Join-Path $sysprepDir "autounattend.xml") -Content $finalXml
+Write-XmlSafely -Path (Join-Path $pantherDir "unattend.xml") -Content $finalXml
+Write-XmlSafely -Path (Join-Path $workDir "autounattend.xml") -Content $finalXml
 
 Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自适应语言: $lang | 架构: $arch)。" -ForegroundColor Green
