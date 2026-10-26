@@ -2,40 +2,68 @@
 #  win11 Builder - [模块 3/11] 镜像定位、导出与挂载 (src/02-MountImage.ps1)
 # ==============================================================================
 
-# 1. 输入与校验 ISO 光驱盘符
-$rawDrive = Read-Host "请输入 Windows 11 ISO 虚拟光驱盘符 (例如 E)"
-if ([string]::IsNullOrWhiteSpace($rawDrive)) {
-    Write-Host "[严重错误] 未输入有效盘符！流程终止。" -ForegroundColor Red
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
+$sourceRoot = ""
+$bootWimSrc = ""
+$installWimSrc = ""
+$installEsdSrc = ""
+$isMountedISO = $false
+$fileExt = ""
+
+# 1. 智能定位源文件结构 (双模式)
+if ($global:sourceMode -eq "2") {
+    $sourceFile = $global:sourceFile
+    $fileExt = [System.IO.Path]::GetExtension($sourceFile).ToLower()
+    
+    if ($fileExt -eq '.iso') {
+        Write-Host "`n[步骤 1/11] 正在挂载 ISO 虚拟镜像..." -ForegroundColor Cyan
+        $isoMount = Mount-DiskImage -ImagePath $sourceFile -PassThru -ErrorAction SilentlyContinue
+        if (-not $isoMount) {
+            Write-Host "[严重错误] 无法挂载 ISO 文件！可能文件损坏或被占用。" -ForegroundColor Red
+            if ($global:transcriptActive) { Stop-Transcript }; pause; exit 1
+        }
+        Start-Sleep -Seconds 2
+        $driveLetter = ($isoMount | Get-Volume).DriveLetter
+        $sourceRoot = "$($driveLetter):"
+        $isMountedISO = $true
+    } else {
+        Write-Host "`n[步骤 1/11] 正在解析源文件..." -ForegroundColor Cyan
+        $sourceDir = Split-Path -Parent $sourceFile
+        if ($fileExt -eq '.wim') { $installWimSrc = $sourceFile } else { $installEsdSrc = $sourceFile }
+        
+        $possibleBootWims = @(
+            (Join-Path $sourceDir "boot.wim"),
+            (Join-Path $sourceDir "sources\boot.wim")
+        )
+        foreach ($bw in $possibleBootWims) {
+            if (Test-Path -LiteralPath $bw) { $bootWimSrc = $bw; break }
+        }
+        $sourceRoot = $sourceDir
+    }
+} else {
+    # 兼容盘符输入模式
+    $sourceRoot = $global:driveLetter
+    $fileExt = ".iso"
+    Write-Host "`n[步骤 1/11] 正在读取虚拟光驱盘符 $sourceRoot..." -ForegroundColor Cyan
 }
 
-$normalized = $rawDrive.Trim().TrimEnd('\').TrimEnd(':').ToUpper()
-if ($normalized -notmatch '^[A-Z]$') {
-    Write-Host "[严重错误] 盘符格式非法，请输入单个字母（如 E）！" -ForegroundColor Red
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
-}
-$DriveLetter = "$normalized`:"
+# 统一构建路径参数 (如果是 ISO 或 盘符模式)
+if ($fileExt -eq ".iso") {
+    $bootWimSrc    = "$sourceRoot\sources\boot.wim"
+    $installWimSrc = "$sourceRoot\sources\install.wim"
+    $installEsdSrc = "$sourceRoot\sources\install.esd"
 
-$bootWimSrc    = "$DriveLetter\sources\boot.wim"
-$installWimSrc = "$DriveLetter\sources\install.wim"
-$installEsdSrc = "$DriveLetter\sources\install.esd"
-
-if (-not (Test-Path -LiteralPath $bootWimSrc) -or (-not (Test-Path -LiteralPath $installWimSrc) -and -not (Test-Path -LiteralPath $installEsdSrc))) {
-    Write-Host "[严重错误] 在虚拟光驱 $DriveLetter 中未检测到有效的 Windows 安装介质结构！" -ForegroundColor Red
-    Write-Host "缺少关键文件: boot.wim 或 install.wim/install.esd，请确认 ISO 已正确挂载。" -ForegroundColor Yellow
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
+    if (-not (Test-Path -LiteralPath $bootWimSrc) -or (-not (Test-Path -LiteralPath $installWimSrc) -and -not (Test-Path -LiteralPath $installEsdSrc))) {
+        Write-Host "[严重错误] 在源 $sourceRoot 中未检测到有效的 Windows 安装介质结构！" -ForegroundColor Red
+        if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
+        if ($global:transcriptActive) { Stop-Transcript }; pause; exit 1
+    }
 }
 
 # 2. 复制 ISO 引导架构文件 (步骤 1/11)
+# 注意：路径严格规范化为不带尾部转义反斜杠的标准形式，杜绝 CRT 逃逸导致的复制失败
 Write-Host "`n[步骤 1/11] 正在复制 ISO 核心引导架构到工作区..." -ForegroundColor Cyan
-$sourceRoot = "$DriveLetter"
 
+# Robocopy 返回码 0-7 均代表正常/成功，8 及以上代表严重异常
 $null = & robocopy.exe "$sourceRoot" "$workDir" /E /XF "install.wim" "install.esd" /NDL /NFL /NC /NS /NP
 if ($LASTEXITCODE -ge 8) {
     $rcMsg = switch ($LASTEXITCODE) {
@@ -44,11 +72,13 @@ if ($LASTEXITCODE -ge 8) {
         default { "未知严重错误" }
     }
     Write-Host "[严重错误] 基础引导结构复制失败！Robocopy 退出码: $LASTEXITCODE ($rcMsg)" -ForegroundColor Red
+    if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
     if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
 
+# 校验关键引导链文件完整性
 $criticalBootFiles = @(
     (Join-Path $workDir "bootmgr"),
     (Join-Path $workDir "boot\bcd"),
@@ -65,6 +95,7 @@ foreach ($bf in $criticalBootFiles) {
 
 if ($missingBootFile) {
     Write-Host "[严重错误] 核心引导结构未能完整复制到工作区，无法支持后续引导生成！" -ForegroundColor Red
+    if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
     if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
@@ -73,13 +104,14 @@ Write-Host "[完成] ISO 核心引导架构复制完毕，引导链结构完整�
 
 # 3. 定位源映像文件并导出目标分卷 (步骤 2/11)
 $destWim = Join-Path $sourcesDir "install.wim"
+$imageSourceToUse = if ($installWimSrc -and (Test-Path -LiteralPath $installWimSrc)) { $installWimSrc } else { $installEsdSrc }
 
-if (Test-Path -LiteralPath $installWimSrc) {
+if ($installWimSrc -and (Test-Path -LiteralPath $installWimSrc)) {
     Write-Host "`n[步骤 2/11] 检测到 install.wim，正在解析映像分卷列表..." -ForegroundColor Cyan
     & dism.exe /English /Get-WimInfo "/WimFile:$installWimSrc"
     $index = Read-Host "请输入要精简的目标版本 Index 序号"
     if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
-
+    
     Write-Host "正在导出目标分卷 $index (展示原生导出进度条)..." -ForegroundColor Green
     & dism.exe /English /Export-Image "/SourceImageFile:$installWimSrc" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
 } else {
@@ -87,16 +119,22 @@ if (Test-Path -LiteralPath $installWimSrc) {
     & dism.exe /English /Get-WimInfo "/WimFile:$installEsdSrc"
     $index = Read-Host "请输入要精简的目标版本 Index 序号"
     if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
-
+    
     Write-Host "正在将目标分卷 $index 从 ESD 高压格式转换为 install.wim (展示原生进度条)..." -ForegroundColor Green
     & dism.exe /English /Export-Image "/SourceImageFile:$installEsdSrc" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
 }
 
 if (-not (Test-Path -LiteralPath $destWim)) {
     Write-Host "[严重错误] install.wim 导出生成失败！流程终止。" -ForegroundColor Red
+    if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
     if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
+}
+
+# 卸载 ISO
+if ($isMountedISO) {
+    Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null
 }
 
 # 导出后独立单一镜像的 Index 固定为 1
