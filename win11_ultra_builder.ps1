@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-26 07:40:54 UTC
+#  生成时间: 2026-10-26 08:03:25 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -13,8 +13,6 @@
 # ==============================================================================
 
 # ----------------- 全局特性静态开关 -----------------
-# 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，直接打包 install.wim)
-# 消费方：10-PackageAndClean.ps1 开头读取 $global:enableEsdConversion
 $global:enableEsdConversion = $false
 # ----------------------------------------------------
 
@@ -110,8 +108,6 @@ Write-Host "工作目录锁定在: $workDir" -ForegroundColor Green
 Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 
 # ----------------- 7. 前置倒计时交互引擎函数 -----------------
-# 注：本函数与 01-Helpers.ps1 的 Read-InputWithTimeout 语义不同（本函数返回 Hashtable
-#     并区分 TimedOut/Value），且 00 先于 01 执行，故保留本地实现，请勿混用。
 function Read-ChoiceWithTimeout {
     param (
         [string]$PromptText = "请输入选项",
@@ -280,17 +276,43 @@ if ($global:enableEsdConversion) {
 }
 Write-Host "`n[就绪] 前置配置已全部锁定，后续构建流程将完全静默自动化运行！`n" -ForegroundColor Green
 
-# 10. 初始化清理 (安全预检并卸载残留)
-Write-Host "[初始化] 清理历史残留挂载点并重置环境..." -ForegroundColor DarkGray
-if (Test-Path "HKLM:\zSOFTWARE") { cmd.exe /c "reg.exe unload HKLM\zSOFTWARE 2>nul" | Out-Null }
-if (Test-Path "HKLM:\zSYSTEM")   { cmd.exe /c "reg.exe unload HKLM\zSYSTEM 2>nul" | Out-Null }
-if (Test-Path "HKLM:\zNTUSER")   { cmd.exe /c "reg.exe unload HKLM\zNTUSER 2>nul" | Out-Null }
+# ----------------- 10. 环境深度解锁 (解决 Ctrl+C 导致的挂载死锁) -----------------
+Write-Host "[初始化] 正在深度清理历史挂载残留与注册表死锁..." -ForegroundColor DarkGray
 
+# 卸载可能残留的离线注册表
+foreach ($hive in @("zCOMPONENTS", "zDEFAULT", "zNTUSER", "zSOFTWARE", "zSYSTEM")) {
+    if (Test-Path "HKLM:\$hive") { 
+        cmd.exe /c "reg.exe unload HKLM\$hive 2>nul" | Out-Null 
+    }
+}
+
+# 强制终结卡死的 DISM 进程
+Get-Process -Name "dism", "dismhost" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+# 强制清理注册表中的 WIM 幽灵挂载记录
+try {
+    $wimMountKey = "HKLM:\SOFTWARE\Microsoft\WIMMount\Mounted Images"
+    if (Test-Path $wimMountKey) {
+        Get-ChildItem -Path $wimMountKey -ErrorAction SilentlyContinue | ForEach-Object {
+            Remove-Item -Path $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+} catch {}
+
+# 执行官方清理并处理挂载目录
 & dism.exe /English /Cleanup-Wim 2>&1 | Out-Null
 cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
 
-if (Test-Path $workDir) { Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue }
+if (Test-Path $scratchDir) { 
+    Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue 
+}
+
+if (Test-Path $workDir) { 
+    Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue 
+}
 New-Item -ItemType Directory -Force -Path $sourcesDir | Out-Null
+
+Write-Host "[初始化] 环境清理完毕，准备开始构建。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/00-Header-Init.ps1
 
