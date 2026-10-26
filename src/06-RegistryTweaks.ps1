@@ -23,7 +23,7 @@ foreach ($h in $hiveLoads) {
 }
 
 # ==============================================================================
-# 1.5 修复“打开方式 -> 更多应用”列表崩溃问题
+# 1.5 修复“打开方式 -> 更多应用”列表崩溃问题 (保持不变)
 # ==============================================================================
 Write-Host "Repairing OpenWith application associations..." -ForegroundColor Yellow
 
@@ -117,30 +117,34 @@ Write-Host "Disabling Chat icon:"
 & 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' '/v' 'TaskbarMn' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 
 # ==============================================================================
-# 彻底清理并禁用 Edge 自愈 / 更新机制 (加强版)
+# 彻底封杀 Edge 自愈机制 (通用版)
 # ==============================================================================
 Write-Host "Removing Edge registries and disabling update mechanisms..." -ForegroundColor Yellow
 
-# 1. 删除卸载项
+# 1. 删除卸载项 (x86 / x64 / 各个版本)
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>&1 | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
 & reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f 2>&1 | Out-Null
 
-# 2. 禁用 Edge 更新服务和计划任务
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\edgeupdate' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\edgeupdatem' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\MicrosoftEdgeElevationService' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
+# 2. 全局封杀所有包含 edgeupdate 的服务
+$edgeServices = @('edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService')
+foreach ($svc in $edgeServices) {
+    & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$svc" /f 2>&1 | Out-Null
+    & reg.exe delete "HKLM\zSYSTEM\ControlSet002\Services\$svc" /f 2>&1 | Out-Null
+}
 
-# 3. 阻止系统静默重装 Edge 的策略
+# 3. 策略级封杀静默安装
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\EdgeUpdate' '/v' 'DoNotUpdateToEdgeWithChromium' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'UpdateDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'InstallDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 
-# 4. 删除 Edge 相关的任务文件
+# 4. 删除 Edge 计划任务
 $tasksPath = "$scratchDir\Windows\System32\Tasks"
-Remove-Item -Path "$tasksPath\MicrosoftEdgeUpdateTaskMachineCore" -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$tasksPath\MicrosoftEdgeUpdateTaskMachineUA" -Force -ErrorAction SilentlyContinue
+$edgeTaskFiles = @("MicrosoftEdgeUpdateTaskMachineCore", "MicrosoftEdgeUpdateTaskMachineUA", "MicrosoftEdgeUpdateTaskMachineCore{*}", "MicrosoftEdgeUpdateTaskMachineUA{*}")
+foreach ($task in $edgeTaskFiles) {
+    Remove-Item -Path "$tasksPath\$task" -Force -ErrorAction SilentlyContinue
+}
 
 # ==============================================================================
 
