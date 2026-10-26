@@ -4,6 +4,8 @@
 # ==============================================================================
 
 # ----------------- 全局特性静态开关 -----------------
+# 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，直接打包 install.wim)
+# 消费方：10-PackageAndClean.ps1 开头读取 $global:enableEsdConversion
 $global:enableEsdConversion = $false
 # ----------------------------------------------------
 
@@ -99,6 +101,8 @@ Write-Host "工作目录锁定在: $workDir" -ForegroundColor Green
 Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 
 # ----------------- 7. 前置倒计时交互引擎函数 -----------------
+# 注：本函数与 01-Helpers.ps1 的 Read-InputWithTimeout 语义不同（本函数返回 Hashtable
+#     并区分 TimedOut/Value），且 00 先于 01 执行，故保留本地实现，请勿混用。
 function Read-ChoiceWithTimeout {
     param (
         [string]$PromptText = "请输入选项",
@@ -208,7 +212,7 @@ function Read-StringWithTimeout {
 # ----------------- 8. 前置配置 1：选择精简制作模式 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " [配置 1/2] 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
+Write-Host " [配置 1/3] 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
 Write-Host " [1] 普通精简 (推荐: 极速流畅、稳定平衡、保留组件服务架构)" -ForegroundColor Green
 Write-Host " [2] 极限压榨 (全版本自适应 WinSxS 瘦身 + 注册表物理抹杀服务)" -ForegroundColor Red
 Write-Host "==========================================================" -ForegroundColor Magenta
@@ -225,7 +229,7 @@ if ($trimChoice -eq "2") {
 # ----------------- 9. 前置配置 2：选择无人值守引导模式 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " [配置 2/2] 请选择 Windows 安装引导模式 (Unattend Mode):" -ForegroundColor Magenta
+Write-Host " [配置 2/3] 请选择 Windows 安装引导模式 (Unattend Mode):" -ForegroundColor Magenta
 Write-Host " [1] 全无人值守 (全自动安装、自动创建指定账户并自动登录)" -ForegroundColor Green
 Write-Host " [2] 半无人值守 (跳过硬件检测限制，在 OOBE 阶段手动输入用户名/密码)" -ForegroundColor Yellow
 Write-Host "==========================================================" -ForegroundColor Magenta
@@ -258,6 +262,52 @@ if ($unattendChoice -eq "2") {
     Write-Host ">>> [账户锁定] 用户名: $global:customUser | 密码: $(if ([string]::IsNullOrEmpty($global:customPass)) { '(留空)' } else { '******' })" -ForegroundColor DarkGray
 }
 
+# ----------------- 10. 前置配置 3：源文件获取方式 -----------------
+Write-Host ""
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host " [配置 3/3] 请选择 Windows 11 源文件获取方式:" -ForegroundColor Cyan
+Write-Host " [1] 输入光驱盘符 (适用于已挂载 ISO 的用户)" -ForegroundColor Green
+Write-Host " [2] 输入文件路径 (直接指定 .iso / .wim / .esd，支持拖拽)" -ForegroundColor Yellow
+Write-Host "==========================================================" -ForegroundColor Cyan
+
+$sourceChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2]" -Seconds 15 -DefaultChoice "1"
+$global:sourceMode = $sourceChoice
+$global:driveLetter = ""
+$global:sourceFile = ""
+
+if ($sourceChoice -eq "2") {
+    Write-Host "`n请将 .iso / .wim / .esd 文件拖拽到此处，或手动输入完整路径:" -ForegroundColor Yellow
+    $inputPath = Read-Host
+    $inputPath = $inputPath.Trim('"', ' ').Trim()
+    if (-not (Test-Path -LiteralPath $inputPath)) {
+        Write-Host "[严重错误] 文件不存在: $inputPath" -ForegroundColor Red
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+    $ext = [System.IO.Path]::GetExtension($inputPath).ToLower()
+    if ($ext -notin '.iso', '.wim', '.esd') {
+        Write-Host "[严重错误] 不支持的文件格式 ($ext)，仅限 .iso / .wim / .esd。" -ForegroundColor Red
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+    $global:sourceFile = $inputPath
+    Write-Host ">>> 已锁定源文件: $($global:sourceFile)" -ForegroundColor Green
+} else {
+    Write-Host "`n请输入 ISO 虚拟光驱盘符 (例如 E):" -ForegroundColor Yellow
+    $inputDrive = Read-Host
+    $normalized = $inputDrive.Trim().TrimEnd('\').TrimEnd(':').ToUpper()
+    if ($normalized -notmatch '^[A-Z]$') {
+        Write-Host "[严重错误] 盘符格式非法，请输入单个字母（如 E）！" -ForegroundColor Red
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+    $global:driveLetter = "$normalized`:"
+    Write-Host ">>> 已锁定挂载盘符: $($global:driveLetter)" -ForegroundColor Green
+}
+
 # 输出 ESD 开关状态
 Write-Host ""
 if ($global:enableEsdConversion) {
@@ -267,7 +317,7 @@ if ($global:enableEsdConversion) {
 }
 Write-Host "`n[就绪] 前置配置已全部锁定，后续构建流程将完全静默自动化运行！`n" -ForegroundColor Green
 
-# ----------------- 10. 环境深度解锁 (解决 Ctrl+C 导致的挂载死锁) -----------------
+# ----------------- 11. 环境深度解锁 (解决 Ctrl+C 导致的挂载死锁) -----------------
 Write-Host "[初始化] 正在深度清理历史挂载残留与注册表死锁..." -ForegroundColor DarkGray
 
 # 卸载可能残留的离线注册表
