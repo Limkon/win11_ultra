@@ -4,7 +4,7 @@
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
 
-# 1. 挂载离线注册表配置单元
+# 1. 挂载离线注册表配置单元 (带失败检查，避免静默生成无效母盘)
 $hiveLoads = @(
     @{ Name = "HKLM\zCOMPONENTS"; Path = "$scratchDir\Windows\System32\config\COMPONENTS" },
     @{ Name = "HKLM\zDEFAULT";    Path = "$scratchDir\Windows\System32\config\default" },
@@ -224,26 +224,14 @@ Write-Host "Disabling Windows Update..."
 # 3. 卸载并释放离线配置单元
 Write-Host "Unmounting Registry..."
 foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
-    if (Test-Path "HKLM:\$h") {
-        [System.GC]::Collect()
-        [System.GC]::WaitForPendingFinalizers()
-        Start-Sleep -Milliseconds 500
-        & reg.exe unload "$h" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            for ($i = 1; $i -le 5; $i++) {
-                Start-Sleep -Seconds 1
-                & reg.exe unload "$h" 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0) { break }
-            }
-        }
-    }
+    Safely-UnloadHive -HiveName $h | Out-Null
 }
 
 # 4. 重新装载 SYSTEM 单元以深度清除多余服务实体
 Write-Host "Loading registry hives to remove services..."
 & reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "[严重错误] 重新装载 SYSTEM 配置单元失败。" -ForegroundColor Red
+    Write-Host "[严重错误] 重新装载 SYSTEM 配置单元失败，退出码 $LASTEXITCODE，服务删除阶段中止。" -ForegroundColor Red
     if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
@@ -253,20 +241,4 @@ $servicesToRemove = @(
     'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
     'BluetoothUserService', 'wuauserv', 'UsoSvc', 'WaaSMedicSVC',
     'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService',
-    'WinDefend', 'WdNisSvc', 'SecurityHealthService'
-)
-foreach ($service in $servicesToRemove) { 
-    Write-Host "Removing service: $service"
-    & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$service" /f 2>&1 | Out-Null
-}
-
-# 卸载 zSYSTEM
-& reg.exe unload "HKLM\zSYSTEM" 2>&1 | Out-Null
-for ($i = 1; $i -le 5; $i++) {
-    if (Test-Path "HKLM:\zSYSTEM") {
-        Start-Sleep -Seconds 1
-        & reg.exe unload "HKLM\zSYSTEM" 2>&1 | Out-Null
-    } else { break }
-}
-
-Write-Host "[完成] 离线注册表配置与多余服务清理全部完毕。" -ForegroundColor Green
+    'WinDefend', 'WdNisSvc', 'SecurityHealth
