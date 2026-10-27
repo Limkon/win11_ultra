@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-27 05:24:07 UTC
+#  生成时间: 2026-10-27 08:42:14 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -647,11 +647,11 @@ Write-Host "[完成] 系统主映像挂载成功，运行环境就绪。" -Foreg
 # ==============================================================================
 #  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
 #  重构要点：
-#   1. 动态收集被移除 AppX 的 PackageFamilyName，写入全局供 06 模块落盘
-#      Deprovisioned 标记，阻止 Windows 在 OOBE/功能更新时重新预配。
-#   2. 保留原有语言/架构探针、框架白名单、物理粉碎、SystemApps 清理、
+#   1. 新增 Edge 与 Cortana 的 Appx 匹配模式，纳入移除与 Deprovisioned 标记。
+#   2. 重写 PackageFamilyName 解析，兼容 Name_Version_Arch_Resource_PublisherId
+#      以及 Name_Version_Arch__PublisherId（空资源段）两种完整包名格式。
+#   3. 保留原有语言/架构探针、框架白名单、物理粉碎、SystemApps 清理、
 #      关键组件校验、FOD 移除全部逻辑。
-#   3. PackageFamilyName 解析失败时仅警告，不中断流程。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
@@ -684,8 +684,9 @@ foreach ($line in ($imageInfo -split '\r?\n')) {
 }
 if (-not $matchedArch) { $global:architecture = "amd64" }
 
-# ----------------- 2. 移除预装 AppX (Bloatware) -----------------
+# ----------------- 2. 移除预装 AppX (Bloatware + Edge + Cortana) -----------------
 # 注意：保留 *Paint* 和 *Notepad*；相机保留在精简列表中（按之前逻辑）。
+# Edge 与 Cortana 通过精确模式纳入移除，确保进入 Deprovisioned 标记流程。
 $targetAppxPatterns = @(
     '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', 
     '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*', 
@@ -694,7 +695,9 @@ $targetAppxPatterns = @(
     '*QuickAssist*', '*PeopleExperienceHost*', '*PinningConfirmationDialog*', 
     '*SecureAssessmentBrowser*', '*CommunicationsApps*', '*Copilot*', 
     '*AV1VideoExtension*', '*HEIFImageExtension*', '*HEVCVideoExtension*', 
-    '*WebpImageExtension*', '*Cortana*'
+    '*WebpImageExtension*', '*Cortana*',
+    '*MicrosoftEdge.Stable*', '*MicrosoftEdge*', '*Microsoft.MicrosoftEdge*',
+    '*549981C3F5F10*'
 )
 
 # 框架组件保护白名单：任何通配符都不得误伤这些包
@@ -742,11 +745,14 @@ $appxExeMap = @{
     'Microsoft.BingNews'                  = @('Microsoft.BingNews.exe')
     'Microsoft.BingWeather'               = @('Microsoft.BingWeather.exe')
     'Microsoft.WindowsCamera'             = @('WindowsCamera.exe')
+    'Microsoft.MicrosoftEdge.Stable'      = @('msedge.exe', 'MicrosoftEdge.exe')
+    'Microsoft.MicrosoftEdge'             = @('MicrosoftEdge.exe')
+    'Microsoft.549981C3F5F10'             = @('Cortana.exe')
 }
 
 $removedPackageNames = New-Object System.Collections.Generic.List[string]
 $global:removedAppxExeNames = New-Object System.Collections.Generic.List[string]
-# 新增：收集被移除预装应用的 PackageFamilyName，供 06 模块写入 Deprovisioned
+# 收集被移除预装应用的 PackageFamilyName，供 06 模块写入 Deprovisioned
 $global:deprovisionedAppxFamilies = New-Object System.Collections.Generic.List[string]
 
 foreach ($package in $appxToRemove) {
@@ -758,16 +764,18 @@ foreach ($package in $appxToRemove) {
     }
     $removedPackageNames.Add($package.PackageName)
 
-    # 解析 PackageFamilyName：预配包名可能是 FamilyName 本身，也可能是完整 PackageFullName
-    # FamilyName 形如 Name_PublisherId（PublisherId 为 13 位小写字母数字）
+    # 解析 PackageFamilyName：统一取首段 Name + 末段 PublisherId（13 位小写字母数字）
+    # 兼容：
+    #   Name_PublisherId
+    #   Name_Version_Arch_Resource_PublisherId
+    #   Name_Version_Arch__PublisherId（空资源段）
     $familyName = $null
-    if ($package.PackageName -match '^([^_]+_[a-z0-9]{13})$') {
-        $familyName = $Matches[1]
-    } elseif ($package.PackageName -match '^([^_]+_[^_]+_[^_]+_[^_]+_[a-z0-9]{13})$') {
-        # 完整包名 Name_Version_Arch_Resource_PublisherId，取首尾拼成 FamilyName
-        $parts = $package.PackageName -split '_'
-        if ($parts.Count -ge 5) {
-            $familyName = "$($parts[0])_$($parts[-1])"
+    $pkgParts = $package.PackageName -split '_'
+    if ($pkgParts.Count -ge 2) {
+        $firstPart = $pkgParts[0]
+        $lastPart = $pkgParts[-1]
+        if ($lastPart -match '^[a-z0-9]{13}$') {
+            $familyName = "$($firstPart)_$($lastPart)"
         }
     }
 
@@ -808,7 +816,7 @@ if (Test-Path -LiteralPath $windowsAppsDir) {
 # ----------------- 3. 暴力物理粉碎系统级残留 (断根 Edge/Cortana) -----------------
 $sysAppsPath = Join-Path $scratchDir "Windows\SystemApps"
 if (Test-Path -LiteralPath $sysAppsPath) {
-    $sysAppsToDelete = @("*Cortana*", "*Edge*", "*PeopleExperienceHost*", "*SecureAssessmentBrowser*")
+    $sysAppsToDelete = @("*Cortana*", "*Edge*", "*PeopleExperienceHost*", "*SecureAssessmentBrowser*", "*549981C3F5F10*")
     foreach ($pattern in $sysAppsToDelete) {
         $items = Get-ChildItem -Path $sysAppsPath -Filter $pattern -Directory -ErrorAction SilentlyContinue
         foreach ($item in $items) {
@@ -944,6 +952,12 @@ Write-Host "[完成] 驱动与底层运行库缓存精简完毕。" -ForegroundC
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 物理文件实体清理 (src/05-PhysicalNuke.ps1)
+#  重构要点：
+#   1. 移除对 Windows Defender 的物理删除（目录、文件、ProgramData 定义），
+#      改由 06 模块“仅禁用服务 + 策略”，避免触发系统自愈机制。
+#   2. 保留 Edge / OneDrive 的地毯式物理粉碎（含 WinSxS 组件目录）。
+#   3. 保留字体、语音、输入法、临时目录、Web 壁纸、Help、Cursors、
+#      Native Images、WinRE 占位等全部原有清理逻辑。
 # ==============================================================================
 
 Write-Host "`n[步骤 7/11] 正在执行系统冗余物理文件清理..." -ForegroundColor Cyan
@@ -983,8 +997,8 @@ foreach ($p in $nativeImagePaths) {
     Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# 5. 全版本通用：地毯式清理 Edge、OneDrive、Defender 以及旧版残留
-Write-Host "Removing Edge, WinRE, OneDrive, and Defender (Universal Search)..." -ForegroundColor Yellow
+# 5. 地毯式清理 Edge、OneDrive（不含 Defender，Defender 改为 06 模块仅禁用）
+Write-Host "Removing Edge and OneDrive (Universal Search)..." -ForegroundColor Yellow
 
 $searchBases = @(
     "$scratchDir\Program Files",
@@ -992,10 +1006,9 @@ $searchBases = @(
     "$scratchDir\Windows\System32",
     "$scratchDir\Windows\SysWOW64",
     "$scratchDir\Windows\WinSxS",
-    "$scratchDir\Windows\SystemApps",
-    "$scratchDir\ProgramData\Microsoft\Windows Defender"
+    "$scratchDir\Windows\SystemApps"
 )
-$patternsToDelete = @("*Edge*", "*MicrosoftEdge*", "*OneDrive*", "*Windows Defender*", "*WinDefend*")
+$patternsToDelete = @("*Edge*", "*MicrosoftEdge*", "*OneDrive*")
 
 foreach ($base in $searchBases) {
     if (Test-Path -LiteralPath $base) {
@@ -1031,12 +1044,14 @@ Write-Host "[完成] 冗余物理文件与底层组件彻底清理完毕。" -Fo
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
 #  重构要点：
-#   1. 在 zSOFTWARE 挂载期间写入 AppxAllUserStore\Deprovisioned 标记，
-#      消费 03 模块收集的 $global:deprovisionedAppxFamilies，阻止应用复活。
-#   2. 服务删除阶段同时清理 ControlSet001 与 CurrentControlSet 双路径，
-#      避免离线 hive 中符号链接/实体差异导致的服务残留。
-#   3. 保留原有全部注册表优化、OpenWith/照片查看器修复、计划任务删除、
-#      Windows Update 禁用、服务删除逻辑。
+#   1. Defender 改为“仅禁用”：保留策略写入与服务 Start=4，不再删除
+#      WinDefend/WdNisSvc/SecurityHealthService 服务注册表键，避免触发自愈。
+#   2. Edge 保留物理删除配套：继续删除 edgeupdate/edgeupdatem/
+#      MicrosoftEdgeElevationService 服务键与卸载注册项。
+#   3. 保留 AppxAllUserStore\Deprovisioned 标记写入，消费 03 模块收集的
+#      $global:deprovisionedAppxFamilies（含 Edge 与 Cortana）。
+#   4. 保留 OpenWith/照片查看器修复、硬件豁免、赞助应用/遥测/Copilot/
+#      Teams/Outlook 禁用、计划任务删除、Windows Update 禁用、双路径服务删除。
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -1060,7 +1075,7 @@ foreach ($h in $hiveLoads) {
 }
 
 # ==============================================================================
-# 1.2 写入 Appx Deprovisioned 标记，阻止已移除预装应用在 OOBE/更新时复活
+# 1.2 写入 Appx Deprovisioned 标记，阻止已移除预装应用（含 Edge/Cortana）复活
 # ==============================================================================
 Write-Host "Writing Appx Deprovisioned markers to prevent bloatware re-provisioning..." -ForegroundColor Yellow
 
@@ -1221,9 +1236,9 @@ Write-Host "Prevent installation of New Outlook":
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail' '/v' 'PreventRun' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
 # ==============================================================================
-# 2.5 终极拔管：彻底封杀 Edge 和 Windows Defender
+# 2.5 Edge 物理删除配套：策略拦截 + 服务键删除（Defender 改为仅禁用）
 # ==============================================================================
-Write-Host "Disabling Edge and Windows Defender at the kernel and policy level..." -ForegroundColor Yellow
+Write-Host "Disabling Edge at the kernel and policy level (Defender: disable-only)..." -ForegroundColor Yellow
 
 # Edge 策略拦截
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
@@ -1235,7 +1250,7 @@ foreach ($svc in $edgeServices) {
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\EdgeUpdate' '/v' 'DoNotUpdateToEdgeWithChromium' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'UpdateDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 
-# Defender 策略拦截
+# Defender 策略拦截（保留策略，不删服务键）
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender' '/v' 'DisableAntiSpyware' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender' '/v' 'DisableAntiVirus' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection' '/v' 'DisableBehaviorMonitoring' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
@@ -1297,8 +1312,7 @@ $servicesToRemove = @(
     'Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 
     'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
     'BluetoothUserService', 'wuauserv', 'UsoSvc', 'WaaSMedicSVC',
-    'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService',
-    'WinDefend', 'WdNisSvc', 'SecurityHealthService'
+    'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService'
 )
 foreach ($service in $servicesToRemove) { 
     Write-Host "Removing service: $service"
