@@ -1,5 +1,11 @@
 # ==============================================================================
 #  win11 Builder - [模块 11/11] ISO 最终打包与临时缓存清理 (src/10-PackageAndClean.ps1)
+#  重构要点：
+#   1. 单文件模式下，当 $global:enableEsdConversion = $false 时，不论来源是
+#      .esd 还是 .wim，一律直接输出 .wim，不再强制转 ESD。
+#   2. ESD 转换失败回退分支增加 $destWimPath 存在性校验，避免 Move-Item 抛错。
+#   3. 保留 ISO 模式 ESD 开关、oscdimg 探测/下载/PE 头校验、双模引导校验、
+#      打包参数与清理收尾全部逻辑。
 # ==============================================================================
 
 Write-Host "`n[步骤 12/12] 正在校验资产并执行最终打包流程..." -ForegroundColor Cyan
@@ -12,14 +18,15 @@ $destEsdPath = Join-Path $sourcesDir "install.esd"
 
 # ==============================================================================
 # 单文件模式：直接输出精简后的 WIM/ESD 文件，跳过 ISO 打包
+# 逻辑：仅当 $esdEnabled = $true 时才转 ESD；否则无论来源扩展名，一律输出 WIM
 # ==============================================================================
 if ($global:sourceMode -eq "2" -and $global:sourceFile -match '\.(wim|esd)$') {
     $sourceExt = [System.IO.Path]::GetExtension($global:sourceFile).ToLower()
     $sourceDir = Split-Path -Parent $global:sourceFile
     $sourceBaseName = [System.IO.Path]::GetFileNameWithoutExtension($global:sourceFile)
 
-    if ($sourceExt -eq '.esd' -or $esdEnabled) {
-        Write-Host "`n>>> 正在将精简后的 install.wim 转换为 ESD 高压格式..." -ForegroundColor Yellow
+    if ($esdEnabled) {
+        Write-Host "`n>>> [ESD 转换开启] 正在将精简后的 install.wim 转换为 ESD 高压格式..." -ForegroundColor Yellow
         if (Test-Path -LiteralPath $destWimPath) {
             & dism.exe /English /Export-Image "/SourceImageFile:$destWimPath" "/SourceIndex:1" "/DestinationImageFile:$destEsdPath" /Compress:recovery /CheckIntegrity
             if (Test-Path -LiteralPath $destEsdPath) {
@@ -27,17 +34,22 @@ if ($global:sourceMode -eq "2" -and $global:sourceFile -match '\.(wim|esd)$') {
                 Move-Item -LiteralPath $destEsdPath -Destination $outputFilePath -Force
                 Write-Host "[完成] 单文件 ESD 输出: $outputFilePath" -ForegroundColor Green
             } else {
-                Write-Host "[警告] ESD 转换异常，将直接导出原始 WIM。" -ForegroundColor Yellow
-                $outputFilePath = Join-Path $sourceDir "${sourceBaseName}_trim.wim"
-                Move-Item -LiteralPath $destWimPath -Destination $outputFilePath -Force
-                Write-Host "[完成] 单文件 WIM 输出: $outputFilePath" -ForegroundColor Green
+                Write-Host "[警告] ESD 转换异常，尝试回退输出 WIM。" -ForegroundColor Yellow
+                if (Test-Path -LiteralPath $destWimPath) {
+                    $outputFilePath = Join-Path $sourceDir "${sourceBaseName}_trim.wim"
+                    Move-Item -LiteralPath $destWimPath -Destination $outputFilePath -Force
+                    Write-Host "[完成] 单文件 WIM 输出 (回退): $outputFilePath" -ForegroundColor Green
+                } else {
+                    Write-Host "[严重错误] ESD 转换失败且 install.wim 不存在，无法输出！" -ForegroundColor Red
+                }
             }
         } else {
             Write-Host "[严重错误] 未找到 install.wim，无法导出！" -ForegroundColor Red
         }
     } else {
-        $outputFilePath = Join-Path $sourceDir "${sourceBaseName}_trim.wim"
+        Write-Host "`n>>> [ESD 转换关闭] 正在将精简后的映像直接输出为 WIM 格式..." -ForegroundColor Yellow
         if (Test-Path -LiteralPath $destWimPath) {
+            $outputFilePath = Join-Path $sourceDir "${sourceBaseName}_trim.wim"
             Move-Item -LiteralPath $destWimPath -Destination $outputFilePath -Force
             Write-Host "[完成] 单文件 WIM 输出: $outputFilePath" -ForegroundColor Green
         } else {
