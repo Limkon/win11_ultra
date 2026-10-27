@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-27 01:56:57 UTC
+#  生成时间: 2026-10-27 05:24:07 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -646,6 +646,12 @@ Write-Host "[完成] 系统主映像挂载成功，运行环境就绪。" -Foreg
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
+#  重构要点：
+#   1. 动态收集被移除 AppX 的 PackageFamilyName，写入全局供 06 模块落盘
+#      Deprovisioned 标记，阻止 Windows 在 OOBE/功能更新时重新预配。
+#   2. 保留原有语言/架构探针、框架白名单、物理粉碎、SystemApps 清理、
+#      关键组件校验、FOD 移除全部逻辑。
+#   3. PackageFamilyName 解析失败时仅警告，不中断流程。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
@@ -740,6 +746,8 @@ $appxExeMap = @{
 
 $removedPackageNames = New-Object System.Collections.Generic.List[string]
 $global:removedAppxExeNames = New-Object System.Collections.Generic.List[string]
+# 新增：收集被移除预装应用的 PackageFamilyName，供 06 模块写入 Deprovisioned
+$global:deprovisionedAppxFamilies = New-Object System.Collections.Generic.List[string]
 
 foreach ($package in $appxToRemove) {
     Write-Host "   正在移除应用: $($package.DisplayName)" -ForegroundColor DarkGray
@@ -749,6 +757,25 @@ foreach ($package in $appxToRemove) {
         Write-Host "   [警告] 该包受系统保护或已被占用，跳过: $($package.PackageName)" -ForegroundColor DarkYellow
     }
     $removedPackageNames.Add($package.PackageName)
+
+    # 解析 PackageFamilyName：预配包名可能是 FamilyName 本身，也可能是完整 PackageFullName
+    # FamilyName 形如 Name_PublisherId（PublisherId 为 13 位小写字母数字）
+    $familyName = $null
+    if ($package.PackageName -match '^([^_]+_[a-z0-9]{13})$') {
+        $familyName = $Matches[1]
+    } elseif ($package.PackageName -match '^([^_]+_[^_]+_[^_]+_[^_]+_[a-z0-9]{13})$') {
+        # 完整包名 Name_Version_Arch_Resource_PublisherId，取首尾拼成 FamilyName
+        $parts = $package.PackageName -split '_'
+        if ($parts.Count -ge 5) {
+            $familyName = "$($parts[0])_$($parts[-1])"
+        }
+    }
+
+    if ($familyName -and -not $global:deprovisionedAppxFamilies.Contains($familyName)) {
+        $global:deprovisionedAppxFamilies.Add($familyName)
+    } elseif (-not $familyName) {
+        Write-Host "   [提示] 无法解析 PackageFamilyName，跳过 Deprovisioned 标记: $($package.PackageName)" -ForegroundColor DarkGray
+    }
 
     foreach ($mapKey in $appxExeMap.Keys) {
         if ($package.PackageName -like "*$mapKey*") {
@@ -761,6 +788,8 @@ foreach ($package in $appxToRemove) {
         }
     }
 }
+
+Write-Host "   [Deprovision] 已收集 $($global:deprovisionedAppxFamilies.Count) 个包家族名，将在注册表阶段写入防重装标记。" -ForegroundColor DarkGray
 
 # 深度清理 WindowsApps 物理残留目录
 $windowsAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
@@ -1001,6 +1030,13 @@ Write-Host "[完成] 冗余物理文件与底层组件彻底清理完毕。" -Fo
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
+#  重构要点：
+#   1. 在 zSOFTWARE 挂载期间写入 AppxAllUserStore\Deprovisioned 标记，
+#      消费 03 模块收集的 $global:deprovisionedAppxFamilies，阻止应用复活。
+#   2. 服务删除阶段同时清理 ControlSet001 与 CurrentControlSet 双路径，
+#      避免离线 hive 中符号链接/实体差异导致的服务残留。
+#   3. 保留原有全部注册表优化、OpenWith/照片查看器修复、计划任务删除、
+#      Windows Update 禁用、服务删除逻辑。
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -1021,6 +1057,26 @@ foreach ($h in $hiveLoads) {
         pause
         exit 1
     }
+}
+
+# ==============================================================================
+# 1.2 写入 Appx Deprovisioned 标记，阻止已移除预装应用在 OOBE/更新时复活
+# ==============================================================================
+Write-Host "Writing Appx Deprovisioned markers to prevent bloatware re-provisioning..." -ForegroundColor Yellow
+
+$deprovisionedBase = "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned"
+if ($global:deprovisionedAppxFamilies -and $global:deprovisionedAppxFamilies.Count -gt 0) {
+    foreach ($familyName in $global:deprovisionedAppxFamilies) {
+        & reg.exe add "$deprovisionedBase\$familyName" /f 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "   [Deprovision] 已标记: $familyName" -ForegroundColor DarkGray
+        } else {
+            Write-Host "   [警告] 标记失败: $familyName (退出码 $LASTEXITCODE)" -ForegroundColor DarkYellow
+        }
+    }
+    Write-Host "   [完成] 共写入 $($global:deprovisionedAppxFamilies.Count) 个 Appx 防重装标记。" -ForegroundColor Green
+} else {
+    Write-Host "   [跳过] 未收集到任何 PackageFamilyName，未写入 Deprovisioned 标记。" -ForegroundColor DarkGray
 }
 
 # ==============================================================================
@@ -1246,7 +1302,9 @@ $servicesToRemove = @(
 )
 foreach ($service in $servicesToRemove) { 
     Write-Host "Removing service: $service"
+    # 双路径删除：ControlSet001 与 CurrentControlSet，避免离线 hive 符号链接差异导致残留
     & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$service" /f 2>&1 | Out-Null
+    & reg.exe delete "HKLM\zSYSTEM\CurrentControlSet\Services\$service" /f 2>&1 | Out-Null
 }
 Safely-UnloadHive -HiveName "HKLM\zSYSTEM" | Out-Null
 
@@ -2107,6 +2165,12 @@ if ($global:sourceMode -eq "2" -and $global:sourceFile -match '\.(wim|esd)$') {
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 11/11] ISO 最终打包与临时缓存清理 (src/10-PackageAndClean.ps1)
+#  重构要点：
+#   1. 单文件模式下，当 $global:enableEsdConversion = $false 时，不论来源是
+#      .esd 还是 .wim，一律直接输出 .wim，不再强制转 ESD。
+#   2. ESD 转换失败回退分支增加 $destWimPath 存在性校验，避免 Move-Item 抛错。
+#   3. 保留 ISO 模式 ESD 开关、oscdimg 探测/下载/PE 头校验、双模引导校验、
+#      打包参数与清理收尾全部逻辑。
 # ==============================================================================
 
 Write-Host "`n[步骤 12/12] 正在校验资产并执行最终打包流程..." -ForegroundColor Cyan
@@ -2119,14 +2183,15 @@ $destEsdPath = Join-Path $sourcesDir "install.esd"
 
 # ==============================================================================
 # 单文件模式：直接输出精简后的 WIM/ESD 文件，跳过 ISO 打包
+# 逻辑：仅当 $esdEnabled = $true 时才转 ESD；否则无论来源扩展名，一律输出 WIM
 # ==============================================================================
 if ($global:sourceMode -eq "2" -and $global:sourceFile -match '\.(wim|esd)$') {
     $sourceExt = [System.IO.Path]::GetExtension($global:sourceFile).ToLower()
     $sourceDir = Split-Path -Parent $global:sourceFile
     $sourceBaseName = [System.IO.Path]::GetFileNameWithoutExtension($global:sourceFile)
 
-    if ($sourceExt -eq '.esd' -or $esdEnabled) {
-        Write-Host "`n>>> 正在将精简后的 install.wim 转换为 ESD 高压格式..." -ForegroundColor Yellow
+    if ($esdEnabled) {
+        Write-Host "`n>>> [ESD 转换开启] 正在将精简后的 install.wim 转换为 ESD 高压格式..." -ForegroundColor Yellow
         if (Test-Path -LiteralPath $destWimPath) {
             & dism.exe /English /Export-Image "/SourceImageFile:$destWimPath" "/SourceIndex:1" "/DestinationImageFile:$destEsdPath" /Compress:recovery /CheckIntegrity
             if (Test-Path -LiteralPath $destEsdPath) {
@@ -2134,17 +2199,22 @@ if ($global:sourceMode -eq "2" -and $global:sourceFile -match '\.(wim|esd)$') {
                 Move-Item -LiteralPath $destEsdPath -Destination $outputFilePath -Force
                 Write-Host "[完成] 单文件 ESD 输出: $outputFilePath" -ForegroundColor Green
             } else {
-                Write-Host "[警告] ESD 转换异常，将直接导出原始 WIM。" -ForegroundColor Yellow
-                $outputFilePath = Join-Path $sourceDir "${sourceBaseName}_trim.wim"
-                Move-Item -LiteralPath $destWimPath -Destination $outputFilePath -Force
-                Write-Host "[完成] 单文件 WIM 输出: $outputFilePath" -ForegroundColor Green
+                Write-Host "[警告] ESD 转换异常，尝试回退输出 WIM。" -ForegroundColor Yellow
+                if (Test-Path -LiteralPath $destWimPath) {
+                    $outputFilePath = Join-Path $sourceDir "${sourceBaseName}_trim.wim"
+                    Move-Item -LiteralPath $destWimPath -Destination $outputFilePath -Force
+                    Write-Host "[完成] 单文件 WIM 输出 (回退): $outputFilePath" -ForegroundColor Green
+                } else {
+                    Write-Host "[严重错误] ESD 转换失败且 install.wim 不存在，无法输出！" -ForegroundColor Red
+                }
             }
         } else {
             Write-Host "[严重错误] 未找到 install.wim，无法导出！" -ForegroundColor Red
         }
     } else {
-        $outputFilePath = Join-Path $sourceDir "${sourceBaseName}_trim.wim"
+        Write-Host "`n>>> [ESD 转换关闭] 正在将精简后的映像直接输出为 WIM 格式..." -ForegroundColor Yellow
         if (Test-Path -LiteralPath $destWimPath) {
+            $outputFilePath = Join-Path $sourceDir "${sourceBaseName}_trim.wim"
             Move-Item -LiteralPath $destWimPath -Destination $outputFilePath -Force
             Write-Host "[完成] 单文件 WIM 输出: $outputFilePath" -ForegroundColor Green
         } else {
