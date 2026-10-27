@@ -1,11 +1,10 @@
 # ==============================================================================
 #  win11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
-#  [企业级重构]：全局交互二合一集中前置 + 倒计时防挂起 + 全流程静默流水线
+#  [企业级重构]：全局交互三合一集中前置 + 倒计时防挂起 + 全流程静默流水线
 # ==============================================================================
 
 # ----------------- 全局特性静态开关 -----------------
 # 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，直接打包 install.wim)
-# 消费方：10-PackageAndClean.ps1 开头读取 $global:enableEsdConversion
 $global:enableEsdConversion = $false
 # ----------------------------------------------------
 
@@ -22,7 +21,7 @@ if ($PSScriptRoot) {
 }
 Set-Location $scriptDir
 
-# 3. 检查并强制以管理员身份运行 (提权时 -File 传绝对路径，避免相对路径歧义)
+# 3. 检查并强制以管理员身份运行
 $adminSID = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
 $adminGroup = $adminSID.Translate([System.Security.Principal.NTAccount])
 $myWindowsID = [System.Security.Principal.WindowsIdentity]::GetCurrent()
@@ -101,8 +100,6 @@ Write-Host "工作目录锁定在: $workDir" -ForegroundColor Green
 Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 
 # ----------------- 7. 前置倒计时交互引擎函数 -----------------
-# 注：本函数与 01-Helpers.ps1 的 Read-InputWithTimeout 语义不同（本函数返回 Hashtable
-#     并区分 TimedOut/Value），且 00 先于 01 执行，故保留本地实现，请勿混用。
 function Read-ChoiceWithTimeout {
     param (
         [string]$PromptText = "请输入选项",
@@ -317,7 +314,7 @@ if ($global:enableEsdConversion) {
 }
 Write-Host "`n[就绪] 前置配置已全部锁定，后续构建流程将完全静默自动化运行！`n" -ForegroundColor Green
 
-# ----------------- 11. 环境深度解锁 (解决 Ctrl+C 导致的挂载死锁) -----------------
+# ----------------- 11. 初始化环境清理 -----------------
 Write-Host "[初始化] 正在深度清理历史挂载残留与注册表死锁..." -ForegroundColor DarkGray
 
 # 卸载可能残留的离线注册表
