@@ -2,7 +2,7 @@
 #  win11 Builder - [模块 10/11] 映像提交、二次重构与 WinPE/BCD 深度修补 (src/09-ExportAndPE.ps1)
 # ==============================================================================
 
-Write-Host "`n[步骤 11/11] 正在安全提交主映像并优化 WinPE/Legacy 引导资产..." -ForegroundColor Cyan
+Write-Host "`n[步骤 11/11] 正在安全提交主映像并优化引导资产..." -ForegroundColor Cyan
 
 $destWimPath   = Join-Path $sourcesDir "install.wim"
 $destWim2Path  = Join-Path $sourcesDir "install2.wim"
@@ -45,6 +45,14 @@ if (Test-Path -LiteralPath $destWim2Path) {
     Write-Host "[完成] install.wim 导出重构完毕，体积已达最佳压缩状态。" -ForegroundColor Green
 } else {
     Write-Host "[提示] 二次压缩镜像未能生成，安全保留原镜像继续推进。" -ForegroundColor Yellow
+}
+
+# ==============================================================================
+# 如果是单文件 WIM/ESD 模式，到此直接结束该模块，返回上一级以进入打包流程
+# ==============================================================================
+if ($global:sourceMode -eq "2" -and $global:sourceFile -match '\.(wim|esd)$') {
+    Write-Host "[提示] 当前为单文件处理模式，已跳过 boot.wim 和 BCD 修补工作。" -ForegroundColor DarkGray
+    return
 }
 
 # ----------------- 3. 稳固修补 boot.wim (双卷全覆盖·原地提交保全元数据) -----------------
@@ -139,7 +147,12 @@ for ($idx = 1; $idx -le $totalBootIndexes; $idx++) {
     [System.GC]::WaitForPendingFinalizers()
     foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
         if ($loadedHives -contains $h) {
-            Safely-UnloadHive -HiveName $h | Out-Null
+            # 使用内联重试，避免依赖外部函数
+            for ($i = 1; $i -le 5; $i++) {
+                & reg.exe unload "$h" 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) { break }
+                Start-Sleep -Milliseconds 600
+            }
         }
     }
 
