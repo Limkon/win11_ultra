@@ -2,7 +2,7 @@
 #  win11 Builder - [模块 11/11] ISO 最终打包与临时缓存清理 (src/10-PackageAndClean.ps1)
 # ==============================================================================
 
-Write-Host "`n[步骤 12/12] 正在校验引导资产并打包最终 ISO 镜像..." -ForegroundColor Cyan
+Write-Host "`n[步骤 12/12] 正在校验资产并执行最终打包流程..." -ForegroundColor Cyan
 
 # ----------------- 0. 响应该阶段 ESD 极限高压转换开关 -----------------
 $esdEnabled = if ($null -ne $global:enableEsdConversion) { [bool]$global:enableEsdConversion } else { $false }
@@ -10,9 +10,61 @@ $esdEnabled = if ($null -ne $global:enableEsdConversion) { [bool]$global:enableE
 $destWimPath = Join-Path $sourcesDir "install.wim"
 $destEsdPath = Join-Path $sourcesDir "install.esd"
 
+# ==============================================================================
+# 单文件模式：直接输出精简后的 WIM/ESD 文件，跳过 ISO 打包
+# ==============================================================================
+if ($global:sourceMode -eq "2" -and $global:sourceFile -match '\.(wim|esd)$') {
+    $sourceExt = [System.IO.Path]::GetExtension($global:sourceFile).ToLower()
+    $sourceDir = Split-Path -Parent $global:sourceFile
+    $sourceBaseName = [System.IO.Path]::GetFileNameWithoutExtension($global:sourceFile)
+
+    if ($sourceExt -eq '.esd' -or $esdEnabled) {
+        Write-Host "`n>>> 正在将精简后的 install.wim 转换为 ESD 高压格式..." -ForegroundColor Yellow
+        if (Test-Path -LiteralPath $destWimPath) {
+            & dism.exe /English /Export-Image "/SourceImageFile:$destWimPath" "/SourceIndex:1" "/DestinationImageFile:$destEsdPath" /Compress:recovery /CheckIntegrity
+            if (Test-Path -LiteralPath $destEsdPath) {
+                $outputFilePath = Join-Path $sourceDir "${sourceBaseName}_trim.esd"
+                Move-Item -LiteralPath $destEsdPath -Destination $outputFilePath -Force
+                Write-Host "[完成] 单文件 ESD 输出: $outputFilePath" -ForegroundColor Green
+            } else {
+                Write-Host "[警告] ESD 转换异常，将直接导出原始 WIM。" -ForegroundColor Yellow
+                $outputFilePath = Join-Path $sourceDir "${sourceBaseName}_trim.wim"
+                Move-Item -LiteralPath $destWimPath -Destination $outputFilePath -Force
+                Write-Host "[完成] 单文件 WIM 输出: $outputFilePath" -ForegroundColor Green
+            }
+        } else {
+            Write-Host "[严重错误] 未找到 install.wim，无法导出！" -ForegroundColor Red
+        }
+    } else {
+        $outputFilePath = Join-Path $sourceDir "${sourceBaseName}_trim.wim"
+        if (Test-Path -LiteralPath $destWimPath) {
+            Move-Item -LiteralPath $destWimPath -Destination $outputFilePath -Force
+            Write-Host "[完成] 单文件 WIM 输出: $outputFilePath" -ForegroundColor Green
+        } else {
+            Write-Host "[严重错误] 未找到 install.wim，无法导出！" -ForegroundColor Red
+        }
+    }
+
+    # 清理临时目录
+    Write-Host "`n正在清理临时工作区与残留挂载点..." -ForegroundColor DarkGray
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
+    Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+
+    if ($global:transcriptActive) {
+        Stop-Transcript
+        Start-Sleep -Milliseconds 300
+    }
+    Write-Host "`n[结束] 单文件精简流程完成。" -ForegroundColor Green
+    return
+}
+
+# ==============================================================================
+# ISO 模式：正常执行 ESD 转换（如果开启）与 oscdimg 打包流程
+# ==============================================================================
 if ($esdEnabled) {
     if (Test-Path -LiteralPath $destWimPath) {
-        Write-Host ">>> [ESD 转换开启] 正在将 install.wim 高压转换为 install.esd (此过程需要较多 CPU 资源)..." -ForegroundColor Yellow
+        Write-Host ">>> [ESD 转换开启] 正在将 install.wim 高压转换为 install.esd..." -ForegroundColor Yellow
         & dism.exe /English /Export-Image "/SourceImageFile:$destWimPath" "/SourceIndex:1" "/DestinationImageFile:$destEsdPath" /Compress:recovery /CheckIntegrity
 
         if (Test-Path -LiteralPath $destEsdPath) {
