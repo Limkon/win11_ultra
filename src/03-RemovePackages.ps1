@@ -51,6 +51,8 @@ if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
 # ----------------- 2. 移除预装 AppX (Bloatware) -----------------
 Write-Host "`n[2.1] 正在动态扫描并移除预装臃肿 AppX 应用包..." -ForegroundColor Cyan
 
+# 注意：保留了 *Paint* 和 *Notepad*，这二者包含深层文件关联，移除会导致“打开方式”列表渲染失败。
+# 相机已加入移除清单。
 $targetAppxPatterns = @(
     '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', 
     '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*', 
