@@ -21,6 +21,7 @@ $hideLocalAccountScreenValue = "true"
 $hideOnlineAccountScreensValue = "true"
 
 if ($mode -eq "1") {
+    # 全无人值守：注入预设账户与自动登录节点
     $inputUserEscaped = [System.Security.SecurityElement]::Escape($user)
     $inputPassEscaped = [System.Security.SecurityElement]::Escape($pass)
 
@@ -57,6 +58,7 @@ if ($mode -eq "1") {
     $hideLocalAccountScreenValue = "true"
     $hideOnlineAccountScreensValue = "true"
 } else {
+    # 半无人值守：剥离内置账户，开启本地账户输入屏，同时放开在线账户屏
     Write-Host "   [账户策略] 已剥离预置账户，装机后将由用户在 OOBE 原生界面自定用户名与密码。" -ForegroundColor DarkGray
     $userAccountsXmlFragment = ""
     $autoLogonXmlFragment    = ""
@@ -387,8 +389,8 @@ $scripts = @(
 			if (Test-Path $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; }
 		}
 
-		# 2. 异步粉碎自毁 Setup Scripts 目录
-		Start-Process -WindowStyle Hidden -FilePath "cmd.exe" -ArgumentList '/c timeout /t 3 /nobreak >nul &amp; for /l %i in (1,1,10) do (if exist "C:\Windows\Setup\Scripts" (rd /s /q "C:\Windows\Setup\Scripts" &amp; timeout /t 1 >nul) else (exit))'
+		# 2. 异步销毁临时脚本目录 (改为纯 PowerShell 安全写法，避免 cmd 死锁)
+		Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList "-NoProfile -Command `"Start-Sleep -Seconds 3; Remove-Item -LiteralPath 'C:\Windows\Setup\Scripts' -Recurse -Force -ErrorAction SilentlyContinue`""
 	};
 );
 
@@ -434,7 +436,7 @@ $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
 if (-not (Test-Path -LiteralPath $pantherDir)) { New-Item -ItemType Directory -Path $pantherDir -Force | Out-Null }
 
-$utf8Encoding = New-Object System.Text.UTF8Encoding($false)
+$utf8Encoding = [System.Text.Encoding]::UTF8
 
 # 核心修复：强制解除只读并覆盖写入的通用函数
 function Write-XmlSafely {
