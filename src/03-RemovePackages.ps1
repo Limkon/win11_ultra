@@ -1,5 +1,11 @@
 # ==============================================================================
 #  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
+#  重构要点：
+#   1. 动态收集被移除 AppX 的 PackageFamilyName，写入全局供 06 模块落盘
+#      Deprovisioned 标记，阻止 Windows 在 OOBE/功能更新时重新预配。
+#   2. 保留原有语言/架构探针、框架白名单、物理粉碎、SystemApps 清理、
+#      关键组件校验、FOD 移除全部逻辑。
+#   3. PackageFamilyName 解析失败时仅警告，不中断流程。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
@@ -94,6 +100,8 @@ $appxExeMap = @{
 
 $removedPackageNames = New-Object System.Collections.Generic.List[string]
 $global:removedAppxExeNames = New-Object System.Collections.Generic.List[string]
+# 新增：收集被移除预装应用的 PackageFamilyName，供 06 模块写入 Deprovisioned
+$global:deprovisionedAppxFamilies = New-Object System.Collections.Generic.List[string]
 
 foreach ($package in $appxToRemove) {
     Write-Host "   正在移除应用: $($package.DisplayName)" -ForegroundColor DarkGray
@@ -103,6 +111,25 @@ foreach ($package in $appxToRemove) {
         Write-Host "   [警告] 该包受系统保护或已被占用，跳过: $($package.PackageName)" -ForegroundColor DarkYellow
     }
     $removedPackageNames.Add($package.PackageName)
+
+    # 解析 PackageFamilyName：预配包名可能是 FamilyName 本身，也可能是完整 PackageFullName
+    # FamilyName 形如 Name_PublisherId（PublisherId 为 13 位小写字母数字）
+    $familyName = $null
+    if ($package.PackageName -match '^([^_]+_[a-z0-9]{13})$') {
+        $familyName = $Matches[1]
+    } elseif ($package.PackageName -match '^([^_]+_[^_]+_[^_]+_[^_]+_[a-z0-9]{13})$') {
+        # 完整包名 Name_Version_Arch_Resource_PublisherId，取首尾拼成 FamilyName
+        $parts = $package.PackageName -split '_'
+        if ($parts.Count -ge 5) {
+            $familyName = "$($parts[0])_$($parts[-1])"
+        }
+    }
+
+    if ($familyName -and -not $global:deprovisionedAppxFamilies.Contains($familyName)) {
+        $global:deprovisionedAppxFamilies.Add($familyName)
+    } elseif (-not $familyName) {
+        Write-Host "   [提示] 无法解析 PackageFamilyName，跳过 Deprovisioned 标记: $($package.PackageName)" -ForegroundColor DarkGray
+    }
 
     foreach ($mapKey in $appxExeMap.Keys) {
         if ($package.PackageName -like "*$mapKey*") {
@@ -115,6 +142,8 @@ foreach ($package in $appxToRemove) {
         }
     }
 }
+
+Write-Host "   [Deprovision] 已收集 $($global:deprovisionedAppxFamilies.Count) 个包家族名，将在注册表阶段写入防重装标记。" -ForegroundColor DarkGray
 
 # 深度清理 WindowsApps 物理残留目录
 $windowsAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
