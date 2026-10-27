@@ -1,11 +1,11 @@
 # ==============================================================================
 #  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
 #  重构要点：
-#   1. 动态收集被移除 AppX 的 PackageFamilyName，写入全局供 06 模块落盘
-#      Deprovisioned 标记，阻止 Windows 在 OOBE/功能更新时重新预配。
-#   2. 保留原有语言/架构探针、框架白名单、物理粉碎、SystemApps 清理、
+#   1. 新增 Edge 与 Cortana 的 Appx 匹配模式，纳入移除与 Deprovisioned 标记。
+#   2. 重写 PackageFamilyName 解析，兼容 Name_Version_Arch_Resource_PublisherId
+#      以及 Name_Version_Arch__PublisherId（空资源段）两种完整包名格式。
+#   3. 保留原有语言/架构探针、框架白名单、物理粉碎、SystemApps 清理、
 #      关键组件校验、FOD 移除全部逻辑。
-#   3. PackageFamilyName 解析失败时仅警告，不中断流程。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
@@ -38,8 +38,9 @@ foreach ($line in ($imageInfo -split '\r?\n')) {
 }
 if (-not $matchedArch) { $global:architecture = "amd64" }
 
-# ----------------- 2. 移除预装 AppX (Bloatware) -----------------
+# ----------------- 2. 移除预装 AppX (Bloatware + Edge + Cortana) -----------------
 # 注意：保留 *Paint* 和 *Notepad*；相机保留在精简列表中（按之前逻辑）。
+# Edge 与 Cortana 通过精确模式纳入移除，确保进入 Deprovisioned 标记流程。
 $targetAppxPatterns = @(
     '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', 
     '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*', 
@@ -48,7 +49,9 @@ $targetAppxPatterns = @(
     '*QuickAssist*', '*PeopleExperienceHost*', '*PinningConfirmationDialog*', 
     '*SecureAssessmentBrowser*', '*CommunicationsApps*', '*Copilot*', 
     '*AV1VideoExtension*', '*HEIFImageExtension*', '*HEVCVideoExtension*', 
-    '*WebpImageExtension*', '*Cortana*'
+    '*WebpImageExtension*', '*Cortana*',
+    '*MicrosoftEdge.Stable*', '*MicrosoftEdge*', '*Microsoft.MicrosoftEdge*',
+    '*549981C3F5F10*'
 )
 
 # 框架组件保护白名单：任何通配符都不得误伤这些包
@@ -96,11 +99,14 @@ $appxExeMap = @{
     'Microsoft.BingNews'                  = @('Microsoft.BingNews.exe')
     'Microsoft.BingWeather'               = @('Microsoft.BingWeather.exe')
     'Microsoft.WindowsCamera'             = @('WindowsCamera.exe')
+    'Microsoft.MicrosoftEdge.Stable'      = @('msedge.exe', 'MicrosoftEdge.exe')
+    'Microsoft.MicrosoftEdge'             = @('MicrosoftEdge.exe')
+    'Microsoft.549981C3F5F10'             = @('Cortana.exe')
 }
 
 $removedPackageNames = New-Object System.Collections.Generic.List[string]
 $global:removedAppxExeNames = New-Object System.Collections.Generic.List[string]
-# 新增：收集被移除预装应用的 PackageFamilyName，供 06 模块写入 Deprovisioned
+# 收集被移除预装应用的 PackageFamilyName，供 06 模块写入 Deprovisioned
 $global:deprovisionedAppxFamilies = New-Object System.Collections.Generic.List[string]
 
 foreach ($package in $appxToRemove) {
@@ -112,16 +118,18 @@ foreach ($package in $appxToRemove) {
     }
     $removedPackageNames.Add($package.PackageName)
 
-    # 解析 PackageFamilyName：预配包名可能是 FamilyName 本身，也可能是完整 PackageFullName
-    # FamilyName 形如 Name_PublisherId（PublisherId 为 13 位小写字母数字）
+    # 解析 PackageFamilyName：统一取首段 Name + 末段 PublisherId（13 位小写字母数字）
+    # 兼容：
+    #   Name_PublisherId
+    #   Name_Version_Arch_Resource_PublisherId
+    #   Name_Version_Arch__PublisherId（空资源段）
     $familyName = $null
-    if ($package.PackageName -match '^([^_]+_[a-z0-9]{13})$') {
-        $familyName = $Matches[1]
-    } elseif ($package.PackageName -match '^([^_]+_[^_]+_[^_]+_[^_]+_[a-z0-9]{13})$') {
-        # 完整包名 Name_Version_Arch_Resource_PublisherId，取首尾拼成 FamilyName
-        $parts = $package.PackageName -split '_'
-        if ($parts.Count -ge 5) {
-            $familyName = "$($parts[0])_$($parts[-1])"
+    $pkgParts = $package.PackageName -split '_'
+    if ($pkgParts.Count -ge 2) {
+        $firstPart = $pkgParts[0]
+        $lastPart = $pkgParts[-1]
+        if ($lastPart -match '^[a-z0-9]{13}$') {
+            $familyName = "$($firstPart)_$($lastPart)"
         }
     }
 
@@ -162,7 +170,7 @@ if (Test-Path -LiteralPath $windowsAppsDir) {
 # ----------------- 3. 暴力物理粉碎系统级残留 (断根 Edge/Cortana) -----------------
 $sysAppsPath = Join-Path $scratchDir "Windows\SystemApps"
 if (Test-Path -LiteralPath $sysAppsPath) {
-    $sysAppsToDelete = @("*Cortana*", "*Edge*", "*PeopleExperienceHost*", "*SecureAssessmentBrowser*")
+    $sysAppsToDelete = @("*Cortana*", "*Edge*", "*PeopleExperienceHost*", "*SecureAssessmentBrowser*", "*549981C3F5F10*")
     foreach ($pattern in $sysAppsToDelete) {
         $items = Get-ChildItem -Path $sysAppsPath -Filter $pattern -Directory -ErrorAction SilentlyContinue
         foreach ($item in $items) {
