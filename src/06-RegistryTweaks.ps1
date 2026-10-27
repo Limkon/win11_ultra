@@ -1,5 +1,12 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
+#  重构要点：
+#   1. 在 zSOFTWARE 挂载期间写入 AppxAllUserStore\Deprovisioned 标记，
+#      消费 03 模块收集的 $global:deprovisionedAppxFamilies，阻止应用复活。
+#   2. 服务删除阶段同时清理 ControlSet001 与 CurrentControlSet 双路径，
+#      避免离线 hive 中符号链接/实体差异导致的服务残留。
+#   3. 保留原有全部注册表优化、OpenWith/照片查看器修复、计划任务删除、
+#      Windows Update 禁用、服务删除逻辑。
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -20,6 +27,26 @@ foreach ($h in $hiveLoads) {
         pause
         exit 1
     }
+}
+
+# ==============================================================================
+# 1.2 写入 Appx Deprovisioned 标记，阻止已移除预装应用在 OOBE/更新时复活
+# ==============================================================================
+Write-Host "Writing Appx Deprovisioned markers to prevent bloatware re-provisioning..." -ForegroundColor Yellow
+
+$deprovisionedBase = "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned"
+if ($global:deprovisionedAppxFamilies -and $global:deprovisionedAppxFamilies.Count -gt 0) {
+    foreach ($familyName in $global:deprovisionedAppxFamilies) {
+        & reg.exe add "$deprovisionedBase\$familyName" /f 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "   [Deprovision] 已标记: $familyName" -ForegroundColor DarkGray
+        } else {
+            Write-Host "   [警告] 标记失败: $familyName (退出码 $LASTEXITCODE)" -ForegroundColor DarkYellow
+        }
+    }
+    Write-Host "   [完成] 共写入 $($global:deprovisionedAppxFamilies.Count) 个 Appx 防重装标记。" -ForegroundColor Green
+} else {
+    Write-Host "   [跳过] 未收集到任何 PackageFamilyName，未写入 Deprovisioned 标记。" -ForegroundColor DarkGray
 }
 
 # ==============================================================================
@@ -245,7 +272,9 @@ $servicesToRemove = @(
 )
 foreach ($service in $servicesToRemove) { 
     Write-Host "Removing service: $service"
+    # 双路径删除：ControlSet001 与 CurrentControlSet，避免离线 hive 符号链接差异导致残留
     & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$service" /f 2>&1 | Out-Null
+    & reg.exe delete "HKLM\zSYSTEM\CurrentControlSet\Services\$service" /f 2>&1 | Out-Null
 }
 Safely-UnloadHive -HiveName "HKLM\zSYSTEM" | Out-Null
 
