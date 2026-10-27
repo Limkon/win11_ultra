@@ -241,4 +241,12 @@ $servicesToRemove = @(
     'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
     'BluetoothUserService', 'wuauserv', 'UsoSvc', 'WaaSMedicSVC',
     'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService',
-    'WinDefend', 'WdNisSvc', 'SecurityHealth
+    'WinDefend', 'WdNisSvc', 'SecurityHealthService'
+)
+foreach ($service in $servicesToRemove) { 
+    Write-Host "Removing service: $service"
+    & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$service" /f 2>&1 | Out-Null
+}
+Safely-UnloadHive -HiveName "HKLM\zSYSTEM" | Out-Null
+
+Write-Host "[完成] 离线注册表配置与多余服务清理全部完毕。" -ForegroundColor Green
