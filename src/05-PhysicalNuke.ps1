@@ -1,5 +1,11 @@
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 物理文件实体清理 (src/05-PhysicalNuke.ps1)
+#  重构要点：
+#   1. 移除对 Windows Defender 的物理删除（目录、文件、ProgramData 定义），
+#      改由 06 模块“仅禁用服务 + 策略”，避免触发系统自愈机制。
+#   2. 保留 Edge / OneDrive 的地毯式物理粉碎（含 WinSxS 组件目录）。
+#   3. 保留字体、语音、输入法、临时目录、Web 壁纸、Help、Cursors、
+#      Native Images、WinRE 占位等全部原有清理逻辑。
 # ==============================================================================
 
 Write-Host "`n[步骤 7/11] 正在执行系统冗余物理文件清理..." -ForegroundColor Cyan
@@ -39,8 +45,8 @@ foreach ($p in $nativeImagePaths) {
     Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# 5. 全版本通用：地毯式清理 Edge、OneDrive、Defender 以及旧版残留
-Write-Host "Removing Edge, WinRE, OneDrive, and Defender (Universal Search)..." -ForegroundColor Yellow
+# 5. 地毯式清理 Edge、OneDrive（不含 Defender，Defender 改为 06 模块仅禁用）
+Write-Host "Removing Edge and OneDrive (Universal Search)..." -ForegroundColor Yellow
 
 $searchBases = @(
     "$scratchDir\Program Files",
@@ -48,10 +54,9 @@ $searchBases = @(
     "$scratchDir\Windows\System32",
     "$scratchDir\Windows\SysWOW64",
     "$scratchDir\Windows\WinSxS",
-    "$scratchDir\Windows\SystemApps",
-    "$scratchDir\ProgramData\Microsoft\Windows Defender"
+    "$scratchDir\Windows\SystemApps"
 )
-$patternsToDelete = @("*Edge*", "*MicrosoftEdge*", "*OneDrive*", "*Windows Defender*", "*WinDefend*")
+$patternsToDelete = @("*Edge*", "*MicrosoftEdge*", "*OneDrive*")
 
 foreach ($base in $searchBases) {
     if (Test-Path -LiteralPath $base) {
