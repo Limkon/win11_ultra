@@ -27,6 +27,7 @@ foreach ($h in $hiveLoads) {
 # ==============================================================================
 Write-Host "Repairing OpenWith application associations and restoring Photo Viewer..." -ForegroundColor Yellow
 
+# 步骤 A: 清理已删 AppX 产生的死链
 if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     $commonExtensions = @(
         '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.heic', '.heif',
@@ -45,6 +46,7 @@ if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     }
 }
 
+# 步骤 B: 强制恢复 Notepad 核心关联
 $essentialApps = @(
     @{ Exe = 'notepad.exe'; Name = 'Notepad' }
 )
@@ -57,12 +59,20 @@ foreach ($app in $essentialApps) {
 & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\.txt\OpenWithList\notepad.exe' '/ve' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\.txt\OpenWithProgids' '/v' 'txtfile' '/t' 'REG_NONE' '/d' '' '/f' 2>&1 | Out-Null
 
-# 恢复 Windows 照片查看器
+# 步骤 C: 强制恢复 Windows 照片查看器 (Photo Viewer) 的注册与调用权限
 $photoViewerCroot = 'HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities'
 & 'reg' 'add' "$photoViewerCroot" '/v' 'ApplicationName' '/t' 'REG_SZ' '/d' '@%SystemRoot%\System32\PhotoViewer.dll,-24513' '/f' 2>&1 | Out-Null
 & 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.bmp' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.dib' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.gif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpe' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpeg' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
 & 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpg' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jfif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
 & 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.png' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Png' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.tif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
+& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.tiff' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
+
 & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll' '/v' 'FriendlyAppName' '/t' 'REG_SZ' '/d' '@%SystemRoot%\System32\PhotoViewer.dll,-24513' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll\shell\open\command' '/ve' '/t' 'REG_SZ' '/d' 'rundll32.exe "%SystemRoot%\System32\PhotoViewer.dll", ImageView_Fullscreen %1' '/f' 2>&1 | Out-Null
 
@@ -77,7 +87,9 @@ Write-Host "Configuring Kernel ELAM & EarlyLaunch bypass..." -ForegroundColor Ye
 
 Write-Host "Bypassing system requirements(on the system image):"
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+& 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassCPUCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassRAMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassSecureBootCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
@@ -209,12 +221,22 @@ Write-Host "Disabling Windows Update..."
 & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /f 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' '/v' 'NoAutoUpdate' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# ==============================================================================
 # 3. 卸载并释放离线配置单元
-# ==============================================================================
 Write-Host "Unmounting Registry..."
 foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
-    Safely-UnloadHive -HiveName $h | Out-Null
+    if (Test-Path "HKLM:\$h") {
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
+        Start-Sleep -Milliseconds 500
+        & reg.exe unload "$h" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            for ($i = 1; $i -le 5; $i++) {
+                Start-Sleep -Seconds 1
+                & reg.exe unload "$h" 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) { break }
+            }
+        }
+    }
 }
 
 # 4. 重新装载 SYSTEM 单元以深度清除多余服务实体
@@ -237,6 +259,14 @@ foreach ($service in $servicesToRemove) {
     Write-Host "Removing service: $service"
     & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$service" /f 2>&1 | Out-Null
 }
-Safely-UnloadHive -HiveName "HKLM\zSYSTEM" | Out-Null
+
+# 卸载 zSYSTEM
+& reg.exe unload "HKLM\zSYSTEM" 2>&1 | Out-Null
+for ($i = 1; $i -le 5; $i++) {
+    if (Test-Path "HKLM:\zSYSTEM") {
+        Start-Sleep -Seconds 1
+        & reg.exe unload "HKLM\zSYSTEM" 2>&1 | Out-Null
+    } else { break }
+}
 
 Write-Host "[完成] 离线注册表配置与多余服务清理全部完毕。" -ForegroundColor Green
