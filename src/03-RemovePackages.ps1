@@ -11,48 +11,29 @@ foreach ($line in ($imageIntl -split '\r?\n')) {
     if ($line -match 'Default system UI language\s*:\s*([a-zA-Z]{2}-[a-zA-Z]{2})') {
         $global:languageCode = $Matches[1].Trim()
         $matchedLang = $true
-        Write-Host "检测到默认系统 UI 语言代码: $global:languageCode" -ForegroundColor Green
         break
     }
 }
+if (-not $matchedLang) { $global:languageCode = "zh-CN" }
 
-if (-not $matchedLang -or [string]::IsNullOrWhiteSpace($global:languageCode)) {
-    $global:languageCode = "zh-CN"
-    Write-Host "[提示] 未能从映像中探测到明确的 UI 语言代码，安全回退默认值: $global:languageCode" -ForegroundColor Yellow
-}
-
-# 探查目标映像处理器架构
 $destWimPath = Join-Path $sourcesDir "install.wim"
 $imageInfo = & dism.exe /English /Get-WimInfo "/wimFile:$destWimPath" "/index:1"
 $matchedArch = $false
 foreach ($line in ($imageInfo -split '\r?\n')) {
     if ($line -match 'Architecture\s*:\s*(.+)$') {
         $rawArch = $Matches[1].Trim().ToLower()
-        if ($rawArch -eq 'x64' -or $rawArch -eq 'amd64') {
-            $global:architecture = 'amd64'
-        } elseif ($rawArch -eq 'arm64') {
-            $global:architecture = 'arm64'
-        } elseif ($rawArch -eq 'x86') {
-            $global:architecture = 'x86'
-        } else {
-            $global:architecture = $rawArch
-        }
+        if ($rawArch -eq 'x64' -or $rawArch -eq 'amd64') { $global:architecture = 'amd64' }
+        elseif ($rawArch -eq 'arm64') { $global:architecture = 'arm64' }
+        elseif ($rawArch -eq 'x86') { $global:architecture = 'x86' }
+        else { $global:architecture = $rawArch }
         $matchedArch = $true
-        Write-Host "检测到映像处理器架构: $global:architecture" -ForegroundColor Green
         break
     }
 }
-
-if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
-    $global:architecture = "amd64"
-    Write-Host "[提示] 架构信息未能自动解析，默认回退安全值: amd64" -ForegroundColor Yellow
-}
+if (-not $matchedArch) { $global:architecture = "amd64" }
 
 # ----------------- 2. 移除预装 AppX (Bloatware) -----------------
-Write-Host "`n[2.1] 正在动态扫描并移除预装臃肿 AppX 应用包..." -ForegroundColor Cyan
-
-# 注意：保留了 *Paint* 和 *Notepad*，这二者包含深层文件关联，移除会导致“打开方式”列表渲染失败。
-# 相机已加入移除清单。
+# 注意：保留 *Paint* 和 *Notepad*；相机保留在精简列表中（按之前逻辑）。
 $targetAppxPatterns = @(
     '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', 
     '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*', 
@@ -95,6 +76,7 @@ foreach ($pkg in $provisionedPackages) {
 Write-Host "   [框架保护] 已自动拦截保留 $($appxToKeep.Count) 个核心依赖框架。" -ForegroundColor DarkGray
 Write-Host "   [准备移除] 检测到 $($appxToRemove.Count) 个预装应用符合精简规则。" -ForegroundColor Yellow
 
+# AppX 包名 -> HKCR\Applications 下对应 exe 名的映射 (用于后续 06 模块修复关联)
 $appxExeMap = @{
     'Microsoft.Windows.Photos'            = @('Photos.exe', 'Microsoft.Photos.exe')
     'Microsoft.ScreenSketch'              = @('SnippingTool.exe', 'ScreenSketch.exe')
@@ -148,8 +130,7 @@ if (Test-Path -LiteralPath $windowsAppsDir) {
     }
 }
 
-# ----------------- 3. 暴力物理粉碎系统级残留 (彻底断根 Edge/Cortana) -----------------
-Write-Host "`n[2.2] 正在暴力物理粉碎 SystemApps 顽固组件..." -ForegroundColor Yellow
+# ----------------- 3. 暴力物理粉碎系统级残留 (断根 Edge/Cortana) -----------------
 $sysAppsPath = Join-Path $scratchDir "Windows\SystemApps"
 if (Test-Path -LiteralPath $sysAppsPath) {
     $sysAppsToDelete = @("*Cortana*", "*Edge*", "*PeopleExperienceHost*", "*SecureAssessmentBrowser*")
@@ -164,7 +145,7 @@ if (Test-Path -LiteralPath $sysAppsPath) {
     }
 }
 
-# 完整性校验
+# 关键组件完整性校验
 $openWithExe = Join-Path $scratchDir "Windows\System32\OpenWith.exe"
 $shell32Dll  = Join-Path $scratchDir "Windows\System32\shell32.dll"
 $shCoreDll   = Join-Path $scratchDir "Windows\System32\shcore.dll"
@@ -175,8 +156,6 @@ foreach ($critical in @($openWithExe, $shell32Dll, $shCoreDll)) {
 }
 
 # ----------------- 4. 移除系统底层功能包 Packages (FOD) -----------------
-Write-Host "`n[2.3] 正在动态扫描系统底层按需功能包 (FOD)..." -ForegroundColor Cyan
-
 $packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
