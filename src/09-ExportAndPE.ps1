@@ -147,12 +147,7 @@ for ($idx = 1; $idx -le $totalBootIndexes; $idx++) {
     [System.GC]::WaitForPendingFinalizers()
     foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
         if ($loadedHives -contains $h) {
-            # 使用内联重试，避免依赖外部函数
-            for ($i = 1; $i -le 5; $i++) {
-                & reg.exe unload "$h" 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0) { break }
-                Start-Sleep -Milliseconds 600
-            }
+            Safely-UnloadHive -HiveName $h | Out-Null
         }
     }
 
