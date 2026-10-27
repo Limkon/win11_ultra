@@ -1,12 +1,14 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
 #  重构要点：
-#   1. 在 zSOFTWARE 挂载期间写入 AppxAllUserStore\Deprovisioned 标记，
-#      消费 03 模块收集的 $global:deprovisionedAppxFamilies，阻止应用复活。
-#   2. 服务删除阶段同时清理 ControlSet001 与 CurrentControlSet 双路径，
-#      避免离线 hive 中符号链接/实体差异导致的服务残留。
-#   3. 保留原有全部注册表优化、OpenWith/照片查看器修复、计划任务删除、
-#      Windows Update 禁用、服务删除逻辑。
+#   1. Defender 改为“仅禁用”：保留策略写入与服务 Start=4，不再删除
+#      WinDefend/WdNisSvc/SecurityHealthService 服务注册表键，避免触发自愈。
+#   2. Edge 保留物理删除配套：继续删除 edgeupdate/edgeupdatem/
+#      MicrosoftEdgeElevationService 服务键与卸载注册项。
+#   3. 保留 AppxAllUserStore\Deprovisioned 标记写入，消费 03 模块收集的
+#      $global:deprovisionedAppxFamilies（含 Edge 与 Cortana）。
+#   4. 保留 OpenWith/照片查看器修复、硬件豁免、赞助应用/遥测/Copilot/
+#      Teams/Outlook 禁用、计划任务删除、Windows Update 禁用、双路径服务删除。
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -30,7 +32,7 @@ foreach ($h in $hiveLoads) {
 }
 
 # ==============================================================================
-# 1.2 写入 Appx Deprovisioned 标记，阻止已移除预装应用在 OOBE/更新时复活
+# 1.2 写入 Appx Deprovisioned 标记，阻止已移除预装应用（含 Edge/Cortana）复活
 # ==============================================================================
 Write-Host "Writing Appx Deprovisioned markers to prevent bloatware re-provisioning..." -ForegroundColor Yellow
 
@@ -191,9 +193,9 @@ Write-Host "Prevent installation of New Outlook":
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail' '/v' 'PreventRun' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
 # ==============================================================================
-# 2.5 终极拔管：彻底封杀 Edge 和 Windows Defender
+# 2.5 Edge 物理删除配套：策略拦截 + 服务键删除（Defender 改为仅禁用）
 # ==============================================================================
-Write-Host "Disabling Edge and Windows Defender at the kernel and policy level..." -ForegroundColor Yellow
+Write-Host "Disabling Edge at the kernel and policy level (Defender: disable-only)..." -ForegroundColor Yellow
 
 # Edge 策略拦截
 & reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
@@ -205,7 +207,7 @@ foreach ($svc in $edgeServices) {
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\EdgeUpdate' '/v' 'DoNotUpdateToEdgeWithChromium' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'UpdateDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
 
-# Defender 策略拦截
+# Defender 策略拦截（保留策略，不删服务键）
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender' '/v' 'DisableAntiSpyware' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender' '/v' 'DisableAntiVirus' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection' '/v' 'DisableBehaviorMonitoring' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
@@ -267,8 +269,7 @@ $servicesToRemove = @(
     'Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 
     'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
     'BluetoothUserService', 'wuauserv', 'UsoSvc', 'WaaSMedicSVC',
-    'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService',
-    'WinDefend', 'WdNisSvc', 'SecurityHealthService'
+    'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService'
 )
 foreach ($service in $servicesToRemove) { 
     Write-Host "Removing service: $service"
