@@ -1,12 +1,12 @@
 # ==============================================================================
 #  win11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
-#  [企业级重构]：全局交互三合一集中前置 + 倒计时防挂起 + 全流程静默流水线
+#  [企业级重构]：全局交互五合一集中前置 + 倒计时防挂起 + 全流程静默流水线
 # ==============================================================================
 
-# ----------------- 全局特性静态开关 -----------------
-# 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，直接打包 install.wim)
+# ----------------- 全局特性静态开关 (作为交互默认值来源) -----------------
+# 是否将最终映像转换为 ESD 极限压缩格式 (默认 $false 关闭，交互中可临时开启)
 $global:enableEsdConversion = $false
-# ----------------------------------------------------
+# ------------------------------------------------------------------------
 
 # 1. 确保正确的执行策略
 if ((Get-ExecutionPolicy) -eq 'Restricted') {
@@ -85,21 +85,7 @@ Write-Host " win11 Builder (全功能模块化·工业级透明稳定版) " -For
 Write-Host " 日志文件: $logFile" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-# 6. 工作目录配置 (默认定向到 D 盘，若无则回退系统盘)
-$targetDisk = "D:\"
-if (-not (Test-Path $targetDisk)) {
-    Write-Host "[提示] 未检测到 D 盘，工作目录自动回退到系统盘 $($env:SystemDrive)..." -ForegroundColor Yellow
-    $targetDisk = "$($env:SystemDrive)\"
-}
-
-$scratchDir  = Join-Path $targetDisk "scratchdir"
-$workDir     = Join-Path $targetDisk "win11"
-$sourcesDir  = Join-Path $workDir "sources"
-
-Write-Host "工作目录锁定在: $workDir" -ForegroundColor Green
-Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
-
-# ----------------- 7. 前置倒计时交互引擎函数 -----------------
+# ----------------- 6. 前置倒计时交互引擎函数 -----------------
 function Read-ChoiceWithTimeout {
     param (
         [string]$PromptText = "请输入选项",
@@ -206,10 +192,10 @@ function Read-StringWithTimeout {
     }
 }
 
-# ----------------- 8. 前置配置 1：选择精简制作模式 -----------------
+# ----------------- 7. 前置配置 1/5：选择精简制作模式 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " [配置 1/3] 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
+Write-Host " [配置 1/5] 请选择精简制作模式 (Trim Mode):" -ForegroundColor Magenta
 Write-Host " [1] 普通精简 (推荐: 极速流畅、稳定平衡、保留组件服务架构)" -ForegroundColor Green
 Write-Host " [2] 极限压榨 (全版本自适应 WinSxS 瘦身 + 注册表物理抹杀服务)" -ForegroundColor Red
 Write-Host "==========================================================" -ForegroundColor Magenta
@@ -223,10 +209,10 @@ if ($trimChoice -eq "2") {
     Write-Host ">>> 已确认: [1] 普通精简模式" -ForegroundColor Green
 }
 
-# ----------------- 9. 前置配置 2：选择无人值守引导模式 -----------------
+# ----------------- 8. 前置配置 2/5：选择无人值守引导模式 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
-Write-Host " [配置 2/3] 请选择 Windows 安装引导模式 (Unattend Mode):" -ForegroundColor Magenta
+Write-Host " [配置 2/5] 请选择 Windows 安装引导模式 (Unattend Mode):" -ForegroundColor Magenta
 Write-Host " [1] 全无人值守 (全自动安装、自动创建指定账户并自动登录)" -ForegroundColor Green
 Write-Host " [2] 半无人值守 (跳过硬件检测限制，在 OOBE 阶段手动输入用户名/密码)" -ForegroundColor Yellow
 Write-Host "==========================================================" -ForegroundColor Magenta
@@ -259,10 +245,105 @@ if ($unattendChoice -eq "2") {
     Write-Host ">>> [账户锁定] 用户名: $global:customUser | 密码: $(if ([string]::IsNullOrEmpty($global:customPass)) { '(留空)' } else { '******' })" -ForegroundColor DarkGray
 }
 
-# ----------------- 10. 前置配置 3：源文件获取方式 -----------------
+# ----------------- 9. 前置配置 3/5：ESD 极限高压转换开关 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " [配置 3/3] 请选择 Windows 11 源文件获取方式:" -ForegroundColor Cyan
+Write-Host " [配置 3/5] 是否启用 ESD 极限高压转换 (最终映像格式):" -ForegroundColor Cyan
+Write-Host " [1] 是 (转换为 install.esd, 体积更小, 压缩耗时更长)" -ForegroundColor Yellow
+Write-Host " [2] 否 (直接打包 install.wim, 速度快, 兼容性最佳) [推荐]" -ForegroundColor Green
+Write-Host "==========================================================" -ForegroundColor Cyan
+
+# 静态开关作为交互默认值：$true -> 默认1(是)，$false -> 默认2(否)
+$esdDefaultChoice = if ($global:enableEsdConversion) { "1" } else { "2" }
+$esdChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2] (倒计时结束默认: 否)" -Seconds 15 -DefaultChoice $esdDefaultChoice
+
+if ($esdChoice -eq "1") {
+    $global:enableEsdConversion = $true
+    Write-Host ">>> 已确认: [是] 启用 ESD 极限高压转换" -ForegroundColor Yellow
+} else {
+    $global:enableEsdConversion = $false
+    Write-Host ">>> 已确认: [否] 直接输出 install.wim" -ForegroundColor Green
+}
+
+# ----------------- 10. 前置配置 4/5：工作目录盘符选择 -----------------
+Write-Host ""
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host " [配置 4/5] 请选择工作目录所在磁盘 (工作目录 = <盘符>\win11):" -ForegroundColor Cyan
+
+# 自动枚举本机可用固定磁盘盘符 (排除系统保留/A/B/光驱/网络/可移动)
+$availableDrives = @()
+try {
+    $availableDrives = @(
+        Get-CimInstance -ClassName Win32_LogicalDisk -ErrorAction Stop |
+            Where-Object {
+                $_.DriveType -eq 3 -and
+                $_.DeviceID -match '^[A-Z]:$' -and
+                $_.DeviceID -notin @('A:', 'B:') -and
+                $_.Size -gt 0
+            } |
+            ForEach-Object { $_.DeviceID.TrimEnd(':') } |
+            Sort-Object
+    )
+} catch {
+    Write-Host "[警告] 盘符枚举失败，回退到 C/D 探测: $_" -ForegroundColor Yellow
+    $availableDrives = @('C', 'D') | Where-Object { Test-Path "${_}:\" }
+}
+
+if ($availableDrives.Count -eq 0) {
+    Write-Host "[警告] 未检测到任何可用固定磁盘，回退到系统盘 $($env:SystemDrive)" -ForegroundColor Yellow
+    $global:targetDriveLetter = $env:SystemDrive.TrimEnd('\').TrimEnd(':')
+} else {
+    # 排序后：第 1 个为“首选”，第 2 个为“倒计时默认”；不足 2 个则回退第 1 个
+    $defaultDrive = if ($availableDrives.Count -ge 2) { $availableDrives[1] } else { $availableDrives[0] }
+
+    Write-Host " 检测到以下可用磁盘盘符 (按字母升序):" -ForegroundColor Gray
+    for ($i = 0; $i -lt $availableDrives.Count; $i++) {
+        $d = $availableDrives[$i]
+        $marker = if ($d -eq $defaultDrive) { " [倒计时默认]" } else { "" }
+        $sizeInfo = ""
+        try {
+            $vol = Get-Volume -DriveLetter $d -ErrorAction SilentlyContinue
+            if ($vol -and $vol.Size) {
+                $sizeGB = [math]::Round($vol.Size / 1GB, 1)
+                $freeGB = [math]::Round($vol.SizeRemaining / 1GB, 1)
+                $sizeInfo = " (总 $sizeGB GB / 空闲 $freeGB GB)"
+            }
+        } catch {}
+        Write-Host (" [{0}] {1}:{2}{3}" -f ($i + 1), $d, $sizeInfo, $marker) -ForegroundColor White
+    }
+    Write-Host "==========================================================" -ForegroundColor Cyan
+
+    $driveChoicePrompt = "请输入盘符前的序号 [1-$($availableDrives.Count)]"
+    $driveChoice = Read-ChoiceWithTimeout -PromptText $driveChoicePrompt -Seconds 15 -DefaultChoice "0"
+
+    # 超时/回车: 直接选 $defaultDrive (即排序第二)；手动输入则按序号取
+    if ($driveChoice -eq "0") {
+        $global:targetDriveLetter = $defaultDrive
+        Write-Host ">>> [超时] 已自动选择排序第 2 的盘符: $($global:targetDriveLetter):" -ForegroundColor Yellow
+    } else {
+        $idx = [int]$driveChoice - 1
+        if ($idx -ge 0 -and $idx -lt $availableDrives.Count) {
+            $global:targetDriveLetter = $availableDrives[$idx]
+            Write-Host ">>> 已确认工作磁盘: $($global:targetDriveLetter):" -ForegroundColor Green
+        } else {
+            $global:targetDriveLetter = $defaultDrive
+            Write-Host ">>> [非法序号] 已回退到排序第 2 的盘符: $($global:targetDriveLetter):" -ForegroundColor Yellow
+        }
+    }
+}
+
+$targetDisk = "$($global:targetDriveLetter):\"
+$scratchDir  = Join-Path $targetDisk "scratchdir"
+$workDir     = Join-Path $targetDisk "win11"
+$sourcesDir  = Join-Path $workDir "sources"
+
+Write-Host "工作目录锁定在: $workDir" -ForegroundColor Green
+Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
+
+# ----------------- 11. 前置配置 5/5：源文件获取方式 -----------------
+Write-Host ""
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host " [配置 5/5] 请选择 Windows 11 源文件获取方式:" -ForegroundColor Cyan
 Write-Host " [1] 输入光驱盘符 (适用于已挂载 ISO 的用户)" -ForegroundColor Green
 Write-Host " [2] 输入文件路径 (直接指定 .iso / .wim / .esd，支持拖拽)" -ForegroundColor Yellow
 Write-Host "==========================================================" -ForegroundColor Cyan
@@ -305,16 +386,17 @@ if ($sourceChoice -eq "2") {
     Write-Host ">>> 已锁定挂载盘符: $($global:driveLetter)" -ForegroundColor Green
 }
 
-# 输出 ESD 开关状态
+# ----------------- 12. 配置汇总输出 -----------------
 Write-Host ""
 if ($global:enableEsdConversion) {
     Write-Host ">>> [配置状态] ESD 高压转换: 开启 (打包前转换为 install.esd)" -ForegroundColor Yellow
 } else {
     Write-Host ">>> [配置状态] ESD 高压转换: 关闭 (直接使用 install.wim 打包)" -ForegroundColor DarkGray
 }
+Write-Host ">>> [配置状态] 工作磁盘: $($global:targetDriveLetter):" -ForegroundColor DarkGray
 Write-Host "`n[就绪] 前置配置已全部锁定，后续构建流程将完全静默自动化运行！`n" -ForegroundColor Green
 
-# ----------------- 11. 初始化环境清理 -----------------
+# ----------------- 13. 初始化环境清理 -----------------
 Write-Host "[初始化] 正在深度清理历史挂载残留与注册表死锁..." -ForegroundColor DarkGray
 
 # 卸载可能残留的离线注册表
