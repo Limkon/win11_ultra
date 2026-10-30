@@ -75,18 +75,56 @@ if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     }
 }
 
-# 步骤 B: 强制恢复 Notepad 核心关联
-$essentialApps = @(
-    @{ Exe = 'notepad.exe'; Name = 'Notepad' }
-)
-foreach ($app in $essentialApps) {
-    foreach ($croot in @('HKLM\zSOFTWARE\Classes', 'HKLM\zSOFTWARE\WOW6432Node\Classes')) {
-        & 'reg' 'add' "$croot\Applications\$($app.Exe)\shell\open\command" '/ve' '/t' 'REG_SZ' '/d' "`"%SystemRoot%\system32\$($app.Exe)`" `"%1`"" '/f' 2>&1 | Out-Null
-        & 'reg' 'add' "$croot\Applications\$($app.Exe)" '/v' 'FriendlyAppName' '/t' 'REG_SZ' '/d' $app.Name '/f' 2>&1 | Out-Null
-    }
+# ==============================================================================
+# 步骤 B: 完整重建 Notepad 与 txtfile 关联链
+#  修复目标：
+#   1. .txt 默认 ProgID = txtfile
+#   2. txtfile 类型含 shell\open\command 指向 notepad.exe
+#   3. notepad.exe 在 Applications 下注册完整（含 FriendlyAppName、command）
+#   4. OpenWithList / OpenWithProgids 兜底
+#  注意：离线操作写 HKLM\zSOFTWARE\Classes 与 WOW6432Node\Classes 双视图
+# ==============================================================================
+Write-Host "Rebuilding Notepad and txtfile association chain..." -ForegroundColor Yellow
+
+$classesRoots = @('HKLM\zSOFTWARE\Classes', 'HKLM\zSOFTWARE\WOW6432Node\Classes')
+$notepadCmd   = '%SystemRoot%\System32\notepad.exe %1'
+
+foreach ($croot in $classesRoots) {
+
+    # --- 1. Applications\notepad.exe 完整注册 ---
+    & 'reg' 'add' "$croot\Applications\notepad.exe" '/v' 'FriendlyAppName' '/t' 'REG_SZ' '/d' 'Notepad' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\Applications\notepad.exe\shell\open\command" '/ve' '/t' 'REG_EXPAND_SZ' '/d' $notepadCmd '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\Applications\notepad.exe\DefaultIcon" '/ve' '/t' 'REG_EXPAND_SZ' '/d' '%SystemRoot%\System32\notepad.exe,0' '/f' 2>&1 | Out-Null
+
+    # --- 2. .txt 扩展名主关联 ---
+    & 'reg' 'add' "$croot\.txt" '/ve' '/t' 'REG_SZ' '/d' 'txtfile' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\.txt" '/v' 'Content Type' '/t' 'REG_SZ' '/d' 'text/plain' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\.txt" '/v' 'PerceivedType' '/t' 'REG_SZ' '/d' 'text' '/f' 2>&1 | Out-Null
+
+    # --- 3. .txt\ShellNew —— "新建 → 文本文档"菜单 ---
+    & 'reg' 'add' "$croot\.txt\ShellNew" '/v' 'NullFile' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\.txt\ShellNew" '/v' 'ItemName' '/t' 'REG_EXPAND_SZ' '/d' '@%SystemRoot%\System32\notepad.exe,-470' '/f' 2>&1 | Out-Null
+
+    # --- 4. txtfile ProgID 完整定义（含打开命令，这是关联的核心） ---
+    & 'reg' 'add' "$croot\txtfile" '/ve' '/t' 'REG_SZ' '/d' '文本文档' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\txtfile" '/v' 'AlwaysShowExt' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\txtfile" '/v' 'PerceivedType' '/t' 'REG_SZ' '/d' 'text' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\txtfile\DefaultIcon" '/ve' '/t' 'REG_EXPAND_SZ' '/d' '%SystemRoot%\System32\notepad.exe,0' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\txtfile\shell\open\command" '/ve' '/t' 'REG_EXPAND_SZ' '/d' $notepadCmd '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\txtfile\ShellNew" '/v' 'NullFile' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
+
+    # --- 5. txtfilelegacy 兼容定义 ---
+    & 'reg' 'add' "$croot\txtfilelegacy" '/ve' '/t' 'REG_SZ' '/d' '文本文档' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\txtfilelegacy\DefaultIcon" '/ve' '/t' 'REG_EXPAND_SZ' '/d' '%SystemRoot%\System32\notepad.exe,0' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\txtfilelegacy\shell\open\command" '/ve' '/t' 'REG_EXPAND_SZ' '/d' $notepadCmd '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\txtfilelegacy\ShellNew" '/v' 'NullFile' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
+
+    # --- 6. OpenWithList / OpenWithProgids 兜底 ---
+    & 'reg' 'add' "$croot\.txt\OpenWithList\notepad.exe" '/ve' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\.txt\OpenWithProgids" '/v' 'txtfile' '/t' 'REG_NONE' '/d' '' '/f' 2>&1 | Out-Null
+    & 'reg' 'add' "$croot\.txt\OpenWithProgids" '/v' 'txtfilelegacy' '/t' 'REG_NONE' '/d' '' '/f' 2>&1 | Out-Null
 }
-& 'reg' 'add' 'HKLM\zSOFTWARE\Classes\.txt\OpenWithList\notepad.exe' '/ve' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Classes\.txt\OpenWithProgids' '/v' 'txtfile' '/t' 'REG_NONE' '/d' '' '/f' 2>&1 | Out-Null
+Write-Host "[完成] Notepad 与 txtfile 关联链重建完毕。" -ForegroundColor Green
 
 # 步骤 C: 强制恢复 Windows 照片查看器 (Photo Viewer) 的注册与调用权限
 $photoViewerCroot = 'HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities'
