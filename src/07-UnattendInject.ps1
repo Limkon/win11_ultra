@@ -431,6 +431,17 @@ $finalXml = $finalXml.Replace('__HIDE_ONLINE_ACCOUNT_SCREENS__', $hideOnlineAcco
 $finalXml = $finalXml.Replace('__DEPLOY_MODE_TEXT__', $modeText)
 
 # ----------------- 4. 多通道规范注入 (带强力防占用机制) -----------------
+# 注入前轻量确认：应答文件依赖 Panther/Setup 目录结构与 Shell-Setup 组件存在，
+# 若被精简误伤则直接中止，避免打包出装不上的镜像。
+$pantherCheckDir = Join-Path $scratchDir "Windows\Panther"
+$shellSetupCheck = Join-Path $scratchDir "Windows\System32\Sysprep"
+if (-not (Test-Path -LiteralPath $shellSetupCheck) -and -not (Test-Path -LiteralPath $pantherCheckDir)) {
+    Write-Host "[严重错误] 应答文件注入前确认失败：Sysprep 与 Panther 目录均不存在，映像可能已被过度精简。" -ForegroundColor Red
+    if ($global:transcriptActive) { Stop-Transcript }
+    pause
+    exit 1
+}
+
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
