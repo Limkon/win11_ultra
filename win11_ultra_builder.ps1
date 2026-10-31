@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-10-30 04:47:30 UTC
+#  生成时间: 2026-10-31 12:47:31 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -728,12 +728,12 @@ Write-Host "[完成] 系统主映像挂载成功，运行环境就绪。" -Foreg
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
-#  重构要点：
-#   1. 新增 Edge 与 Cortana 的 Appx 匹配模式，纳入移除与 Deprovisioned 标记。
-#   2. 重写 PackageFamilyName 解析，兼容 Name_Version_Arch_Resource_PublisherId
-#      以及 Name_Version_Arch__PublisherId（空资源段）两种完整包名格式。
-#   3. 保留原有语言/架构探针、框架白名单、物理粉碎、SystemApps 清理、
-#      关键组件校验、FOD 移除全部逻辑。
+#  重构要点（本次）：
+#   1. 普通精简模式新增“安装依赖保护白名单”，避免移除 Setup 在部署阶段
+#      可能依赖的组件（如 OneSettings / UEV / 遥测基础客户端等）。极限压榨
+#      模式维持原激进策略不变。
+#   2. 其余逻辑（Edge/Cortana 匹配、PackageFamilyName 解析、框架白名单、
+#      物理粉碎、SystemApps 清理、关键组件校验、FOD 移除）保持不变。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
@@ -767,8 +767,6 @@ foreach ($line in ($imageInfo -split '\r?\n')) {
 if (-not $matchedArch) { $global:architecture = "amd64" }
 
 # ----------------- 2. 移除预装 AppX (Bloatware + Edge + Cortana) -----------------
-# 注意：保留 *Paint* 和 *Notepad*；相机保留在精简列表中（按之前逻辑）。
-# Edge 与 Cortana 通过精确模式纳入移除，确保进入 Deprovisioned 标记流程。
 $targetAppxPatterns = @(
     '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', 
     '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*', 
@@ -788,6 +786,14 @@ $protectedFrameworkPatterns = @(
     '*Microsoft.NET.Native*', '*Microsoft.Services.Store*'
 )
 
+# 普通精简模式额外安装依赖保护：这些组件与 Setup / OOBE / 遥测基线相关，
+# 移除后可能导致安装阶段或首次登录脚本异常，普通精简下强制保留。
+$installDependencyPatterns = @(
+    '*OneSettings*', '*UniversalTelemetryClient*', '*CrossDevice*',
+    '*Client.WebExperience*', '*Windows.ShellExperience*',
+    '*Windows.CloudExperienceHost*', '*UEV*', '*WindowsFeedbackHub*'
+)
+
 $provisionedPackages = Get-AppxProvisionedPackage -Path $scratchDir -ErrorAction SilentlyContinue
 $appxToRemove = @()
 $appxToKeep = @()
@@ -802,6 +808,18 @@ foreach ($pkg in $provisionedPackages) {
         continue
     }
 
+    # 普通精简模式下，安装依赖相关组件跳过移除
+    if ($global:trimMode -ne "2") {
+        $isInstallDep = $false
+        foreach ($dep in $installDependencyPatterns) {
+            if ($pkg.PackageName -like $dep) { $isInstallDep = $true; break }
+        }
+        if ($isInstallDep) {
+            $appxToKeep += $pkg
+            continue
+        }
+    }
+
     foreach ($pattern in $targetAppxPatterns) {
         if ($pkg.PackageName -like $pattern) {
             $appxToRemove += $pkg
@@ -810,7 +828,7 @@ foreach ($pkg in $provisionedPackages) {
     }
 }
 
-Write-Host "   [框架保护] 已自动拦截保留 $($appxToKeep.Count) 个核心依赖框架。" -ForegroundColor DarkGray
+Write-Host "   [框架保护] 已自动拦截保留 $($appxToKeep.Count) 个核心依赖框架/安装依赖组件。" -ForegroundColor DarkGray
 Write-Host "   [准备移除] 检测到 $($appxToRemove.Count) 个预装应用符合精简规则。" -ForegroundColor Yellow
 
 # AppX 包名 -> HKCR\Applications 下对应 exe 名的映射 (用于后续 06 模块修复关联)
@@ -847,10 +865,6 @@ foreach ($package in $appxToRemove) {
     $removedPackageNames.Add($package.PackageName)
 
     # 解析 PackageFamilyName：统一取首段 Name + 末段 PublisherId（13 位小写字母数字）
-    # 兼容：
-    #   Name_PublisherId
-    #   Name_Version_Arch_Resource_PublisherId
-    #   Name_Version_Arch__PublisherId（空资源段）
     $familyName = $null
     $pkgParts = $package.PackageName -split '_'
     if ($pkgParts.Count -ge 2) {
@@ -1882,6 +1896,17 @@ $finalXml = $finalXml.Replace('__HIDE_ONLINE_ACCOUNT_SCREENS__', $hideOnlineAcco
 $finalXml = $finalXml.Replace('__DEPLOY_MODE_TEXT__', $modeText)
 
 # ----------------- 4. 多通道规范注入 (带强力防占用机制) -----------------
+# 注入前轻量确认：应答文件依赖 Panther/Setup 目录结构与 Shell-Setup 组件存在，
+# 若被精简误伤则直接中止，避免打包出装不上的镜像。
+$pantherCheckDir = Join-Path $scratchDir "Windows\Panther"
+$shellSetupCheck = Join-Path $scratchDir "Windows\System32\Sysprep"
+if (-not (Test-Path -LiteralPath $shellSetupCheck) -and -not (Test-Path -LiteralPath $pantherCheckDir)) {
+    Write-Host "[严重错误] 应答文件注入前确认失败：Sysprep 与 Panther 目录均不存在，映像可能已被过度精简。" -ForegroundColor Red
+    if ($global:transcriptActive) { Stop-Transcript }
+    pause
+    exit 1
+}
+
 $sysprepDir = Join-Path $scratchDir "Windows\System32\Sysprep"
 $pantherDir = Join-Path $scratchDir "Windows\Panther"
 if (-not (Test-Path -LiteralPath $sysprepDir)) { New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null }
@@ -1918,7 +1943,13 @@ Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自适
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 9/11] 组件库瘦身与主映像优化 (src/08-WinSxSOptimize.ps1)
-#  注：本模块会被合并进单文件主脚本，禁止使用 return（会退出整个脚本），
+#  重构要点：
+#   1. 普通精简模式：移除 /ResetBase，仅执行 /StartComponentCleanup。
+#      原因：/ResetBase 在较新 Win11 版本上会破坏安装所需的组件基线，
+#      导致 Setup 在应用映像阶段报“无法安装”。极限压榨模式因随后会物理
+#      替换 WinSxS，/ResetBase 的影响被绕过，故仅普通精简需要修正。
+#   2. 极限压榨模式：保留原有 /ResetBase + 物理替换逻辑不变。
+#   3. 本模块会被合并进单文件主脚本，禁止使用 return（会退出整个脚本），
 #      所有提前退出分支统一改为 if/else 嵌套。
 # ==============================================================================
 
@@ -1927,19 +1958,27 @@ Write-Host "`n[步骤 10/11] 正在根据精简模式执行组件存储 (WinSxS)
 $currentTrimMode = if ($global:trimMode) { $global:trimMode } else { "1" }
 $currentArch     = if ($global:architecture) { $global:architecture } else { "amd64" }
 
-# ----------------- 1. 通用阶段：执行官方基线重置 -----------------
-Write-Host "正在执行 DISM 深度组件清理与基线重置 (/StartComponentCleanup /ResetBase)..." -ForegroundColor Yellow
-& dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "[提示] DISM 组件重置退出码: $LASTEXITCODE (部分精简组件无需重置或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
-}
-
-# ----------------- 2. 分支处理：依据模式决定是否执行物理抹杀 -----------------
+# ----------------- 1. 通用阶段：按模式执行组件清理 -----------------
 if ($currentTrimMode -ne "2") {
-    Write-Host "[完成] 当前为【普通精简模式】，已保留完整 WinSxS 核心组件库以确保绝佳兼容性与可维护性。" -ForegroundColor Green
+    # 普通精简：仅安全清理，绝不重置基线（避免破坏安装依赖）
+    Write-Host "正在执行 DISM 组件清理 (/StartComponentCleanup，不重置基线)..." -ForegroundColor Yellow
+    & dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[提示] DISM 组件清理退出码: $LASTEXITCODE (部分精简组件无需清理或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
+    }
+
+    Write-Host "[完成] 当前为【普通精简模式】，已保留完整 WinSxS 核心组件库与更新回滚基线，确保安装兼容性与可维护性。" -ForegroundColor Green
 } else {
-    # ----------------- 3. 极限压榨模式专用：WinSxS 物理极限裁剪 -----------------
+    # 极限压榨：先重置基线，随后物理替换 WinSxS
+    Write-Host "正在执行 DISM 深度组件清理与基线重置 (/StartComponentCleanup /ResetBase)..." -ForegroundColor Yellow
+    & dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[提示] DISM 组件重置退出码: $LASTEXITCODE (部分精简组件无需重置或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
+    }
+
+    # ----------------- 2. 极限压榨模式专用：WinSxS 物理极限裁剪 -----------------
     Write-Host "`n>>> [警告] 当前为【极限压榨模式】，正在物理瘦身 WinSxS (架构: $currentArch)..." -ForegroundColor Red
 
     $winSxSDir     = Join-Path $scratchDir "Windows\WinSxS"
@@ -2007,7 +2046,7 @@ if ($currentTrimMode -ne "2") {
                 # 默认 amd64 体系
                 $dirsToCopy = @(
                     "x86_microsoft.windows.common-controls_6595b64144ccf1df_*",
-                    "x86_microsoft.windows.gdiplus_6595b64144ccf1df_*",    
+                    "x86_microsoft.windows.gdiplus_6595b64144ccf1df_*",
                     "x86_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
                     "x86_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
                     "x86_microsoft-windows-s..ngstack-onecorebase_31bf3856ad364e35_*",
