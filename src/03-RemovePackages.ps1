@@ -1,11 +1,11 @@
 # ==============================================================================
 #  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
-#  重构要点：
-#   1. 新增 Edge 与 Cortana 的 Appx 匹配模式，纳入移除与 Deprovisioned 标记。
-#   2. 重写 PackageFamilyName 解析，兼容 Name_Version_Arch_Resource_PublisherId
-#      以及 Name_Version_Arch__PublisherId（空资源段）两种完整包名格式。
-#   3. 保留原有语言/架构探针、框架白名单、物理粉碎、SystemApps 清理、
-#      关键组件校验、FOD 移除全部逻辑。
+#  重构要点（本次）：
+#   1. 普通精简模式新增“安装依赖保护白名单”，避免移除 Setup 在部署阶段
+#      可能依赖的组件（如 OneSettings / UEV / 遥测基础客户端等）。极限压榨
+#      模式维持原激进策略不变。
+#   2. 其余逻辑（Edge/Cortana 匹配、PackageFamilyName 解析、框架白名单、
+#      物理粉碎、SystemApps 清理、关键组件校验、FOD 移除）保持不变。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
@@ -39,8 +39,6 @@ foreach ($line in ($imageInfo -split '\r?\n')) {
 if (-not $matchedArch) { $global:architecture = "amd64" }
 
 # ----------------- 2. 移除预装 AppX (Bloatware + Edge + Cortana) -----------------
-# 注意：保留 *Paint* 和 *Notepad*；相机保留在精简列表中（按之前逻辑）。
-# Edge 与 Cortana 通过精确模式纳入移除，确保进入 Deprovisioned 标记流程。
 $targetAppxPatterns = @(
     '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', 
     '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*', 
@@ -60,6 +58,14 @@ $protectedFrameworkPatterns = @(
     '*Microsoft.NET.Native*', '*Microsoft.Services.Store*'
 )
 
+# 普通精简模式额外安装依赖保护：这些组件与 Setup / OOBE / 遥测基线相关，
+# 移除后可能导致安装阶段或首次登录脚本异常，普通精简下强制保留。
+$installDependencyPatterns = @(
+    '*OneSettings*', '*UniversalTelemetryClient*', '*CrossDevice*',
+    '*Client.WebExperience*', '*Windows.ShellExperience*',
+    '*Windows.CloudExperienceHost*', '*UEV*', '*WindowsFeedbackHub*'
+)
+
 $provisionedPackages = Get-AppxProvisionedPackage -Path $scratchDir -ErrorAction SilentlyContinue
 $appxToRemove = @()
 $appxToKeep = @()
@@ -74,6 +80,18 @@ foreach ($pkg in $provisionedPackages) {
         continue
     }
 
+    # 普通精简模式下，安装依赖相关组件跳过移除
+    if ($global:trimMode -ne "2") {
+        $isInstallDep = $false
+        foreach ($dep in $installDependencyPatterns) {
+            if ($pkg.PackageName -like $dep) { $isInstallDep = $true; break }
+        }
+        if ($isInstallDep) {
+            $appxToKeep += $pkg
+            continue
+        }
+    }
+
     foreach ($pattern in $targetAppxPatterns) {
         if ($pkg.PackageName -like $pattern) {
             $appxToRemove += $pkg
@@ -82,7 +100,7 @@ foreach ($pkg in $provisionedPackages) {
     }
 }
 
-Write-Host "   [框架保护] 已自动拦截保留 $($appxToKeep.Count) 个核心依赖框架。" -ForegroundColor DarkGray
+Write-Host "   [框架保护] 已自动拦截保留 $($appxToKeep.Count) 个核心依赖框架/安装依赖组件。" -ForegroundColor DarkGray
 Write-Host "   [准备移除] 检测到 $($appxToRemove.Count) 个预装应用符合精简规则。" -ForegroundColor Yellow
 
 # AppX 包名 -> HKCR\Applications 下对应 exe 名的映射 (用于后续 06 模块修复关联)
@@ -119,10 +137,6 @@ foreach ($package in $appxToRemove) {
     $removedPackageNames.Add($package.PackageName)
 
     # 解析 PackageFamilyName：统一取首段 Name + 末段 PublisherId（13 位小写字母数字）
-    # 兼容：
-    #   Name_PublisherId
-    #   Name_Version_Arch_Resource_PublisherId
-    #   Name_Version_Arch__PublisherId（空资源段）
     $familyName = $null
     $pkgParts = $package.PackageName -split '_'
     if ($pkgParts.Count -ge 2) {
