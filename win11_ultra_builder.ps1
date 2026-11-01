@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-11-01 00:23:08 UTC
+#  生成时间: 2026-11-01 06:50:23 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -728,12 +728,14 @@ Write-Host "[完成] 系统主映像挂载成功，运行环境就绪。" -Foreg
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
-#  重构要点（本次）：
-#   1. 普通精简模式新增“安装依赖保护白名单”，避免移除 Setup 在部署阶段
-#      可能依赖的组件（如 OneSettings / UEV / 遥测基础客户端等）。极限压榨
-#      模式维持原激进策略不变。
-#   2. 其余逻辑（Edge/Cortana 匹配、PackageFamilyName 解析、框架白名单、
-#      物理粉碎、SystemApps 清理、关键组件校验、FOD 移除）保持不变。
+#  重构要点：
+#   1. 普通精简模式（trimMode != 2）：仅通过官方接口移除 Appx
+#      (Remove-AppxProvisionedPackage) 与 FOD (Dism /Remove-Package)，
+#      不再物理删除 SystemApps 目录、不再物理粉碎 WindowsApps 残留。
+#   2. 极限压榨模式（trimMode == 2）：保留原有物理粉碎 SystemApps /
+#      WindowsApps 残留逻辑。
+#   3. Edge/Cortana 的 Appx 匹配、PackageFamilyName 解析、框架白名单、
+#      关键组件校验全部保留。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
@@ -768,26 +770,25 @@ if (-not $matchedArch) { $global:architecture = "amd64" }
 
 # ----------------- 2. 移除预装 AppX (Bloatware + Edge + Cortana) -----------------
 $targetAppxPatterns = @(
-    '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', 
-    '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*', 
-    '*SoundRecorder*', '*Solitaire*', '*FeedbackHub*', '*Maps*', 
-    '*OfficeHub*', '*Help*', '*Family*', '*Alarms*', '*Camera*', 
-    '*QuickAssist*', '*PeopleExperienceHost*', '*PinningConfirmationDialog*', 
-    '*SecureAssessmentBrowser*', '*CommunicationsApps*', '*Copilot*', 
-    '*AV1VideoExtension*', '*HEIFImageExtension*', '*HEVCVideoExtension*', 
+    '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*',
+    '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*',
+    '*SoundRecorder*', '*Solitaire*', '*FeedbackHub*', '*Maps*',
+    '*OfficeHub*', '*Help*', '*Family*', '*Alarms*', '*Camera*',
+    '*QuickAssist*', '*PeopleExperienceHost*', '*PinningConfirmationDialog*',
+    '*SecureAssessmentBrowser*', '*CommunicationsApps*', '*Copilot*',
+    '*AV1VideoExtension*', '*HEIFImageExtension*', '*HEVCVideoExtension*',
     '*WebpImageExtension*', '*Cortana*',
     '*MicrosoftEdge.Stable*', '*MicrosoftEdge*', '*Microsoft.MicrosoftEdge*',
     '*549981C3F5F10*'
 )
 
-# 框架组件保护白名单：任何通配符都不得误伤这些包
+# 框架组件保护白名单
 $protectedFrameworkPatterns = @(
     '*Microsoft.UI.Xaml*', '*Microsoft.VCLibs*', '*Microsoft.WindowsAppRuntime*',
     '*Microsoft.NET.Native*', '*Microsoft.Services.Store*'
 )
 
-# 普通精简模式额外安装依赖保护：这些组件与 Setup / OOBE / 遥测基线相关，
-# 移除后可能导致安装阶段或首次登录脚本异常，普通精简下强制保留。
+# 普通精简模式额外安装依赖保护
 $installDependencyPatterns = @(
     '*OneSettings*', '*UniversalTelemetryClient*', '*CrossDevice*',
     '*Client.WebExperience*', '*Windows.ShellExperience*',
@@ -803,35 +804,24 @@ foreach ($pkg in $provisionedPackages) {
     foreach ($prot in $protectedFrameworkPatterns) {
         if ($pkg.PackageName -like $prot) { $isProtected = $true; break }
     }
-    if ($isProtected) {
-        $appxToKeep += $pkg
-        continue
-    }
+    if ($isProtected) { $appxToKeep += $pkg; continue }
 
-    # 普通精简模式下，安装依赖相关组件跳过移除
     if ($global:trimMode -ne "2") {
         $isInstallDep = $false
         foreach ($dep in $installDependencyPatterns) {
             if ($pkg.PackageName -like $dep) { $isInstallDep = $true; break }
         }
-        if ($isInstallDep) {
-            $appxToKeep += $pkg
-            continue
-        }
+        if ($isInstallDep) { $appxToKeep += $pkg; continue }
     }
 
     foreach ($pattern in $targetAppxPatterns) {
-        if ($pkg.PackageName -like $pattern) {
-            $appxToRemove += $pkg
-            break
-        }
+        if ($pkg.PackageName -like $pattern) { $appxToRemove += $pkg; break }
     }
 }
 
 Write-Host "   [框架保护] 已自动拦截保留 $($appxToKeep.Count) 个核心依赖框架/安装依赖组件。" -ForegroundColor DarkGray
 Write-Host "   [准备移除] 检测到 $($appxToRemove.Count) 个预装应用符合精简规则。" -ForegroundColor Yellow
 
-# AppX 包名 -> HKCR\Applications 下对应 exe 名的映射 (用于后续 06 模块修复关联)
 $appxExeMap = @{
     'Microsoft.Windows.Photos'            = @('Photos.exe', 'Microsoft.Photos.exe')
     'Microsoft.ScreenSketch'              = @('SnippingTool.exe', 'ScreenSketch.exe')
@@ -852,7 +842,6 @@ $appxExeMap = @{
 
 $removedPackageNames = New-Object System.Collections.Generic.List[string]
 $global:removedAppxExeNames = New-Object System.Collections.Generic.List[string]
-# 收集被移除预装应用的 PackageFamilyName，供 06 模块写入 Deprovisioned
 $global:deprovisionedAppxFamilies = New-Object System.Collections.Generic.List[string]
 
 foreach ($package in $appxToRemove) {
@@ -864,7 +853,6 @@ foreach ($package in $appxToRemove) {
     }
     $removedPackageNames.Add($package.PackageName)
 
-    # 解析 PackageFamilyName：统一取首段 Name + 末段 PublisherId（13 位小写字母数字）
     $familyName = $null
     $pkgParts = $package.PackageName -split '_'
     if ($pkgParts.Count -ge 2) {
@@ -895,33 +883,41 @@ foreach ($package in $appxToRemove) {
 
 Write-Host "   [Deprovision] 已收集 $($global:deprovisionedAppxFamilies.Count) 个包家族名，将在注册表阶段写入防重装标记。" -ForegroundColor DarkGray
 
-# 深度清理 WindowsApps 物理残留目录
-$windowsAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
-if (Test-Path -LiteralPath $windowsAppsDir) {
-    foreach ($pkgName in $removedPackageNames) {
-        $candidateFolder = Join-Path $windowsAppsDir $pkgName
-        if (Test-Path -LiteralPath $candidateFolder) {
-            Write-Host "   粉碎残留资产目录: $pkgName" -ForegroundColor DarkGray
-            & takeown.exe /F "$candidateFolder" /A /R /D Y 2>&1 | Out-Null
-            & icacls.exe "$candidateFolder" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
-            Remove-Item -LiteralPath $candidateFolder -Recurse -Force -ErrorAction SilentlyContinue
+# ----------------- 2.1 WindowsApps 物理残留清理（仅极限压榨模式） -----------------
+if ($global:trimMode -eq "2") {
+    $windowsAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
+    if (Test-Path -LiteralPath $windowsAppsDir) {
+        foreach ($pkgName in $removedPackageNames) {
+            $candidateFolder = Join-Path $windowsAppsDir $pkgName
+            if (Test-Path -LiteralPath $candidateFolder) {
+                Write-Host "   粉碎残留资产目录: $pkgName" -ForegroundColor DarkGray
+                & takeown.exe /F "$candidateFolder" /A /R /D Y 2>&1 | Out-Null
+                & icacls.exe "$candidateFolder" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+                Remove-Item -LiteralPath $candidateFolder -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
+} else {
+    Write-Host "   [普通精简] 跳过 WindowsApps 物理残留粉碎，保留官方组件注册一致性。" -ForegroundColor DarkGray
 }
 
-# ----------------- 3. 暴力物理粉碎系统级残留 (断根 Edge/Cortana) -----------------
-$sysAppsPath = Join-Path $scratchDir "Windows\SystemApps"
-if (Test-Path -LiteralPath $sysAppsPath) {
-    $sysAppsToDelete = @("*Cortana*", "*Edge*", "*PeopleExperienceHost*", "*SecureAssessmentBrowser*", "*549981C3F5F10*")
-    foreach ($pattern in $sysAppsToDelete) {
-        $items = Get-ChildItem -Path $sysAppsPath -Filter $pattern -Directory -ErrorAction SilentlyContinue
-        foreach ($item in $items) {
-            Write-Host "   删除 SystemApps 目录: $($item.Name)" -ForegroundColor DarkGray
-            & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
-            & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
-            Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+# ----------------- 3. SystemApps 物理粉碎（仅极限压榨模式） -----------------
+if ($global:trimMode -eq "2") {
+    $sysAppsPath = Join-Path $scratchDir "Windows\SystemApps"
+    if (Test-Path -LiteralPath $sysAppsPath) {
+        $sysAppsToDelete = @("*Cortana*", "*Edge*", "*PeopleExperienceHost*", "*SecureAssessmentBrowser*", "*549981C3F5F10*")
+        foreach ($pattern in $sysAppsToDelete) {
+            $items = Get-ChildItem -Path $sysAppsPath -Filter $pattern -Directory -ErrorAction SilentlyContinue
+            foreach ($item in $items) {
+                Write-Host "   删除 SystemApps 目录: $($item.Name)" -ForegroundColor DarkGray
+                & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
+                & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+                Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
+} else {
+    Write-Host "   [普通精简] 跳过 SystemApps 物理粉碎，仅依赖 Appx 官方移除与 Deprovisioned 标记。" -ForegroundColor DarkGray
 }
 
 # 关键组件完整性校验
@@ -934,7 +930,7 @@ foreach ($critical in @($openWithExe, $shell32Dll, $shCoreDll)) {
     }
 }
 
-# ----------------- 4. 移除系统底层功能包 Packages (FOD) -----------------
+# ----------------- 4. 移除系统底层功能包 Packages (FOD，官方 Remove-Package) -----------------
 $packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
@@ -1049,11 +1045,13 @@ Write-Host "[完成] 驱动与底层运行库缓存精简完毕。" -ForegroundC
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 物理文件实体清理 (src/05-PhysicalNuke.ps1)
 #  重构要点：
-#   1. 移除对 Windows Defender 的物理删除（目录、文件、ProgramData 定义），
-#      改由 06 模块“仅禁用服务 + 策略”，避免触发系统自愈机制。
-#   2. 保留 Edge / OneDrive 的地毯式物理粉碎（含 WinSxS 组件目录）。
-#   3. 保留字体、语音、输入法、临时目录、Web 壁纸、Help、Cursors、
-#      Native Images、WinRE 占位等全部原有清理逻辑。
+#   1. 普通精简模式（trimMode != 2）：仅清理与组件注册无冲突的纯冗余资产
+#      （字体、语音 TTS、临时目录、Web 壁纸、Help、Cursors、Native Images、
+#      WinRE 占位、Default 用户 OneDrive 残留）。不再对 Program Files、
+#      System32、SysWOW64、WinSxS、SystemApps 做 Edge/OneDrive 物理粉碎，
+#      以避免绕过组件注册造成 DISM 报“可修复”。
+#   2. 极限压榨模式（trimMode == 2）：保留原有地毯式物理粉碎逻辑。
+#   3. Defender 仍由 06 模块“仅禁用服务 + 策略”，本模块不删除 Defender。
 # ==============================================================================
 
 Write-Host "`n[步骤 7/11] 正在执行系统冗余物理文件清理..." -ForegroundColor Cyan
@@ -1061,10 +1059,10 @@ $winDir = "$scratchDir\Windows"
 
 # 1. 字体库精简 (保护微软雅黑与核心英文字体)
 $fontsPath = Join-Path -Path $winDir -ChildPath "Fonts"
-if (Test-Path $fontsPath) { 
+if (Test-Path $fontsPath) {
     Write-Host "Cleaning up Fonts..."
     Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "lucon*.*", "calibri*.*", "arial*.*", "times*.*", "cou*.*", "8*.*", "msyh*.*", "simsun*.*", "simhei*.*" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    Get-ChildItem -Path $fontsPath -Include "mingli*", "msjh*", "malgun*", "meiryo*", "yugoth*", "segoeuihistoric.ttf" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue 
+    Get-ChildItem -Path $fontsPath -Include "mingli*", "msjh*", "malgun*", "meiryo*", "yugoth*", "segoeuihistoric.ttf" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # 2. 语音引擎、病毒定义更新与输入法
@@ -1093,44 +1091,50 @@ foreach ($p in $nativeImagePaths) {
     Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# 5. 地毯式清理 Edge、OneDrive（不含 Defender，Defender 改为 06 模块仅禁用）
-Write-Host "Removing Edge and OneDrive (Universal Search)..." -ForegroundColor Yellow
+# 5. Edge/OneDrive 地毯式物理粉碎（仅极限压榨模式）
+if ($global:trimMode -eq "2") {
+    Write-Host "Removing Edge and OneDrive (Universal Search)..." -ForegroundColor Yellow
 
-$searchBases = @(
-    "$scratchDir\Program Files",
-    "$scratchDir\Program Files (x86)",
-    "$scratchDir\Windows\System32",
-    "$scratchDir\Windows\SysWOW64",
-    "$scratchDir\Windows\WinSxS",
-    "$scratchDir\Windows\SystemApps"
-)
-$patternsToDelete = @("*Edge*", "*MicrosoftEdge*", "*OneDrive*")
+    $searchBases = @(
+        "$scratchDir\Program Files",
+        "$scratchDir\Program Files (x86)",
+        "$scratchDir\Windows\System32",
+        "$scratchDir\Windows\SysWOW64",
+        "$scratchDir\Windows\WinSxS",
+        "$scratchDir\Windows\SystemApps"
+    )
+    $patternsToDelete = @("*Edge*", "*MicrosoftEdge*", "*OneDrive*")
 
-foreach ($base in $searchBases) {
-    if (Test-Path -LiteralPath $base) {
-        foreach ($pattern in $patternsToDelete) {
-            $items = Get-ChildItem -Path $base -Filter $pattern -ErrorAction SilentlyContinue
-            foreach ($item in $items) {
-                Write-Host "   粉碎底层残留: $($item.FullName)" -ForegroundColor DarkGray
-                if ($item.PSIsContainer) {
-                    & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
-                    & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+    foreach ($base in $searchBases) {
+        if (Test-Path -LiteralPath $base) {
+            foreach ($pattern in $patternsToDelete) {
+                $items = Get-ChildItem -Path $base -Filter $pattern -ErrorAction SilentlyContinue
+                foreach ($item in $items) {
+                    Write-Host "   粉碎底层残留: $($item.FullName)" -ForegroundColor DarkGray
+                    if ($item.PSIsContainer) {
+                        & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
+                        & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+                    }
+                    Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
                 }
-                Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
     }
+} else {
+    Write-Host "   [普通精简] 跳过 Program Files / System32 / SysWOW64 / WinSxS / SystemApps 的 Edge/OneDrive 物理粉碎，改由 Appx 官方移除与策略禁用处理。" -ForegroundColor DarkGray
 }
 
-# 6. 处理用户目录下的 OneDrive 残留
+# 6. 处理用户目录下的 OneDrive 残留（两种模式均清理 Default 配置残留）
 $userProfileOneDrive = "$scratchDir\Users\Default\AppData\Local\Microsoft\OneDrive"
-if (Test-Path $userProfileOneDrive) { Remove-Item -LiteralPath $userProfileOneDrive -Recurse -Force -ErrorAction SilentlyContinue }
+if (Test-Path $userProfileOneDrive) {
+    Remove-Item -LiteralPath $userProfileOneDrive -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # 7. WinRE 零字节占位
 Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force | Out-Null
 
-Write-Host "[完成] 冗余物理文件与底层组件彻底清理完毕。" -ForegroundColor Green
+Write-Host "[完成] 冗余物理文件与底层组件清理完毕。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/05-PhysicalNuke.ps1
 
@@ -1945,11 +1949,12 @@ Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自适
 #  win11 Builder - [模块 9/11] 组件库瘦身与主映像优化 (src/08-WinSxSOptimize.ps1)
 #  重构要点：
 #   1. 普通精简模式：移除 /ResetBase，仅执行 /StartComponentCleanup。
-#   2. 普通精简模式：清理完成后，以“精简前原始源映像”为修复源，对离线映像
-#      执行一次 /RestoreHealth 验证，修复精简过程中引入的组件存储不一致。
-#      修复源不指向被修改的映像自身，避免用残缺源修复。
-#   3. 极限压榨模式：保留原有 /ResetBase + 物理替换逻辑不变。
-#   4. 本模块禁止使用 return（会退出整个脚本），提前退出统一改为 if/else 嵌套。
+#      原因：/ResetBase 在较新 Win11 版本上会破坏安装所需的组件基线，
+#      导致 Setup 在应用映像阶段报“无法安装”。极限压榨模式因随后会物理
+#      替换 WinSxS，/ResetBase 的影响被绕过，故仅普通精简需要修正。
+#   2. 极限压榨模式：保留原有 /ResetBase + 物理替换逻辑不变。
+#   3. 本模块会被合并进单文件主脚本，禁止使用 return（会退出整个脚本），
+#      所有提前退出分支统一改为 if/else 嵌套。
 # ==============================================================================
 
 Write-Host "`n[步骤 10/11] 正在根据精简模式执行组件存储 (WinSxS) 优化..." -ForegroundColor Cyan
@@ -1957,121 +1962,16 @@ Write-Host "`n[步骤 10/11] 正在根据精简模式执行组件存储 (WinSxS)
 $currentTrimMode = if ($global:trimMode) { $global:trimMode } else { "1" }
 $currentArch     = if ($global:architecture) { $global:architecture } else { "amd64" }
 
-# ----------------- 辅助：定位精简前的原始源映像文件 -----------------
-function Get-OriginalSourceImageFile {
-    param(
-        [string]$SourceMode,
-        [string]$SourceFile,
-        [string]$DriveLetter
-    )
-    if ($SourceMode -eq "2") {
-        # 单文件模式：.wim/.esd 直接用；.iso 需要挂载后取 sources\install.*
-        if ($SourceFile -match '\.(wim|esd)$') {
-            return @{ Kind = "File"; Path = $SourceFile }
-        }
-        return @{ Kind = "Iso"; Path = $SourceFile }
-    }
-    # 光驱模式：从盘符取 sources\install.wim / install.esd
-    $wim = Join-Path $DriveLetter "sources\install.wim"
-    $esd = Join-Path $DriveLetter "sources\install.esd"
-    if (Test-Path -LiteralPath $wim) { return @{ Kind = "File"; Path = $wim } }
-    if (Test-Path -LiteralPath $esd) { return @{ Kind = "File"; Path = $esd } }
-    return @{ Kind = "Unknown"; Path = "" }
-}
-
 # ----------------- 1. 通用阶段：按模式执行组件清理 -----------------
 if ($currentTrimMode -ne "2") {
-    # 普通精简：仅安全清理，绝不重置基线（避免破坏安装依赖）
     Write-Host "正在执行 DISM 组件清理 (/StartComponentCleanup，不重置基线)..." -ForegroundColor Yellow
     & dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[提示] DISM 组件清理退出码: $LASTEXITCODE (部分精简组件无需清理或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
+        Write-Host "[提示] DISM 组件清理退出码: $LASTEXITCODE，继续推进。" -ForegroundColor DarkGray
     }
 
-    # ----------------- 1.5 组件存储修复验证（修复源 = 精简前原始源映像） -----------------
-    Write-Host "正在以精简前原始源映像为修复源，验证并修复组件存储..." -ForegroundColor Yellow
-
-    $repairMountDir = Join-Path $targetDisk "repairsrc_mount"
-    $repairSourceReady = $false
-    $repairTmpIsoMounted = $false
-    $repairSourceFile = $null
-
-    $srcInfo = Get-OriginalSourceImageFile -SourceMode $global:sourceMode -SourceFile $global:sourceFile -DriveLetter $global:driveLetter
-
-    if ($srcInfo.Kind -eq "Iso") {
-        # 挂载原始 ISO，取其 sources\install.wim/.esd 作为修复源文件
-        try {
-            $tmpIso = Mount-DiskImage -ImagePath $srcInfo.Path -PassThru -ErrorAction Stop
-            $tmpLetter = $null
-            for ($i = 0; $i -lt 20; $i++) {
-                Start-Sleep -Milliseconds 500
-                $tmpLetter = ($tmpIso | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
-                if ($tmpLetter) { break }
-            }
-            if ($tmpLetter) {
-                $repairTmpIsoMounted = $true
-                $wim = "${tmpLetter}:\sources\install.wim"
-                $esd = "${tmpLetter}:\sources\install.esd"
-                if (Test-Path -LiteralPath $wim) { $repairSourceFile = $wim }
-                elseif (Test-Path -LiteralPath $esd) { $repairSourceFile = $esd }
-            }
-        } catch {
-            Write-Host "   [警告] 原始 ISO 挂载失败，跳过组件存储修复验证: $_" -ForegroundColor DarkYellow
-        }
-    } elseif ($srcInfo.Kind -eq "File") {
-        $repairSourceFile = $srcInfo.Path
-    }
-
-    if ($repairSourceFile -and (Test-Path -LiteralPath $repairSourceFile)) {
-        # 原始源映像的分卷号需与当前映像一致。普通精简下当前映像来自导出分卷 1，
-        # 原始源的分卷号在 02 模块已被记录为 $index（导出后重置为 1），此处统一用 1。
-        $repairSourceIndex = 1
-
-        # 将原始源映像对应分卷只读挂载到临时目录，作为 /Source 的 Windows 目录来源
-        if (Test-Path -LiteralPath $repairMountDir) {
-            & dism.exe /English /Unmount-Image "/MountDir:$repairMountDir" /Discard 2>&1 | Out-Null
-            Remove-Item -LiteralPath $repairMountDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        New-Item -ItemType Directory -Force -Path $repairMountDir | Out-Null
-
-        Write-Host "   正在只读挂载原始源映像分卷 $repairSourceIndex 作为修复源..." -ForegroundColor DarkGray
-        & dism.exe /English /Mount-Image "/ImageFile:$repairSourceFile" "/Index:$repairSourceIndex" "/MountDir:$repairMountDir" /ReadOnly
-        if ($LASTEXITCODE -eq 0) {
-            $repairSourceReady = $true
-            $repairWindowsDir = Join-Path $repairMountDir "Windows"
-            if (Test-Path -LiteralPath $repairWindowsDir) {
-                Write-Host "   正在以原始源映像修复组件存储 (RestoreHealth)..." -ForegroundColor Yellow
-                & dism.exe /English "/Image:$scratchDir" /Cleanup-Image /RestoreHealth "/Source:$repairWindowsDir" /LimitAccess
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host "[完成] 组件存储修复验证通过（修复源：精简前原始源映像）。" -ForegroundColor Green
-                } else {
-                    Write-Host "[提示] RestoreHealth 退出码: $LASTEXITCODE。部分精简移除属预期变更，若后续 ScanHealth 为“可修复”即可接受。" -ForegroundColor DarkYellow
-                }
-            } else {
-                Write-Host "   [警告] 修复源中未找到 Windows 目录，跳过修复。" -ForegroundColor DarkYellow
-            }
-        } else {
-            Write-Host "   [警告] 原始源映像挂载失败，跳过组件存储修复验证。" -ForegroundColor DarkYellow
-        }
-
-        # 卸载临时修复源挂载
-        if ($repairSourceReady) {
-            & dism.exe /English /Unmount-Image "/MountDir:$repairMountDir" /Discard 2>&1 | Out-Null
-        }
-        if (Test-Path -LiteralPath $repairMountDir) {
-            Remove-Item -LiteralPath $repairMountDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    } else {
-        Write-Host "   [警告] 未能定位精简前原始源映像文件，跳过组件存储修复验证。" -ForegroundColor DarkYellow
-    }
-
-    # 若临时挂载过原始 ISO，卸载它
-    if ($repairTmpIsoMounted -and $srcInfo.Path) {
-        Dismount-DiskImage -ImagePath $srcInfo.Path -ErrorAction SilentlyContinue | Out-Null
-    }
-
-    Write-Host "[完成] 当前为【普通精简模式】，已完成组件清理与组件存储修复验证，保留完整更新回滚基线与安装兼容性。" -ForegroundColor Green
+    Write-Host "[完成] 当前为【普通精简模式】，已保留完整 WinSxS 核心组件库与更新回滚基线。" -ForegroundColor Green
 } else {
     # 极限压榨：先重置基线，随后物理替换 WinSxS
     Write-Host "正在执行 DISM 深度组件清理与基线重置 (/StartComponentCleanup /ResetBase)..." -ForegroundColor Yellow
