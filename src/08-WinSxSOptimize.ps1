@@ -17,15 +17,14 @@ $currentArch     = if ($global:architecture) { $global:architecture } else { "am
 
 # ----------------- 1. 通用阶段：按模式执行组件清理 -----------------
 if ($currentTrimMode -ne "2") {
-    # 普通精简：仅安全清理，绝不重置基线（避免破坏安装依赖）
     Write-Host "正在执行 DISM 组件清理 (/StartComponentCleanup，不重置基线)..." -ForegroundColor Yellow
     & dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[提示] DISM 组件清理退出码: $LASTEXITCODE (部分精简组件无需清理或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
+        Write-Host "[提示] DISM 组件清理退出码: $LASTEXITCODE，继续推进。" -ForegroundColor DarkGray
     }
 
-    Write-Host "[完成] 当前为【普通精简模式】，已保留完整 WinSxS 核心组件库与更新回滚基线，确保安装兼容性与可维护性。" -ForegroundColor Green
+    Write-Host "[完成] 当前为【普通精简模式】，已保留完整 WinSxS 核心组件库与更新回滚基线。" -ForegroundColor Green
 } else {
     # 极限压榨：先重置基线，随后物理替换 WinSxS
     Write-Host "正在执行 DISM 深度组件清理与基线重置 (/StartComponentCleanup /ResetBase)..." -ForegroundColor Yellow
