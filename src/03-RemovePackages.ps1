@@ -1,11 +1,13 @@
 # ==============================================================================
 #  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
-#  重构要点（本次）：
-#   1. 普通精简模式新增“安装依赖保护白名单”，避免移除 Setup 在部署阶段
-#      可能依赖的组件（如 OneSettings / UEV / 遥测基础客户端等）。极限压榨
-#      模式维持原激进策略不变。
-#   2. 其余逻辑（Edge/Cortana 匹配、PackageFamilyName 解析、框架白名单、
-#      物理粉碎、SystemApps 清理、关键组件校验、FOD 移除）保持不变。
+#  重构要点：
+#   1. 普通精简模式（trimMode != 2）：仅通过官方接口移除 Appx
+#      (Remove-AppxProvisionedPackage) 与 FOD (Dism /Remove-Package)，
+#      不再物理删除 SystemApps 目录、不再物理粉碎 WindowsApps 残留。
+#   2. 极限压榨模式（trimMode == 2）：保留原有物理粉碎 SystemApps /
+#      WindowsApps 残留逻辑。
+#   3. Edge/Cortana 的 Appx 匹配、PackageFamilyName 解析、框架白名单、
+#      关键组件校验全部保留。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
@@ -40,26 +42,25 @@ if (-not $matchedArch) { $global:architecture = "amd64" }
 
 # ----------------- 2. 移除预装 AppX (Bloatware + Edge + Cortana) -----------------
 $targetAppxPatterns = @(
-    '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', 
-    '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*', 
-    '*SoundRecorder*', '*Solitaire*', '*FeedbackHub*', '*Maps*', 
-    '*OfficeHub*', '*Help*', '*Family*', '*Alarms*', '*Camera*', 
-    '*QuickAssist*', '*PeopleExperienceHost*', '*PinningConfirmationDialog*', 
-    '*SecureAssessmentBrowser*', '*CommunicationsApps*', '*Copilot*', 
-    '*AV1VideoExtension*', '*HEIFImageExtension*', '*HEVCVideoExtension*', 
+    '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*',
+    '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*',
+    '*SoundRecorder*', '*Solitaire*', '*FeedbackHub*', '*Maps*',
+    '*OfficeHub*', '*Help*', '*Family*', '*Alarms*', '*Camera*',
+    '*QuickAssist*', '*PeopleExperienceHost*', '*PinningConfirmationDialog*',
+    '*SecureAssessmentBrowser*', '*CommunicationsApps*', '*Copilot*',
+    '*AV1VideoExtension*', '*HEIFImageExtension*', '*HEVCVideoExtension*',
     '*WebpImageExtension*', '*Cortana*',
     '*MicrosoftEdge.Stable*', '*MicrosoftEdge*', '*Microsoft.MicrosoftEdge*',
     '*549981C3F5F10*'
 )
 
-# 框架组件保护白名单：任何通配符都不得误伤这些包
+# 框架组件保护白名单
 $protectedFrameworkPatterns = @(
     '*Microsoft.UI.Xaml*', '*Microsoft.VCLibs*', '*Microsoft.WindowsAppRuntime*',
     '*Microsoft.NET.Native*', '*Microsoft.Services.Store*'
 )
 
-# 普通精简模式额外安装依赖保护：这些组件与 Setup / OOBE / 遥测基线相关，
-# 移除后可能导致安装阶段或首次登录脚本异常，普通精简下强制保留。
+# 普通精简模式额外安装依赖保护
 $installDependencyPatterns = @(
     '*OneSettings*', '*UniversalTelemetryClient*', '*CrossDevice*',
     '*Client.WebExperience*', '*Windows.ShellExperience*',
@@ -75,35 +76,24 @@ foreach ($pkg in $provisionedPackages) {
     foreach ($prot in $protectedFrameworkPatterns) {
         if ($pkg.PackageName -like $prot) { $isProtected = $true; break }
     }
-    if ($isProtected) {
-        $appxToKeep += $pkg
-        continue
-    }
+    if ($isProtected) { $appxToKeep += $pkg; continue }
 
-    # 普通精简模式下，安装依赖相关组件跳过移除
     if ($global:trimMode -ne "2") {
         $isInstallDep = $false
         foreach ($dep in $installDependencyPatterns) {
             if ($pkg.PackageName -like $dep) { $isInstallDep = $true; break }
         }
-        if ($isInstallDep) {
-            $appxToKeep += $pkg
-            continue
-        }
+        if ($isInstallDep) { $appxToKeep += $pkg; continue }
     }
 
     foreach ($pattern in $targetAppxPatterns) {
-        if ($pkg.PackageName -like $pattern) {
-            $appxToRemove += $pkg
-            break
-        }
+        if ($pkg.PackageName -like $pattern) { $appxToRemove += $pkg; break }
     }
 }
 
 Write-Host "   [框架保护] 已自动拦截保留 $($appxToKeep.Count) 个核心依赖框架/安装依赖组件。" -ForegroundColor DarkGray
 Write-Host "   [准备移除] 检测到 $($appxToRemove.Count) 个预装应用符合精简规则。" -ForegroundColor Yellow
 
-# AppX 包名 -> HKCR\Applications 下对应 exe 名的映射 (用于后续 06 模块修复关联)
 $appxExeMap = @{
     'Microsoft.Windows.Photos'            = @('Photos.exe', 'Microsoft.Photos.exe')
     'Microsoft.ScreenSketch'              = @('SnippingTool.exe', 'ScreenSketch.exe')
@@ -124,7 +114,6 @@ $appxExeMap = @{
 
 $removedPackageNames = New-Object System.Collections.Generic.List[string]
 $global:removedAppxExeNames = New-Object System.Collections.Generic.List[string]
-# 收集被移除预装应用的 PackageFamilyName，供 06 模块写入 Deprovisioned
 $global:deprovisionedAppxFamilies = New-Object System.Collections.Generic.List[string]
 
 foreach ($package in $appxToRemove) {
@@ -136,7 +125,6 @@ foreach ($package in $appxToRemove) {
     }
     $removedPackageNames.Add($package.PackageName)
 
-    # 解析 PackageFamilyName：统一取首段 Name + 末段 PublisherId（13 位小写字母数字）
     $familyName = $null
     $pkgParts = $package.PackageName -split '_'
     if ($pkgParts.Count -ge 2) {
@@ -167,33 +155,41 @@ foreach ($package in $appxToRemove) {
 
 Write-Host "   [Deprovision] 已收集 $($global:deprovisionedAppxFamilies.Count) 个包家族名，将在注册表阶段写入防重装标记。" -ForegroundColor DarkGray
 
-# 深度清理 WindowsApps 物理残留目录
-$windowsAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
-if (Test-Path -LiteralPath $windowsAppsDir) {
-    foreach ($pkgName in $removedPackageNames) {
-        $candidateFolder = Join-Path $windowsAppsDir $pkgName
-        if (Test-Path -LiteralPath $candidateFolder) {
-            Write-Host "   粉碎残留资产目录: $pkgName" -ForegroundColor DarkGray
-            & takeown.exe /F "$candidateFolder" /A /R /D Y 2>&1 | Out-Null
-            & icacls.exe "$candidateFolder" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
-            Remove-Item -LiteralPath $candidateFolder -Recurse -Force -ErrorAction SilentlyContinue
+# ----------------- 2.1 WindowsApps 物理残留清理（仅极限压榨模式） -----------------
+if ($global:trimMode -eq "2") {
+    $windowsAppsDir = Join-Path $scratchDir "Program Files\WindowsApps"
+    if (Test-Path -LiteralPath $windowsAppsDir) {
+        foreach ($pkgName in $removedPackageNames) {
+            $candidateFolder = Join-Path $windowsAppsDir $pkgName
+            if (Test-Path -LiteralPath $candidateFolder) {
+                Write-Host "   粉碎残留资产目录: $pkgName" -ForegroundColor DarkGray
+                & takeown.exe /F "$candidateFolder" /A /R /D Y 2>&1 | Out-Null
+                & icacls.exe "$candidateFolder" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+                Remove-Item -LiteralPath $candidateFolder -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
+} else {
+    Write-Host "   [普通精简] 跳过 WindowsApps 物理残留粉碎，保留官方组件注册一致性。" -ForegroundColor DarkGray
 }
 
-# ----------------- 3. 暴力物理粉碎系统级残留 (断根 Edge/Cortana) -----------------
-$sysAppsPath = Join-Path $scratchDir "Windows\SystemApps"
-if (Test-Path -LiteralPath $sysAppsPath) {
-    $sysAppsToDelete = @("*Cortana*", "*Edge*", "*PeopleExperienceHost*", "*SecureAssessmentBrowser*", "*549981C3F5F10*")
-    foreach ($pattern in $sysAppsToDelete) {
-        $items = Get-ChildItem -Path $sysAppsPath -Filter $pattern -Directory -ErrorAction SilentlyContinue
-        foreach ($item in $items) {
-            Write-Host "   删除 SystemApps 目录: $($item.Name)" -ForegroundColor DarkGray
-            & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
-            & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
-            Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+# ----------------- 3. SystemApps 物理粉碎（仅极限压榨模式） -----------------
+if ($global:trimMode -eq "2") {
+    $sysAppsPath = Join-Path $scratchDir "Windows\SystemApps"
+    if (Test-Path -LiteralPath $sysAppsPath) {
+        $sysAppsToDelete = @("*Cortana*", "*Edge*", "*PeopleExperienceHost*", "*SecureAssessmentBrowser*", "*549981C3F5F10*")
+        foreach ($pattern in $sysAppsToDelete) {
+            $items = Get-ChildItem -Path $sysAppsPath -Filter $pattern -Directory -ErrorAction SilentlyContinue
+            foreach ($item in $items) {
+                Write-Host "   删除 SystemApps 目录: $($item.Name)" -ForegroundColor DarkGray
+                & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
+                & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+                Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
+} else {
+    Write-Host "   [普通精简] 跳过 SystemApps 物理粉碎，仅依赖 Appx 官方移除与 Deprovisioned 标记。" -ForegroundColor DarkGray
 }
 
 # 关键组件完整性校验
@@ -206,7 +202,7 @@ foreach ($critical in @($openWithExe, $shell32Dll, $shCoreDll)) {
     }
 }
 
-# ----------------- 4. 移除系统底层功能包 Packages (FOD) -----------------
+# ----------------- 4. 移除系统底层功能包 Packages (FOD，官方 Remove-Package) -----------------
 $packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
