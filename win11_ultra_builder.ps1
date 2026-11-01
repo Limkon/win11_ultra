@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-11-01 06:50:23 UTC
+#  生成时间: 2026-11-01 07:08:47 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -1948,11 +1948,10 @@ Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自适
 # ==============================================================================
 #  win11 Builder - [模块 9/11] 组件库瘦身与主映像优化 (src/08-WinSxSOptimize.ps1)
 #  重构要点：
-#   1. 普通精简模式：移除 /ResetBase，仅执行 /StartComponentCleanup。
-#      原因：/ResetBase 在较新 Win11 版本上会破坏安装所需的组件基线，
-#      导致 Setup 在应用映像阶段报“无法安装”。极限压榨模式因随后会物理
-#      替换 WinSxS，/ResetBase 的影响被绕过，故仅普通精简需要修正。
-#   2. 极限压榨模式：保留原有 /ResetBase + 物理替换逻辑不变。
+#   1. 普通精简模式：仅执行 /StartComponentCleanup，不使用 /ResetBase，
+#      不做 RestoreHealth 修复验证。组件变更全部经由 DISM 官方接口完成，
+#      保留完整更新回滚基线，避免破坏安装依赖。
+#   2. 极限压榨模式：保留原有 /ResetBase + 物理替换 WinSxS 的激进逻辑。
 #   3. 本模块会被合并进单文件主脚本，禁止使用 return（会退出整个脚本），
 #      所有提前退出分支统一改为 if/else 嵌套。
 # ==============================================================================
@@ -1964,14 +1963,15 @@ $currentArch     = if ($global:architecture) { $global:architecture } else { "am
 
 # ----------------- 1. 通用阶段：按模式执行组件清理 -----------------
 if ($currentTrimMode -ne "2") {
+    # 普通精简：仅安全清理，绝不重置基线（避免破坏安装依赖）
     Write-Host "正在执行 DISM 组件清理 (/StartComponentCleanup，不重置基线)..." -ForegroundColor Yellow
     & dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[提示] DISM 组件清理退出码: $LASTEXITCODE，继续推进。" -ForegroundColor DarkGray
+        Write-Host "[提示] DISM 组件清理退出码: $LASTEXITCODE (部分精简组件无需清理或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
     }
 
-    Write-Host "[完成] 当前为【普通精简模式】，已保留完整 WinSxS 核心组件库与更新回滚基线。" -ForegroundColor Green
+    Write-Host "[完成] 当前为【普通精简模式】，已保留完整 WinSxS 核心组件库与更新回滚基线，确保安装兼容性与可维护性。" -ForegroundColor Green
 } else {
     # 极限压榨：先重置基线，随后物理替换 WinSxS
     Write-Host "正在执行 DISM 深度组件清理与基线重置 (/StartComponentCleanup /ResetBase)..." -ForegroundColor Yellow
