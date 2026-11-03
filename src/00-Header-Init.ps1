@@ -344,17 +344,28 @@ Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " [配置 5/5] 请选择 Windows 11 源文件获取方式:" -ForegroundColor Cyan
-Write-Host " [1] 输入光驱盘符 (适用于已挂载 ISO 的用户)" -ForegroundColor Green
-Write-Host " [2] 输入文件路径 (直接指定 .iso / .wim / .esd，支持拖拽)" -ForegroundColor Yellow
+Write-Host " [1] 光驱盘符   (已挂载 ISO → 完整打包生成新 ISO)" -ForegroundColor Green
+Write-Host " [2] ISO 文件   (指定 .iso  → 完整打包生成新 ISO)" -ForegroundColor Green
+Write-Host " [3] 映像文件   (指定 .wim/.esd → 仅精简, 不打包, 回写原目录) [新增]" -ForegroundColor Magenta
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-$sourceChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2]" -Seconds 15 -DefaultChoice "1"
-$global:sourceMode = $sourceChoice
-$global:driveLetter = ""
-$global:sourceFile = ""
+$sourceChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 / 2 / 3]" -Seconds 15 -DefaultChoice "1"
 
-if ($sourceChoice -eq "2") {
-    Write-Host "`n请将 .iso / .wim / .esd 文件拖拽到此处，或手动输入完整路径:" -ForegroundColor Yellow
+# 统一用 sourceMode 表达"输入类别"；用 $global:sourceKind 表达"行为语义"
+#   sourceMode  : 1=盘符 / 2=文件路径 (兼容下游 02/09/10 模块判断)
+#   sourceKind  : "drive" / "iso" / "image"
+#   isImageOnly : 是否仅精简映像、不打包 ISO、回写原目录
+$global:driveLetter  = ""
+$global:sourceFile   = ""
+$global:isImageOnly  = $false
+
+if ($sourceChoice -eq "3") {
+    # ---------- 模式 3：映像文件（仅精简，不打包） ----------
+    $global:sourceMode = "2"
+    $global:sourceKind = "image"
+    $global:isImageOnly = $true
+
+    Write-Host "`n[映像精简模式] 请将 .wim / .esd 映像文件拖拽到此处，或手动输入完整路径:" -ForegroundColor Magenta
     $inputPath = Read-Host
     $inputPath = $inputPath.Trim('"', ' ').Trim()
     if (-not (Test-Path -LiteralPath $inputPath)) {
@@ -364,15 +375,45 @@ if ($sourceChoice -eq "2") {
         exit 1
     }
     $ext = [System.IO.Path]::GetExtension($inputPath).ToLower()
-    if ($ext -notin '.iso', '.wim', '.esd') {
-        Write-Host "[严重错误] 不支持的文件格式 ($ext)，仅限 .iso / .wim / .esd。" -ForegroundColor Red
+    if ($ext -notin '.wim', '.esd') {
+        Write-Host "[严重错误] 映像精简模式仅支持 .wim / .esd，当前为 $ext。" -ForegroundColor Red
         if ($global:transcriptActive) { Stop-Transcript }
         pause
         exit 1
     }
     $global:sourceFile = $inputPath
-    Write-Host ">>> 已锁定源文件: $($global:sourceFile)" -ForegroundColor Green
+    Write-Host ">>> 已锁定源映像: $($global:sourceFile)" -ForegroundColor Green
+    Write-Host ">>> [行为] 仅执行精简，完成后直接回写至源文件所在目录（不打包 ISO）。" -ForegroundColor Magenta
+
+} elseif ($sourceChoice -eq "2") {
+    # ---------- 模式 2：ISO 文件（完整打包） ----------
+    $global:sourceMode = "2"
+    $global:sourceKind = "iso"
+
+    Write-Host "`n请将 .iso 文件拖拽到此处，或手动输入完整路径:" -ForegroundColor Yellow
+    $inputPath = Read-Host
+    $inputPath = $inputPath.Trim('"', ' ').Trim()
+    if (-not (Test-Path -LiteralPath $inputPath)) {
+        Write-Host "[严重错误] 文件不存在: $inputPath" -ForegroundColor Red
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+    $ext = [System.IO.Path]::GetExtension($inputPath).ToLower()
+    if ($ext -ne '.iso') {
+        Write-Host "[严重错误] 该模式仅支持 .iso，如需精简 .wim/.esd 请返回选择 [3]。" -ForegroundColor Red
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+    $global:sourceFile = $inputPath
+    Write-Host ">>> 已锁定源 ISO: $($global:sourceFile)" -ForegroundColor Green
+
 } else {
+    # ---------- 模式 1：光驱盘符（完整打包） ----------
+    $global:sourceMode = "1"
+    $global:sourceKind = "drive"
+
     Write-Host "`n请输入 ISO 虚拟光驱盘符 (例如 E):" -ForegroundColor Yellow
     $inputDrive = Read-Host
     $normalized = $inputDrive.Trim().TrimEnd('\').TrimEnd(':').ToUpper()
@@ -394,8 +435,14 @@ if ($global:enableEsdConversion) {
     Write-Host ">>> [配置状态] ESD 高压转换: 关闭 (直接使用 install.wim 打包)" -ForegroundColor DarkGray
 }
 Write-Host ">>> [配置状态] 工作磁盘: $($global:targetDriveLetter):" -ForegroundColor DarkGray
-Write-Host "`n[就绪] 前置配置已全部锁定，后续构建流程将完全静默自动化运行！`n" -ForegroundColor Green
 
+if ($global:isImageOnly) {
+    Write-Host ">>> [配置状态] 运行模式: 映像精简 (不打包 ISO，直接回写原目录)" -ForegroundColor Magenta
+    Write-Host ">>> [配置状态] 输出位置: $(Split-Path -Parent $global:sourceFile)" -ForegroundColor Magenta
+} else {
+    Write-Host ">>> [配置状态] 运行模式: 完整打包 (生成新 ISO)" -ForegroundColor DarkGray
+}
+Write-Host "`n[就绪] 前置配置已全部锁定，后续构建流程将完全静默自动化运行！`n" -ForegroundColor Green
 # ----------------- 13. 初始化环境清理 -----------------
 Write-Host "[初始化] 正在深度清理历史挂载残留与注册表死锁..." -ForegroundColor DarkGray
 
