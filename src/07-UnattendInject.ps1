@@ -1,5 +1,10 @@
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
+#  [新增] 映像文件夹模式（sourceMode == "3"）：
+#         跳过 $workDir\autounattend.xml 写入（$workDir 为临时空目录，写入无意义）；
+#         $scratchDir\Windows\System32\Sysprep\ 与 $scratchDir\Windows\Panther\ 下的
+#         三个应答文件仍正常注入（若该文件夹后续被重新捕获或由部署工具直接使用，
+#         应答仍生效）。
 # ==============================================================================
 
 Write-Host "`n[步骤 9/11] 正在加载全局配置并注入 Windows 安装引导应答文件..." -ForegroundColor Cyan
@@ -464,9 +469,18 @@ function Write-XmlSafely {
     }
 }
 
+# ---- 注入目标文件夹内的三个路径（文件夹 / ISO / 单文件模式通用）----
 Write-XmlSafely -Path (Join-Path $sysprepDir "unattend.xml") -Content $finalXml
 Write-XmlSafely -Path (Join-Path $sysprepDir "autounattend.xml") -Content $finalXml
 Write-XmlSafely -Path (Join-Path $pantherDir "unattend.xml") -Content $finalXml
-Write-XmlSafely -Path (Join-Path $workDir "autounattend.xml") -Content $finalXml
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自适应语言: $lang | 架构: $arch)。" -ForegroundColor Green
+# ---- ISO 根目录应答文件：仅在非文件夹模式写入 ----
+# 文件夹模式下 $workDir 是 win11_folder_mode_tmp（临时空目录），
+# 写入 autounattend.xml 无任何意义（会被 10 模块清理删除），故跳过。
+if ($global:sourceMode -eq "3") {
+    Write-Host "   [映像文件夹模式] 已跳过写入 `$workDir\autounattend.xml（临时目录，写入无意义）。" -ForegroundColor DarkGray
+    Write-Host "[完成] 高级无人值守应答文件注入完毕（目标文件夹内 3 个通道，自适应语言: $lang | 架构: $arch）。" -ForegroundColor Green
+} else {
+    Write-XmlSafely -Path (Join-Path $workDir "autounattend.xml") -Content $finalXml
+    Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自适应语言: $lang | 架构: $arch)。" -ForegroundColor Green
+}
