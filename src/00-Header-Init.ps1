@@ -517,4 +517,25 @@ try {
 & dism.exe /English /Cleanup-Wim 2>&1 | Out-Null
 
 if ($global:sourceMode -eq "3") {
-    # 映像文件夹模式：绝不允许删除 $scratchDir
+    # 映像文件夹模式：绝不允许删除 $scratchDir（即用户目标文件夹）
+    Write-Host "[初始化] 映像文件夹模式：跳过挂载点清理与目录删除，保护用户目标文件夹。" -ForegroundColor Magenta
+
+    # 仅清理可能残留的临时工作区（$workDir 已是临时目录，安全）
+    if (Test-Path $workDir) {
+        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Force -Path $sourcesDir | Out-Null
+} else {
+    cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
+
+    if (Test-Path $scratchDir) {
+        Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if (Test-Path $workDir) {
+        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Force -Path $sourcesDir | Out-Null
+}
+
+Write-Host "[初始化] 环境清理完毕，准备开始构建。" -ForegroundColor Green
