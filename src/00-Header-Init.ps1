@@ -248,9 +248,10 @@ if ($unattendChoice -eq "2") {
 # ----------------- 9. 前置配置 3/5：ESD 极限高压转换开关 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " [配置 3/5] 是否启用 ESD 极限高压转换 (最终映像格式):" -ForegroundColor Cyan
-Write-Host " [1] 是 (转换为 install.esd, 体积更小, 压缩耗时更长)" -ForegroundColor Yellow
-Write-Host " [2] 否 (直接打包 install.wim, 速度快, 兼容性最佳) [推荐]" -ForegroundColor Green
+Write-Host " [配置 3/5] 最终映像格式 (ESD 极限高压转换):" -ForegroundColor Cyan
+Write-Host " [1] 是 (输出 install.esd, 体积更小, 压缩耗时更长)" -ForegroundColor Yellow
+Write-Host " [2] 否 (输出 install.wim, 速度快, 兼容性最佳) [推荐]" -ForegroundColor Green
+Write-Host "      注: 映像精简模式下决定回写文件的扩展名。" -ForegroundColor DarkGray
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 静态开关作为交互默认值：$true -> 默认1(是)，$false -> 默认2(否)
