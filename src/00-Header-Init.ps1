@@ -1,6 +1,8 @@
 # ==============================================================================
 #  win11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
 #  [企业级重构]：全局交互五合一集中前置 + 倒计时防挂起 + 全流程静默流水线
+#  [新增] 源文件获取方式增加 [3] 映像文件夹（已释放好的文件夹 → 原地精简，
+#         不挂载、不导出 WIM、不打包 ISO，结果原地保留）
 # ==============================================================================
 
 # ----------------- 全局特性静态开关 (作为交互默认值来源) -----------------
@@ -251,7 +253,7 @@ Write-Host "==========================================================" -Foregro
 Write-Host " [配置 3/5] 最终映像格式 (ESD 极限高压转换):" -ForegroundColor Cyan
 Write-Host " [1] 是 (输出 install.esd, 体积更小, 压缩耗时更长)" -ForegroundColor Yellow
 Write-Host " [2] 否 (输出 install.wim, 速度快, 兼容性最佳) [推荐]" -ForegroundColor Green
-Write-Host "      注: 映像精简模式下决定回写文件的扩展名。" -ForegroundColor DarkGray
+Write-Host "      注: 映像文件夹模式下本项不影响流程（不产出 WIM/ESD）。" -ForegroundColor DarkGray
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 静态开关作为交互默认值：$true -> 默认1(是)，$false -> 默认2(否)
@@ -338,6 +340,8 @@ $scratchDir  = Join-Path $targetDisk "scratchdir"
 $workDir     = Join-Path $targetDisk "win11"
 $sourcesDir  = Join-Path $workDir "sources"
 
+# 注意：sourceMode 在第 11 节才确定，此处 $global:sourceMode 可能为 $null；
+# 映像文件夹模式的路径重定向放在第 11 节之后（第 11.5 节）。
 Write-Host "工作目录锁定在: $workDir" -ForegroundColor Green
 Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 
@@ -345,53 +349,84 @@ Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " [配置 5/5] 请选择 Windows 11 源文件获取方式:" -ForegroundColor Cyan
-Write-Host " [1] 光驱盘符   (已挂载 ISO → 完整打包生成新 ISO)" -ForegroundColor Green
-Write-Host " [2] ISO 文件   (指定 .iso  → 完整打包生成新 ISO)" -ForegroundColor Green
-Write-Host " [3] 映像文件   (指定 .wim/.esd → 仅精简, 不打包, 回写原目录) [新增]" -ForegroundColor Magenta
+Write-Host " [1] 光驱盘符     (已挂载 ISO → 完整打包生成新 ISO)" -ForegroundColor Green
+Write-Host " [2] 映像文件     (指定 .iso / .wim / .esd → 完整打包生成新 ISO)" -ForegroundColor Green
+Write-Host " [3] 映像文件夹   (已释放好的文件夹 → 原地精简, 不挂载、不打包) [新增]" -ForegroundColor Magenta
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 $sourceChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 / 2 / 3]" -Seconds 15 -DefaultChoice "1"
 
-# 统一用 sourceMode 表达"输入类别"；用 $global:sourceKind 表达"行为语义"
-#   sourceMode  : 1=盘符 / 2=文件路径 (兼容下游 02/09/10 模块判断)
-#   sourceKind  : "drive" / "iso" / "image"
-#   isImageOnly : 是否仅精简映像、不打包 ISO、回写原目录
+# 全局初始化，防止下游 $null 判空异常
 $global:driveLetter  = ""
 $global:sourceFile   = ""
-$global:isImageOnly  = $false
+$global:imageFolder  = ""
+$global:isFolderMode = $false
 
 if ($sourceChoice -eq "3") {
-    # ---------- 模式 3：映像文件（仅精简，不打包） ----------
-    $global:sourceMode = "2"
-    $global:sourceKind = "image"
-    $global:isImageOnly = $true
+    # ---------- 模式 3：映像文件夹（已释放，原地精简） ----------
+    $global:sourceMode   = "3"
+    $global:isFolderMode = $true
 
-    Write-Host "`n[映像精简模式] 请将 .wim / .esd 映像文件拖拽到此处，或手动输入完整路径:" -ForegroundColor Magenta
-    $inputPath = Read-Host
-    $inputPath = $inputPath.Trim('"', ' ').Trim()
-    if (-not (Test-Path -LiteralPath $inputPath)) {
-        Write-Host "[严重错误] 文件不存在: $inputPath" -ForegroundColor Red
+    Write-Host "`n[映像文件夹模式] 请将已释放好 Windows 文件结构的文件夹拖拽到此处，或手动输入完整路径:" -ForegroundColor Magenta
+    Write-Host "      (文件夹内应直接包含 Windows\、Program Files\、Users\、ProgramData\ 等目录)" -ForegroundColor DarkGray
+    $inputFolder = Read-Host
+    $inputFolder = $inputFolder.Trim('"', ' ').Trim()
+
+    if ([string]::IsNullOrWhiteSpace($inputFolder)) {
+        Write-Host "[严重错误] 未输入任何路径，流程中止。" -ForegroundColor Red
         if ($global:transcriptActive) { Stop-Transcript }
         pause
         exit 1
     }
-    $ext = [System.IO.Path]::GetExtension($inputPath).ToLower()
-    if ($ext -notin '.wim', '.esd') {
-        Write-Host "[严重错误] 映像精简模式仅支持 .wim / .esd，当前为 $ext。" -ForegroundColor Red
+    if (-not (Test-Path -LiteralPath $inputFolder -PathType Container)) {
+        Write-Host "[严重错误] 文件夹不存在或不是目录: $inputFolder" -ForegroundColor Red
         if ($global:transcriptActive) { Stop-Transcript }
         pause
         exit 1
     }
-    $global:sourceFile = $inputPath
-    Write-Host ">>> 已锁定源映像: $($global:sourceFile)" -ForegroundColor Green
-    Write-Host ">>> [行为] 仅执行精简，完成后直接回写至源文件所在目录（不打包 ISO）。" -ForegroundColor Magenta
+
+    # ---- 结构完整性前置校验（关键：DISM /Image: 与注册表 hive 加载的前提）----
+    $requiredPaths = @(
+        "Windows\System32",
+        "Windows\System32\config\SOFTWARE",
+        "Windows\System32\config\SYSTEM",
+        "Windows\System32\config\DEFAULT",
+        "Windows\System32\config\COMPONENTS",
+        "Users\Default\ntuser.dat"
+    )
+    $missingItems = @()
+    foreach ($rp in $requiredPaths) {
+        $fullRp = Join-Path $inputFolder $rp
+        if (-not (Test-Path -LiteralPath $fullRp)) { $missingItems += $rp }
+    }
+    if ($missingItems.Count -gt 0) {
+        Write-Host "[严重错误] 目标文件夹不是完整的 Windows 映像结构，缺失以下关键项：" -ForegroundColor Red
+        foreach ($m in $missingItems) { Write-Host "   - $m" -ForegroundColor Red }
+        Write-Host "请确认该文件夹由 DISM /Apply-Image 或 Expand-WindowsImage 释放得到。" -ForegroundColor Yellow
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+
+    # ---- 拒绝系统盘路径（防止对在线系统目录误操作）----
+    $inputRoot = [System.IO.Path]::GetPathRoot($inputFolder)
+    $systemRoot = $env:SystemDrive.TrimEnd('\') + '\'
+    if ($inputRoot -and $inputRoot.TrimEnd('\') -eq $systemRoot.TrimEnd('\')) {
+        Write-Host "[严重错误] 目标文件夹位于当前运行的系统盘 ($inputRoot)：无法对在线系统目录执行离线精简！" -ForegroundColor Red
+        Write-Host "请将映像释放到非系统盘（如 D:\ 或 E:\）后再重试。" -ForegroundColor Yellow
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+
+    $global:imageFolder = $inputFolder.TrimEnd('\')
+    Write-Host ">>> 已锁定映像文件夹: $($global:imageFolder)" -ForegroundColor Green
+    Write-Host ">>> [行为] 跳过挂载与 ISO 打包，直接对文件夹内容执行精简，结果原地保留。" -ForegroundColor Magenta
 
 } elseif ($sourceChoice -eq "2") {
-    # ---------- 模式 2：ISO 文件（完整打包） ----------
+    # ---------- 模式 2：映像文件（完整打包） ----------
     $global:sourceMode = "2"
-    $global:sourceKind = "iso"
-
-    Write-Host "`n请将 .iso 文件拖拽到此处，或手动输入完整路径:" -ForegroundColor Yellow
+    Write-Host "`n请将 .iso / .wim / .esd 文件拖拽到此处，或手动输入完整路径:" -ForegroundColor Yellow
     $inputPath = Read-Host
     $inputPath = $inputPath.Trim('"', ' ').Trim()
     if (-not (Test-Path -LiteralPath $inputPath)) {
@@ -401,20 +436,17 @@ if ($sourceChoice -eq "3") {
         exit 1
     }
     $ext = [System.IO.Path]::GetExtension($inputPath).ToLower()
-    if ($ext -ne '.iso') {
-        Write-Host "[严重错误] 该模式仅支持 .iso，如需精简 .wim/.esd 请返回选择 [3]。" -ForegroundColor Red
+    if ($ext -notin '.iso', '.wim', '.esd') {
+        Write-Host "[严重错误] 不支持的文件格式 ($ext)，仅限 .iso / .wim / .esd。" -ForegroundColor Red
         if ($global:transcriptActive) { Stop-Transcript }
         pause
         exit 1
     }
     $global:sourceFile = $inputPath
-    Write-Host ">>> 已锁定源 ISO: $($global:sourceFile)" -ForegroundColor Green
-
+    Write-Host ">>> 已锁定源文件: $($global:sourceFile)" -ForegroundColor Green
 } else {
     # ---------- 模式 1：光驱盘符（完整打包） ----------
     $global:sourceMode = "1"
-    $global:sourceKind = "drive"
-
     Write-Host "`n请输入 ISO 虚拟光驱盘符 (例如 E):" -ForegroundColor Yellow
     $inputDrive = Read-Host
     $normalized = $inputDrive.Trim().TrimEnd('\').TrimEnd(':').ToUpper()
@@ -428,29 +460,43 @@ if ($sourceChoice -eq "3") {
     Write-Host ">>> 已锁定挂载盘符: $($global:driveLetter)" -ForegroundColor Green
 }
 
+# ----------------- 11.5 映像文件夹模式：路径重定向（关键） -----------------
+if ($global:sourceMode -eq "3") {
+    # $scratchDir 直接指向用户文件夹：下游所有 $scratchDir\Windows\... 路径天然正确
+    $scratchDir = $global:imageFolder
+
+    # $workDir / $sourcesDir 在文件夹模式下不使用；给一个临时空目录兜底，
+    # 避免下游 New-Item / Test-Path 因 $null 崩溃（07 模块会写 $workDir\autounattend.xml）
+    $workDir    = Join-Path $targetDisk "win11_folder_mode_tmp"
+    $sourcesDir = Join-Path $workDir "sources"
+
+    Write-Host ">>> [映像文件夹模式] 离线操作目标已重定向为: $scratchDir" -ForegroundColor Magenta
+    Write-Host ">>> [映像文件夹模式] 不会创建挂载点，也不会导出 install.wim。" -ForegroundColor Magenta
+}
+
 # ----------------- 12. 配置汇总输出 -----------------
 Write-Host ""
-if ($global:enableEsdConversion) {
-    Write-Host ">>> [配置状态] ESD 高压转换: 开启 (打包前转换为 install.esd)" -ForegroundColor Yellow
+if ($global:isFolderMode) {
+    Write-Host ">>> [配置状态] 运行模式: 映像文件夹原地精简 (不挂载、不导出 WIM、不打包 ISO)" -ForegroundColor Magenta
+    Write-Host ">>> [配置状态] 目标文件夹: $($global:imageFolder)" -ForegroundColor Magenta
+    Write-Host ">>> [配置状态] ESD 高压转换: 本模式下不生效（不产出 WIM/ESD 文件）" -ForegroundColor DarkGray
 } else {
-    Write-Host ">>> [配置状态] ESD 高压转换: 关闭 (直接使用 install.wim 打包)" -ForegroundColor DarkGray
+    if ($global:enableEsdConversion) {
+        Write-Host ">>> [配置状态] ESD 高压转换: 开启 (打包前转换为 install.esd)" -ForegroundColor Yellow
+    } else {
+        Write-Host ">>> [配置状态] ESD 高压转换: 关闭 (直接使用 install.wim 打包)" -ForegroundColor DarkGray
+    }
 }
 Write-Host ">>> [配置状态] 工作磁盘: $($global:targetDriveLetter):" -ForegroundColor DarkGray
-
-if ($global:isImageOnly) {
-    Write-Host ">>> [配置状态] 运行模式: 映像精简 (不打包 ISO，直接回写原目录)" -ForegroundColor Magenta
-    Write-Host ">>> [配置状态] 输出位置: $(Split-Path -Parent $global:sourceFile)" -ForegroundColor Magenta
-} else {
-    Write-Host ">>> [配置状态] 运行模式: 完整打包 (生成新 ISO)" -ForegroundColor DarkGray
-}
 Write-Host "`n[就绪] 前置配置已全部锁定，后续构建流程将完全静默自动化运行！`n" -ForegroundColor Green
+
 # ----------------- 13. 初始化环境清理 -----------------
 Write-Host "[初始化] 正在深度清理历史挂载残留与注册表死锁..." -ForegroundColor DarkGray
 
-# 卸载可能残留的离线注册表
+# 卸载可能残留的离线注册表（仅影响本机 HKLM 挂载点，与目标文件夹无关）
 foreach ($hive in @("zCOMPONENTS", "zDEFAULT", "zNTUSER", "zSOFTWARE", "zSYSTEM")) {
-    if (Test-Path "HKLM:\$hive") { 
-        cmd.exe /c "reg.exe unload HKLM\$hive 2>nul" | Out-Null 
+    if (Test-Path "HKLM:\$hive") {
+        cmd.exe /c "reg.exe unload HKLM\$hive 2>nul" | Out-Null
     }
 }
 
@@ -467,17 +513,8 @@ try {
     }
 } catch {}
 
-# 执行官方清理并处理挂载目录
+# 执行官方清理
 & dism.exe /English /Cleanup-Wim 2>&1 | Out-Null
-cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
 
-if (Test-Path $scratchDir) { 
-    Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue 
-}
-
-if (Test-Path $workDir) { 
-    Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue 
-}
-New-Item -ItemType Directory -Force -Path $sourcesDir | Out-Null
-
-Write-Host "[初始化] 环境清理完毕，准备开始构建。" -ForegroundColor Green
+if ($global:sourceMode -eq "3") {
+    # 映像文件夹模式：绝不允许删除 $scratchDir
