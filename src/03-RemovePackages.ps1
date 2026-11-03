@@ -8,11 +8,14 @@
 #      WindowsApps 残留逻辑。
 #   3. Edge/Cortana 的 Appx 匹配、PackageFamilyName 解析、框架白名单、
 #      关键组件校验全部保留。
+#   4. [新增] 架构探测修复：文件夹模式（sourceMode == "3"）或 install.wim
+#      不存在时，改为从 $scratchDir\Windows\System32\ntoskrnl.exe 的 PE 头
+#      Machine 字段读取架构，避免 arm64 母盘被误判为 amd64。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
 
-# ----------------- 1. 语言与硬件架构深度探针 -----------------
+# ----------------- 1. 语言探针（DISM 离线操作，对文件夹模式有效） -----------------
 $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
 $matchedLang = $false
 foreach ($line in ($imageIntl -split '\r?\n')) {
@@ -24,21 +27,85 @@ foreach ($line in ($imageIntl -split '\r?\n')) {
 }
 if (-not $matchedLang) { $global:languageCode = "zh-CN" }
 
-$destWimPath = Join-Path $sourcesDir "install.wim"
-$imageInfo = & dism.exe /English /Get-WimInfo "/wimFile:$destWimPath" "/index:1"
-$matchedArch = $false
-foreach ($line in ($imageInfo -split '\r?\n')) {
-    if ($line -match 'Architecture\s*:\s*(.+)$') {
-        $rawArch = $Matches[1].Trim().ToLower()
-        if ($rawArch -eq 'x64' -or $rawArch -eq 'amd64') { $global:architecture = 'amd64' }
-        elseif ($rawArch -eq 'arm64') { $global:architecture = 'arm64' }
-        elseif ($rawArch -eq 'x86') { $global:architecture = 'x86' }
-        else { $global:architecture = $rawArch }
-        $matchedArch = $true
-        break
+# ----------------- 1.1 架构探针（文件夹模式修复） -----------------
+# 优先顺序：
+#   a) 非文件夹模式且 install.wim 存在 → DISM Get-WimInfo（原逻辑）
+#   b) 文件夹模式 / install.wim 不存在 → ntoskrnl.exe PE 头 Machine 字段
+#   c) 进程环境变量兜底 → amd64
+function Get-ArchitectureFromPe {
+    param([string]$ExePath)
+    try {
+        if (-not (Test-Path -LiteralPath $ExePath)) { return $null }
+        $fs = [System.IO.File]::Open($ExePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            if ($fs.Length -lt 0x40) { return $null }
+            $buffer = New-Object byte[] 0x400
+            $read = $fs.Read($buffer, 0, $buffer.Length)
+            if ($read -lt 0x40) { return $null }
+            # 检查 MZ 签名
+            if ($buffer[0] -ne 0x4D -or $buffer[1] -ne 0x5A) { return $null }
+            # e_lfanew at 0x3C
+            $e_lfanew = [BitConverter]::ToInt32($buffer, 0x3C)
+            if ($e_lfanew -lt 0 -or $e_lfanew -gt ($read - 6)) { return $null }
+            # 检查 PE\0\0 签名
+            if ($buffer[$e_lfanew] -ne 0x50 -or $buffer[$e_lfanew + 1] -ne 0x45 -or
+                $buffer[$e_lfanew + 2] -ne 0x00 -or $buffer[$e_lfanew + 3] -ne 0x00) { return $null }
+            # Machine at e_lfanew + 4 (2 bytes LE)
+            $machine = [BitConverter]::ToUInt16($buffer, $e_lfanew + 4)
+            switch ($machine) {
+                0x8664 { return 'amd64' }
+                0xAA64 { return 'arm64' }
+                0x014C { return 'x86'   }
+                0x0200 { return 'ia64'  }
+                default { return $null }
+            }
+        } finally {
+            $fs.Dispose()
+        }
+    } catch {
+        return $null
     }
 }
-if (-not $matchedArch) { $global:architecture = "amd64" }
+
+$matchedArch = $false
+$global:architecture = $null
+
+# a) 优先尝试 install.wim
+$destWimPath = Join-Path $sourcesDir "install.wim"
+if (Test-Path -LiteralPath $destWimPath) {
+    $imageInfo = & dism.exe /English /Get-WimInfo "/wimFile:$destWimPath" "/index:1"
+    foreach ($line in ($imageInfo -split '\r?\n')) {
+        if ($line -match 'Architecture\s*:\s*(.+)$') {
+            $rawArch = $Matches[1].Trim().ToLower()
+            if ($rawArch -eq 'x64' -or $rawArch -eq 'amd64') { $global:architecture = 'amd64' }
+            elseif ($rawArch -eq 'arm64') { $global:architecture = 'arm64' }
+            elseif ($rawArch -eq 'x86') { $global:architecture = 'x86' }
+            else { $global:architecture = $rawArch }
+            $matchedArch = $true
+            break
+        }
+    }
+}
+
+# b) install.wim 不存在或解析失败 → 从 ntoskrnl.exe PE 头读取
+if (-not $matchedArch) {
+    $ntoskrnlPath = Join-Path $scratchDir "Windows\System32\ntoskrnl.exe"
+    $peArch = Get-ArchitectureFromPe -ExePath $ntoskrnlPath
+    if ($peArch) {
+        $global:architecture = $peArch
+        $matchedArch = $true
+        Write-Host "   [架构探针] 通过 ntoskrnl.exe PE 头识别架构: $peArch" -ForegroundColor DarkGray
+    }
+}
+
+# c) 最终兜底
+if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
+    $envArch = if ($env:PROCESSOR_ARCHITECTURE) { $env:PROCESSOR_ARCHITECTURE.ToLower() } else { "" }
+    if ($envArch -eq 'arm64') { $global:architecture = 'arm64' }
+    elseif ($envArch -eq 'x86') { $global:architecture = 'x86' }
+    else { $global:architecture = 'amd64' }
+    Write-Host "   [架构探针] 回退使用环境变量/默认值: $($global:architecture)" -ForegroundColor DarkYellow
+}
 
 # ----------------- 2. 移除预装 AppX (Bloatware + Edge + Cortana) -----------------
 $targetAppxPatterns = @(
