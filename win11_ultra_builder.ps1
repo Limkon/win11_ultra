@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-11-03 11:00:18 UTC
+#  生成时间: 2026-11-03 11:36:07 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -10,6 +10,8 @@
 # ==============================================================================
 #  win11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
 #  [企业级重构]：全局交互五合一集中前置 + 倒计时防挂起 + 全流程静默流水线
+#  [新增] 源文件获取方式增加 [3] 映像文件夹（已释放好的文件夹 → 原地精简，
+#         不挂载、不导出 WIM、不打包 ISO，结果原地保留）
 # ==============================================================================
 
 # ----------------- 全局特性静态开关 (作为交互默认值来源) -----------------
@@ -260,7 +262,7 @@ Write-Host "==========================================================" -Foregro
 Write-Host " [配置 3/5] 最终映像格式 (ESD 极限高压转换):" -ForegroundColor Cyan
 Write-Host " [1] 是 (输出 install.esd, 体积更小, 压缩耗时更长)" -ForegroundColor Yellow
 Write-Host " [2] 否 (输出 install.wim, 速度快, 兼容性最佳) [推荐]" -ForegroundColor Green
-Write-Host "      注: 映像精简模式下决定回写文件的扩展名。" -ForegroundColor DarkGray
+Write-Host "      注: 映像文件夹模式下本项不影响流程（不产出 WIM/ESD）。" -ForegroundColor DarkGray
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 静态开关作为交互默认值：$true -> 默认1(是)，$false -> 默认2(否)
@@ -347,6 +349,8 @@ $scratchDir  = Join-Path $targetDisk "scratchdir"
 $workDir     = Join-Path $targetDisk "win11"
 $sourcesDir  = Join-Path $workDir "sources"
 
+# 注意：sourceMode 在第 11 节才确定，此处 $global:sourceMode 可能为 $null；
+# 映像文件夹模式的路径重定向放在第 11 节之后（第 11.5 节）。
 Write-Host "工作目录锁定在: $workDir" -ForegroundColor Green
 Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 
@@ -354,53 +358,84 @@ Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " [配置 5/5] 请选择 Windows 11 源文件获取方式:" -ForegroundColor Cyan
-Write-Host " [1] 光驱盘符   (已挂载 ISO → 完整打包生成新 ISO)" -ForegroundColor Green
-Write-Host " [2] ISO 文件   (指定 .iso  → 完整打包生成新 ISO)" -ForegroundColor Green
-Write-Host " [3] 映像文件   (指定 .wim/.esd → 仅精简, 不打包, 回写原目录) [新增]" -ForegroundColor Magenta
+Write-Host " [1] 光驱盘符     (已挂载 ISO → 完整打包生成新 ISO)" -ForegroundColor Green
+Write-Host " [2] 映像文件     (指定 .iso / .wim / .esd → 完整打包生成新 ISO)" -ForegroundColor Green
+Write-Host " [3] 映像文件夹   (已释放好的文件夹 → 原地精简, 不挂载、不打包) [新增]" -ForegroundColor Magenta
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 $sourceChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 / 2 / 3]" -Seconds 15 -DefaultChoice "1"
 
-# 统一用 sourceMode 表达"输入类别"；用 $global:sourceKind 表达"行为语义"
-#   sourceMode  : 1=盘符 / 2=文件路径 (兼容下游 02/09/10 模块判断)
-#   sourceKind  : "drive" / "iso" / "image"
-#   isImageOnly : 是否仅精简映像、不打包 ISO、回写原目录
+# 全局初始化，防止下游 $null 判空异常
 $global:driveLetter  = ""
 $global:sourceFile   = ""
-$global:isImageOnly  = $false
+$global:imageFolder  = ""
+$global:isFolderMode = $false
 
 if ($sourceChoice -eq "3") {
-    # ---------- 模式 3：映像文件（仅精简，不打包） ----------
-    $global:sourceMode = "2"
-    $global:sourceKind = "image"
-    $global:isImageOnly = $true
+    # ---------- 模式 3：映像文件夹（已释放，原地精简） ----------
+    $global:sourceMode   = "3"
+    $global:isFolderMode = $true
 
-    Write-Host "`n[映像精简模式] 请将 .wim / .esd 映像文件拖拽到此处，或手动输入完整路径:" -ForegroundColor Magenta
-    $inputPath = Read-Host
-    $inputPath = $inputPath.Trim('"', ' ').Trim()
-    if (-not (Test-Path -LiteralPath $inputPath)) {
-        Write-Host "[严重错误] 文件不存在: $inputPath" -ForegroundColor Red
+    Write-Host "`n[映像文件夹模式] 请将已释放好 Windows 文件结构的文件夹拖拽到此处，或手动输入完整路径:" -ForegroundColor Magenta
+    Write-Host "      (文件夹内应直接包含 Windows\、Program Files\、Users\、ProgramData\ 等目录)" -ForegroundColor DarkGray
+    $inputFolder = Read-Host
+    $inputFolder = $inputFolder.Trim('"', ' ').Trim()
+
+    if ([string]::IsNullOrWhiteSpace($inputFolder)) {
+        Write-Host "[严重错误] 未输入任何路径，流程中止。" -ForegroundColor Red
         if ($global:transcriptActive) { Stop-Transcript }
         pause
         exit 1
     }
-    $ext = [System.IO.Path]::GetExtension($inputPath).ToLower()
-    if ($ext -notin '.wim', '.esd') {
-        Write-Host "[严重错误] 映像精简模式仅支持 .wim / .esd，当前为 $ext。" -ForegroundColor Red
+    if (-not (Test-Path -LiteralPath $inputFolder -PathType Container)) {
+        Write-Host "[严重错误] 文件夹不存在或不是目录: $inputFolder" -ForegroundColor Red
         if ($global:transcriptActive) { Stop-Transcript }
         pause
         exit 1
     }
-    $global:sourceFile = $inputPath
-    Write-Host ">>> 已锁定源映像: $($global:sourceFile)" -ForegroundColor Green
-    Write-Host ">>> [行为] 仅执行精简，完成后直接回写至源文件所在目录（不打包 ISO）。" -ForegroundColor Magenta
+
+    # ---- 结构完整性前置校验（关键：DISM /Image: 与注册表 hive 加载的前提）----
+    $requiredPaths = @(
+        "Windows\System32",
+        "Windows\System32\config\SOFTWARE",
+        "Windows\System32\config\SYSTEM",
+        "Windows\System32\config\DEFAULT",
+        "Windows\System32\config\COMPONENTS",
+        "Users\Default\ntuser.dat"
+    )
+    $missingItems = @()
+    foreach ($rp in $requiredPaths) {
+        $fullRp = Join-Path $inputFolder $rp
+        if (-not (Test-Path -LiteralPath $fullRp)) { $missingItems += $rp }
+    }
+    if ($missingItems.Count -gt 0) {
+        Write-Host "[严重错误] 目标文件夹不是完整的 Windows 映像结构，缺失以下关键项：" -ForegroundColor Red
+        foreach ($m in $missingItems) { Write-Host "   - $m" -ForegroundColor Red }
+        Write-Host "请确认该文件夹由 DISM /Apply-Image 或 Expand-WindowsImage 释放得到。" -ForegroundColor Yellow
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+
+    # ---- 拒绝系统盘路径（防止对在线系统目录误操作）----
+    $inputRoot = [System.IO.Path]::GetPathRoot($inputFolder)
+    $systemRoot = $env:SystemDrive.TrimEnd('\') + '\'
+    if ($inputRoot -and $inputRoot.TrimEnd('\') -eq $systemRoot.TrimEnd('\')) {
+        Write-Host "[严重错误] 目标文件夹位于当前运行的系统盘 ($inputRoot)：无法对在线系统目录执行离线精简！" -ForegroundColor Red
+        Write-Host "请将映像释放到非系统盘（如 D:\ 或 E:\）后再重试。" -ForegroundColor Yellow
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+
+    $global:imageFolder = $inputFolder.TrimEnd('\')
+    Write-Host ">>> 已锁定映像文件夹: $($global:imageFolder)" -ForegroundColor Green
+    Write-Host ">>> [行为] 跳过挂载与 ISO 打包，直接对文件夹内容执行精简，结果原地保留。" -ForegroundColor Magenta
 
 } elseif ($sourceChoice -eq "2") {
-    # ---------- 模式 2：ISO 文件（完整打包） ----------
+    # ---------- 模式 2：映像文件（完整打包） ----------
     $global:sourceMode = "2"
-    $global:sourceKind = "iso"
-
-    Write-Host "`n请将 .iso 文件拖拽到此处，或手动输入完整路径:" -ForegroundColor Yellow
+    Write-Host "`n请将 .iso / .wim / .esd 文件拖拽到此处，或手动输入完整路径:" -ForegroundColor Yellow
     $inputPath = Read-Host
     $inputPath = $inputPath.Trim('"', ' ').Trim()
     if (-not (Test-Path -LiteralPath $inputPath)) {
@@ -410,20 +445,17 @@ if ($sourceChoice -eq "3") {
         exit 1
     }
     $ext = [System.IO.Path]::GetExtension($inputPath).ToLower()
-    if ($ext -ne '.iso') {
-        Write-Host "[严重错误] 该模式仅支持 .iso，如需精简 .wim/.esd 请返回选择 [3]。" -ForegroundColor Red
+    if ($ext -notin '.iso', '.wim', '.esd') {
+        Write-Host "[严重错误] 不支持的文件格式 ($ext)，仅限 .iso / .wim / .esd。" -ForegroundColor Red
         if ($global:transcriptActive) { Stop-Transcript }
         pause
         exit 1
     }
     $global:sourceFile = $inputPath
-    Write-Host ">>> 已锁定源 ISO: $($global:sourceFile)" -ForegroundColor Green
-
+    Write-Host ">>> 已锁定源文件: $($global:sourceFile)" -ForegroundColor Green
 } else {
     # ---------- 模式 1：光驱盘符（完整打包） ----------
     $global:sourceMode = "1"
-    $global:sourceKind = "drive"
-
     Write-Host "`n请输入 ISO 虚拟光驱盘符 (例如 E):" -ForegroundColor Yellow
     $inputDrive = Read-Host
     $normalized = $inputDrive.Trim().TrimEnd('\').TrimEnd(':').ToUpper()
@@ -437,29 +469,43 @@ if ($sourceChoice -eq "3") {
     Write-Host ">>> 已锁定挂载盘符: $($global:driveLetter)" -ForegroundColor Green
 }
 
+# ----------------- 11.5 映像文件夹模式：路径重定向（关键） -----------------
+if ($global:sourceMode -eq "3") {
+    # $scratchDir 直接指向用户文件夹：下游所有 $scratchDir\Windows\... 路径天然正确
+    $scratchDir = $global:imageFolder
+
+    # $workDir / $sourcesDir 在文件夹模式下不使用；给一个临时空目录兜底，
+    # 避免下游 New-Item / Test-Path 因 $null 崩溃（07 模块会写 $workDir\autounattend.xml）
+    $workDir    = Join-Path $targetDisk "win11_folder_mode_tmp"
+    $sourcesDir = Join-Path $workDir "sources"
+
+    Write-Host ">>> [映像文件夹模式] 离线操作目标已重定向为: $scratchDir" -ForegroundColor Magenta
+    Write-Host ">>> [映像文件夹模式] 不会创建挂载点，也不会导出 install.wim。" -ForegroundColor Magenta
+}
+
 # ----------------- 12. 配置汇总输出 -----------------
 Write-Host ""
-if ($global:enableEsdConversion) {
-    Write-Host ">>> [配置状态] ESD 高压转换: 开启 (打包前转换为 install.esd)" -ForegroundColor Yellow
+if ($global:isFolderMode) {
+    Write-Host ">>> [配置状态] 运行模式: 映像文件夹原地精简 (不挂载、不导出 WIM、不打包 ISO)" -ForegroundColor Magenta
+    Write-Host ">>> [配置状态] 目标文件夹: $($global:imageFolder)" -ForegroundColor Magenta
+    Write-Host ">>> [配置状态] ESD 高压转换: 本模式下不生效（不产出 WIM/ESD 文件）" -ForegroundColor DarkGray
 } else {
-    Write-Host ">>> [配置状态] ESD 高压转换: 关闭 (直接使用 install.wim 打包)" -ForegroundColor DarkGray
+    if ($global:enableEsdConversion) {
+        Write-Host ">>> [配置状态] ESD 高压转换: 开启 (打包前转换为 install.esd)" -ForegroundColor Yellow
+    } else {
+        Write-Host ">>> [配置状态] ESD 高压转换: 关闭 (直接使用 install.wim 打包)" -ForegroundColor DarkGray
+    }
 }
 Write-Host ">>> [配置状态] 工作磁盘: $($global:targetDriveLetter):" -ForegroundColor DarkGray
-
-if ($global:isImageOnly) {
-    Write-Host ">>> [配置状态] 运行模式: 映像精简 (不打包 ISO，直接回写原目录)" -ForegroundColor Magenta
-    Write-Host ">>> [配置状态] 输出位置: $(Split-Path -Parent $global:sourceFile)" -ForegroundColor Magenta
-} else {
-    Write-Host ">>> [配置状态] 运行模式: 完整打包 (生成新 ISO)" -ForegroundColor DarkGray
-}
 Write-Host "`n[就绪] 前置配置已全部锁定，后续构建流程将完全静默自动化运行！`n" -ForegroundColor Green
+
 # ----------------- 13. 初始化环境清理 -----------------
 Write-Host "[初始化] 正在深度清理历史挂载残留与注册表死锁..." -ForegroundColor DarkGray
 
-# 卸载可能残留的离线注册表
+# 卸载可能残留的离线注册表（仅影响本机 HKLM 挂载点，与目标文件夹无关）
 foreach ($hive in @("zCOMPONENTS", "zDEFAULT", "zNTUSER", "zSOFTWARE", "zSYSTEM")) {
-    if (Test-Path "HKLM:\$hive") { 
-        cmd.exe /c "reg.exe unload HKLM\$hive 2>nul" | Out-Null 
+    if (Test-Path "HKLM:\$hive") {
+        cmd.exe /c "reg.exe unload HKLM\$hive 2>nul" | Out-Null
     }
 }
 
@@ -476,18 +522,30 @@ try {
     }
 } catch {}
 
-# 执行官方清理并处理挂载目录
+# 执行官方清理
 & dism.exe /English /Cleanup-Wim 2>&1 | Out-Null
-cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
 
-if (Test-Path $scratchDir) { 
-    Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue 
-}
+if ($global:sourceMode -eq "3") {
+    # 映像文件夹模式：绝不允许删除 $scratchDir（即用户目标文件夹）
+    Write-Host "[初始化] 映像文件夹模式：跳过挂载点清理与目录删除，保护用户目标文件夹。" -ForegroundColor Magenta
 
-if (Test-Path $workDir) { 
-    Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue 
+    # 仅清理可能残留的临时工作区（$workDir 已是临时目录，安全）
+    if (Test-Path $workDir) {
+        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Force -Path $sourcesDir | Out-Null
+} else {
+    cmd.exe /c "dism.exe /English /Unmount-Image /MountDir:`"$scratchDir`" /Discard 2>nul" | Out-Null
+
+    if (Test-Path $scratchDir) {
+        Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if (Test-Path $workDir) {
+        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Force -Path $sourcesDir | Out-Null
 }
-New-Item -ItemType Directory -Force -Path $sourcesDir | Out-Null
 
 Write-Host "[初始化] 环境清理完毕，准备开始构建。" -ForegroundColor Green
 
@@ -576,9 +634,11 @@ function Safely-UnloadHive {
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 3/11] 镜像定位、导出与挂载 (src/02-MountImage.ps1)
+#  [新增] 映像文件夹模式（sourceMode == "3"）：跳过挂载/导出/复制引导，
+#         直接接管用户文件夹（$scratchDir 已在 00 模块重定向），仅做健康自检。
 # ==============================================================================
 
-# 1. 变量初始化
+# 1. 变量初始化（非文件夹模式使用；文件夹模式下 $destWim 不参与流程）
 $destWim = Join-Path $sourcesDir "install.wim"
 $isMountedISO = $false
 $fileExt = ""
@@ -588,186 +648,208 @@ $bootWimSrc = ""
 $installWimSrc = ""
 $installEsdSrc = ""
 
-# 2. 详细源文件定位与盘符校验 (双模式)
-if ($global:sourceMode -eq "2") {
-    $sourceFile = $global:sourceFile
-    $fileExt = [System.IO.Path]::GetExtension($sourceFile).ToLower()
-    
-    if ($fileExt -eq '.iso') {
-        Write-Host "`n[步骤 1/11] 正在挂载 ISO 虚拟镜像..." -ForegroundColor Cyan
-        $isoMount = Mount-DiskImage -ImagePath $sourceFile -PassThru -ErrorAction SilentlyContinue
-        if (-not $isoMount) {
-            Write-Host "[严重错误] 无法挂载 ISO 文件！可能文件损坏或被占用。" -ForegroundColor Red
-            if ($global:transcriptActive) { Stop-Transcript }
-            pause
-            exit 1
-        }
-        
-        Write-Host "   等待系统分配光驱盘符..." -ForegroundColor DarkGray
-        $driveLetter = $null
-        for ($i = 0; $i -lt 20; $i++) {
-            Start-Sleep -Milliseconds 500
-            $driveLetter = ($isoMount | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
-            if ($driveLetter) { break }
-        }
-        if (-not $driveLetter) {
-            Write-Host "[严重错误] ISO 挂载后未能获取到有效的盘符，请检查虚拟光驱驱动是否正常。" -ForegroundColor Red
-            Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null
-            if ($global:transcriptActive) { Stop-Transcript }
-            pause
-            exit 1
-        }
-        $sourceRoot = "$($driveLetter):"
-        $isMountedISO = $true
-        Write-Host "   ISO 成功挂载到: $sourceRoot" -ForegroundColor Green
-    } else {
-        Write-Host "`n[步骤 1/11] 单文件处理模式: 准备直接精简..." -ForegroundColor Cyan
-        $imageSourceToUse = $sourceFile
-        $sourceRoot = Split-Path -Parent $sourceFile
+# ==============================================================================
+# 映像文件夹模式：完全旁路挂载/导出/复制引导
+# ==============================================================================
+if ($global:sourceMode -eq "3") {
+    Write-Host "`n[步骤 1/11] 映像文件夹模式：跳过挂载、导出与引导复制，直接接管目标文件夹。" -ForegroundColor Magenta
+    Write-Host "   目标文件夹: $scratchDir" -ForegroundColor DarkGray
+
+    # 健康自检：文件夹内必须有 Windows\System32，作为最小可用性断言
+    $sys32Path = Join-Path $scratchDir "Windows\System32"
+    if (-not (Test-Path -LiteralPath $sys32Path)) {
+        Write-Host "[严重错误] 文件夹健康自检失败：未检测到 $sys32Path。" -ForegroundColor Red
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
     }
+    Write-Host "[完成] 映像文件夹已就绪，跳过步骤 2/11 与 3/11，直接进入精简流程。" -ForegroundColor Green
 } else {
-    $sourceRoot = $global:driveLetter
-    $fileExt = ".iso"
-    Write-Host "`n[步骤 1/11] 正在读取虚拟光驱盘符 $sourceRoot..." -ForegroundColor Cyan
-}
+    # ==========================================================================
+    # 以下为原有 ISO / WIM / ESD 模式逻辑，完整保留
+    # ==========================================================================
 
-# 3. 统一构建 ISO 源路径变量与深度校验
-if ($fileExt -eq ".iso") {
-    $bootWimSrc    = "$sourceRoot\sources\boot.wim"
-    $installWimSrc = "$sourceRoot\sources\install.wim"
-    $installEsdSrc = "$sourceRoot\sources\install.esd"
-    $imageSourceToUse = if (Test-Path -LiteralPath $installWimSrc) { $installWimSrc } else { $installEsdSrc }
+    # 2. 详细源文件定位与盘符校验 (双模式)
+    if ($global:sourceMode -eq "2") {
+        $sourceFile = $global:sourceFile
+        $fileExt = [System.IO.Path]::GetExtension($sourceFile).ToLower()
 
-    # 校验基础引导文件是否存在
-    if (-not (Test-Path -LiteralPath $bootWimSrc)) {
-        Write-Host "[严重错误] 在源 $sourceRoot 中未检测到 boot.wim！" -ForegroundColor Red
+        if ($fileExt -eq '.iso') {
+            Write-Host "`n[步骤 1/11] 正在挂载 ISO 虚拟镜像..." -ForegroundColor Cyan
+            $isoMount = Mount-DiskImage -ImagePath $sourceFile -PassThru -ErrorAction SilentlyContinue
+            if (-not $isoMount) {
+                Write-Host "[严重错误] 无法挂载 ISO 文件！可能文件损坏或被占用。" -ForegroundColor Red
+                if ($global:transcriptActive) { Stop-Transcript }
+                pause
+                exit 1
+            }
+
+            Write-Host "   等待系统分配光驱盘符..." -ForegroundColor DarkGray
+            $driveLetter = $null
+            for ($i = 0; $i -lt 20; $i++) {
+                Start-Sleep -Milliseconds 500
+                $driveLetter = ($isoMount | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
+                if ($driveLetter) { break }
+            }
+            if (-not $driveLetter) {
+                Write-Host "[严重错误] ISO 挂载后未能获取到有效的盘符，请检查虚拟光驱驱动是否正常。" -ForegroundColor Red
+                Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null
+                if ($global:transcriptActive) { Stop-Transcript }
+                pause
+                exit 1
+            }
+            $sourceRoot = "$($driveLetter):"
+            $isMountedISO = $true
+            Write-Host "   ISO 成功挂载到: $sourceRoot" -ForegroundColor Green
+        } else {
+            Write-Host "`n[步骤 1/11] 单文件处理模式: 准备直接精简..." -ForegroundColor Cyan
+            $imageSourceToUse = $sourceFile
+            $sourceRoot = Split-Path -Parent $sourceFile
+        }
+    } else {
+        $sourceRoot = $global:driveLetter
+        $fileExt = ".iso"
+        Write-Host "`n[步骤 1/11] 正在读取虚拟光驱盘符 $sourceRoot..." -ForegroundColor Cyan
+    }
+
+    # 3. 统一构建 ISO 源路径变量与深度校验
+    if ($fileExt -eq ".iso") {
+        $bootWimSrc    = "$sourceRoot\sources\boot.wim"
+        $installWimSrc = "$sourceRoot\sources\install.wim"
+        $installEsdSrc = "$sourceRoot\sources\install.esd"
+        $imageSourceToUse = if (Test-Path -LiteralPath $installWimSrc) { $installWimSrc } else { $installEsdSrc }
+
+        # 校验基础引导文件是否存在
+        if (-not (Test-Path -LiteralPath $bootWimSrc)) {
+            Write-Host "[严重错误] 在源 $sourceRoot 中未检测到 boot.wim！" -ForegroundColor Red
+            if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
+            if ($global:transcriptActive) { Stop-Transcript }
+            pause
+            exit 1
+        }
+        # 校验主镜像文件是否存在
+        if (-not (Test-Path -LiteralPath $installWimSrc) -and -not (Test-Path -LiteralPath $installEsdSrc)) {
+            Write-Host "[严重错误] 在源 $sourceRoot 中未检测到 install.wim 或 install.esd！" -ForegroundColor Red
+            if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
+            if ($global:transcriptActive) { Stop-Transcript }
+            pause
+            exit 1
+        }
+    }
+
+    # 4. 复制 ISO 引导架构文件 (步骤 1/11)
+    Write-Host "`n[步骤 1/11] 正在复制 ISO 核心引导架构到工作区..." -ForegroundColor Cyan
+    $sourceRoot = $sourceRoot.TrimEnd('\')
+
+    # Robocopy 返回码 0-7 均代表正常/成功，8 及以上代表严重异常
+    $null = & robocopy.exe "$sourceRoot" "$workDir" /E /XF "install.wim" "install.esd" /NDL /NFL /NC /NS /NP
+    if ($LASTEXITCODE -ge 8) {
+        $rcMsg = switch ($LASTEXITCODE) {
+            8  { "部分文件复制失败（可能被占用）" }
+            16 { "严重错误，未复制任何文件" }
+            default { "未知严重错误" }
+        }
+        Write-Host "[严重错误] 基础引导结构复制失败！Robocopy 退出码: $LASTEXITCODE ($rcMsg)" -ForegroundColor Red
         if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
         if ($global:transcriptActive) { Stop-Transcript }
         pause
         exit 1
     }
-    # 校验主镜像文件是否存在
-    if (-not (Test-Path -LiteralPath $installWimSrc) -and -not (Test-Path -LiteralPath $installEsdSrc)) {
-        Write-Host "[严重错误] 在源 $sourceRoot 中未检测到 install.wim 或 install.esd！" -ForegroundColor Red
+
+    # 校验关键引导链文件完整性
+    $criticalBootFiles = @(
+        (Join-Path $workDir "bootmgr"),
+        (Join-Path $workDir "boot\bcd"),
+        (Join-Path $workDir "boot\boot.sdi")
+    )
+    $missingBootFile = $false
+    foreach ($bf in $criticalBootFiles) {
+        if (-not (Test-Path -LiteralPath $bf)) {
+            Write-Host "[严重警告] 关键引导文件丢失: $bf" -ForegroundColor Red
+            $missingBootFile = $true
+        }
+    }
+
+    if ($missingBootFile -and $fileExt -eq ".iso") {
+        Write-Host "[严重错误] 核心引导结构未能完整复制到工作区，无法支持后续引导生成！" -ForegroundColor Red
         if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
         if ($global:transcriptActive) { Stop-Transcript }
         pause
         exit 1
     }
-}
+    Write-Host "[完成] 引导架构准备完毕。" -ForegroundColor Green
 
-# 4. 复制 ISO 引导架构文件 (步骤 1/11)
-Write-Host "`n[步骤 1/11] 正在复制 ISO 核心引导架构到工作区..." -ForegroundColor Cyan
-$sourceRoot = $sourceRoot.TrimEnd('\')
-
-# Robocopy 返回码 0-7 均代表正常/成功，8 及以上代表严重异常
-$null = & robocopy.exe "$sourceRoot" "$workDir" /E /XF "install.wim" "install.esd" /NDL /NFL /NC /NS /NP
-if ($LASTEXITCODE -ge 8) {
-    $rcMsg = switch ($LASTEXITCODE) {
-        8  { "部分文件复制失败（可能被占用）" }
-        16 { "严重错误，未复制任何文件" }
-        default { "未知严重错误" }
+    # 5. 定位源映像文件并导出目标分卷 (步骤 2/11)
+    if ($fileExt -eq ".iso") {
+        $imageSourceToUse = if (Test-Path -LiteralPath $installWimSrc) { $installWimSrc } else { $installEsdSrc }
     }
-    Write-Host "[严重错误] 基础引导结构复制失败！Robocopy 退出码: $LASTEXITCODE ($rcMsg)" -ForegroundColor Red
-    if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
-}
 
-# 校验关键引导链文件完整性
-$criticalBootFiles = @(
-    (Join-Path $workDir "bootmgr"),
-    (Join-Path $workDir "boot\bcd"),
-    (Join-Path $workDir "boot\boot.sdi")
-)
-$missingBootFile = $false
-foreach ($bf in $criticalBootFiles) {
-    if (-not (Test-Path -LiteralPath $bf)) {
-        Write-Host "[严重警告] 关键引导文件丢失: $bf" -ForegroundColor Red
-        $missingBootFile = $true
+    Write-Host "`n[步骤 2/11] 正在解析源映像分卷列表..." -ForegroundColor Cyan
+    & dism.exe /English /Get-WimInfo "/WimFile:$imageSourceToUse"
+    $index = Read-Host "请输入要精简的目标版本 Index 序号 (留空默认1)"
+    if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
+
+    Write-Host "正在导出目标分卷 $index 到工作区..." -ForegroundColor Green
+    & dism.exe /English /Export-Image "/SourceImageFile:$imageSourceToUse" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
+
+    if (-not (Test-Path -LiteralPath $destWim)) {
+        Write-Host "[严重错误] install.wim 导出生成失败！流程终止。" -ForegroundColor Red
+        if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
     }
-}
 
-if ($missingBootFile -and $fileExt -eq ".iso") {
-    Write-Host "[严重错误] 核心引导结构未能完整复制到工作区，无法支持后续引导生成！" -ForegroundColor Red
     if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
-}
-Write-Host "[完成] 引导架构准备完毕。" -ForegroundColor Green
+    $index = "1"
 
-# 5. 定位源映像文件并导出目标分卷 (步骤 2/11)
-if ($fileExt -eq ".iso") {
-    $imageSourceToUse = if (Test-Path -LiteralPath $installWimSrc) { $installWimSrc } else { $installEsdSrc }
-}
+    # 6. 解锁映像访问权限并挂载 (步骤 3/11)
+    Write-Host "`n[步骤 3/11] 正在接管 install.wim 物理访问权限并执行挂载..." -ForegroundColor Cyan
+    attrib.exe -R -S -H "$destWim" 2>&1 | Out-Null
+    & takeown.exe /F "$destWim" /A 2>&1 | Out-Null
+    & icacls.exe "$destWim" /grant "*S-1-5-32-544:F" /C /Q 2>&1 | Out-Null
+    (Get-Item -LiteralPath $destWim).IsReadOnly = $false
 
-Write-Host "`n[步骤 2/11] 正在解析源映像分卷列表..." -ForegroundColor Cyan
-& dism.exe /English /Get-WimInfo "/WimFile:$imageSourceToUse"
-$index = Read-Host "请输入要精简的目标版本 Index 序号 (留空默认1)"
-if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
+    # 清理挂载死锁
+    if (Test-Path -LiteralPath $scratchDir) {
+        Write-Host "清理历史挂载残留..." -ForegroundColor DarkGray
+        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
+        & dism.exe /English /Cleanup-Wim 2>&1 | Out-Null
+        & dism.exe /English /Cleanup-Mountpoints 2>&1 | Out-Null
 
-Write-Host "正在导出目标分卷 $index 到工作区..." -ForegroundColor Green
-& dism.exe /English /Export-Image "/SourceImageFile:$imageSourceToUse" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
+        $dismService = Get-Service -Name "Dism" -ErrorAction SilentlyContinue
+        if ($dismService -and $dismService.Status -eq 'Stopped') {
+            Start-Service -Name "Dism" -ErrorAction SilentlyContinue
+        }
 
-if (-not (Test-Path -LiteralPath $destWim)) {
-    Write-Host "[严重错误] install.wim 导出生成失败！流程终止。" -ForegroundColor Red
-    if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
-}
-
-if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
-$index = "1"
-
-# 6. 解锁映像访问权限并挂载 (步骤 3/11)
-Write-Host "`n[步骤 3/11] 正在接管 install.wim 物理访问权限并执行挂载..." -ForegroundColor Cyan
-attrib.exe -R -S -H "$destWim" 2>&1 | Out-Null
-& takeown.exe /F "$destWim" /A 2>&1 | Out-Null
-& icacls.exe "$destWim" /grant "*S-1-5-32-544:F" /C /Q 2>&1 | Out-Null
-(Get-Item -LiteralPath $destWim).IsReadOnly = $false
-
-# 清理挂载死锁
-if (Test-Path -LiteralPath $scratchDir) {
-    Write-Host "清理历史挂载残留..." -ForegroundColor DarkGray
-    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
-    & dism.exe /English /Cleanup-Wim 2>&1 | Out-Null
-    & dism.exe /English /Cleanup-Mountpoints 2>&1 | Out-Null
-    
-    $dismService = Get-Service -Name "Dism" -ErrorAction SilentlyContinue
-    if ($dismService -and $dismService.Status -eq 'Stopped') {
-        Start-Service -Name "Dism" -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        Force-NukeFolderOrFile -Target $scratchDir
     }
-    
-    Start-Sleep -Seconds 2
-    Force-NukeFolderOrFile -Target $scratchDir
+    New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
+
+    Write-Host "正在挂载目标映像到 $scratchDir (展示官方挂载进度条)..." -ForegroundColor Green
+    & dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir"
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[严重错误] DISM 映像挂载失败，退出码: $LASTEXITCODE！" -ForegroundColor Red
+        Write-Host "建议手动重启计算机以释放残留的 WIM 文件句柄后重试。" -ForegroundColor Yellow
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+
+    # 挂载健康状态自检
+    $sys32Path = Join-Path $scratchDir "Windows\System32"
+    if (-not (Test-Path -LiteralPath $sys32Path)) {
+        Write-Host "[严重错误] 挂载目录健康自检失败！未检测到 $sys32Path，映像已损坏或挂载不完整。" -ForegroundColor Red
+        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+
+    Write-Host "[完成] 系统主映像挂载成功，运行环境就绪。" -ForegroundColor Green
 }
-New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
-
-Write-Host "正在挂载目标映像到 $scratchDir (展示官方挂载进度条)..." -ForegroundColor Green
-& dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir"
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "[严重错误] DISM 映像挂载失败，退出码: $LASTEXITCODE！" -ForegroundColor Red
-    Write-Host "建议手动重启计算机以释放残留的 WIM 文件句柄后重试。" -ForegroundColor Yellow
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
-}
-
-# 挂载健康状态自检
-$sys32Path = Join-Path $scratchDir "Windows\System32"
-if (-not (Test-Path -LiteralPath $sys32Path)) {
-    Write-Host "[严重错误] 挂载目录健康自检失败！未检测到 $sys32Path，映像已损坏或挂载不完整。" -ForegroundColor Red
-    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
-}
-
-Write-Host "[完成] 系统主映像挂载成功，运行环境就绪。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/02-MountImage.ps1
 
@@ -784,11 +866,14 @@ Write-Host "[完成] 系统主映像挂载成功，运行环境就绪。" -Foreg
 #      WindowsApps 残留逻辑。
 #   3. Edge/Cortana 的 Appx 匹配、PackageFamilyName 解析、框架白名单、
 #      关键组件校验全部保留。
+#   4. [新增] 架构探测修复：文件夹模式（sourceMode == "3"）或 install.wim
+#      不存在时，改为从 $scratchDir\Windows\System32\ntoskrnl.exe 的 PE 头
+#      Machine 字段读取架构，避免 arm64 母盘被误判为 amd64。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
 
-# ----------------- 1. 语言与硬件架构深度探针 -----------------
+# ----------------- 1. 语言探针（DISM 离线操作，对文件夹模式有效） -----------------
 $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
 $matchedLang = $false
 foreach ($line in ($imageIntl -split '\r?\n')) {
@@ -800,21 +885,85 @@ foreach ($line in ($imageIntl -split '\r?\n')) {
 }
 if (-not $matchedLang) { $global:languageCode = "zh-CN" }
 
-$destWimPath = Join-Path $sourcesDir "install.wim"
-$imageInfo = & dism.exe /English /Get-WimInfo "/wimFile:$destWimPath" "/index:1"
-$matchedArch = $false
-foreach ($line in ($imageInfo -split '\r?\n')) {
-    if ($line -match 'Architecture\s*:\s*(.+)$') {
-        $rawArch = $Matches[1].Trim().ToLower()
-        if ($rawArch -eq 'x64' -or $rawArch -eq 'amd64') { $global:architecture = 'amd64' }
-        elseif ($rawArch -eq 'arm64') { $global:architecture = 'arm64' }
-        elseif ($rawArch -eq 'x86') { $global:architecture = 'x86' }
-        else { $global:architecture = $rawArch }
-        $matchedArch = $true
-        break
+# ----------------- 1.1 架构探针（文件夹模式修复） -----------------
+# 优先顺序：
+#   a) 非文件夹模式且 install.wim 存在 → DISM Get-WimInfo（原逻辑）
+#   b) 文件夹模式 / install.wim 不存在 → ntoskrnl.exe PE 头 Machine 字段
+#   c) 进程环境变量兜底 → amd64
+function Get-ArchitectureFromPe {
+    param([string]$ExePath)
+    try {
+        if (-not (Test-Path -LiteralPath $ExePath)) { return $null }
+        $fs = [System.IO.File]::Open($ExePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            if ($fs.Length -lt 0x40) { return $null }
+            $buffer = New-Object byte[] 0x400
+            $read = $fs.Read($buffer, 0, $buffer.Length)
+            if ($read -lt 0x40) { return $null }
+            # 检查 MZ 签名
+            if ($buffer[0] -ne 0x4D -or $buffer[1] -ne 0x5A) { return $null }
+            # e_lfanew at 0x3C
+            $e_lfanew = [BitConverter]::ToInt32($buffer, 0x3C)
+            if ($e_lfanew -lt 0 -or $e_lfanew -gt ($read - 6)) { return $null }
+            # 检查 PE\0\0 签名
+            if ($buffer[$e_lfanew] -ne 0x50 -or $buffer[$e_lfanew + 1] -ne 0x45 -or
+                $buffer[$e_lfanew + 2] -ne 0x00 -or $buffer[$e_lfanew + 3] -ne 0x00) { return $null }
+            # Machine at e_lfanew + 4 (2 bytes LE)
+            $machine = [BitConverter]::ToUInt16($buffer, $e_lfanew + 4)
+            switch ($machine) {
+                0x8664 { return 'amd64' }
+                0xAA64 { return 'arm64' }
+                0x014C { return 'x86'   }
+                0x0200 { return 'ia64'  }
+                default { return $null }
+            }
+        } finally {
+            $fs.Dispose()
+        }
+    } catch {
+        return $null
     }
 }
-if (-not $matchedArch) { $global:architecture = "amd64" }
+
+$matchedArch = $false
+$global:architecture = $null
+
+# a) 优先尝试 install.wim
+$destWimPath = Join-Path $sourcesDir "install.wim"
+if (Test-Path -LiteralPath $destWimPath) {
+    $imageInfo = & dism.exe /English /Get-WimInfo "/wimFile:$destWimPath" "/index:1"
+    foreach ($line in ($imageInfo -split '\r?\n')) {
+        if ($line -match 'Architecture\s*:\s*(.+)$') {
+            $rawArch = $Matches[1].Trim().ToLower()
+            if ($rawArch -eq 'x64' -or $rawArch -eq 'amd64') { $global:architecture = 'amd64' }
+            elseif ($rawArch -eq 'arm64') { $global:architecture = 'arm64' }
+            elseif ($rawArch -eq 'x86') { $global:architecture = 'x86' }
+            else { $global:architecture = $rawArch }
+            $matchedArch = $true
+            break
+        }
+    }
+}
+
+# b) install.wim 不存在或解析失败 → 从 ntoskrnl.exe PE 头读取
+if (-not $matchedArch) {
+    $ntoskrnlPath = Join-Path $scratchDir "Windows\System32\ntoskrnl.exe"
+    $peArch = Get-ArchitectureFromPe -ExePath $ntoskrnlPath
+    if ($peArch) {
+        $global:architecture = $peArch
+        $matchedArch = $true
+        Write-Host "   [架构探针] 通过 ntoskrnl.exe PE 头识别架构: $peArch" -ForegroundColor DarkGray
+    }
+}
+
+# c) 最终兜底
+if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
+    $envArch = if ($env:PROCESSOR_ARCHITECTURE) { $env:PROCESSOR_ARCHITECTURE.ToLower() } else { "" }
+    if ($envArch -eq 'arm64') { $global:architecture = 'arm64' }
+    elseif ($envArch -eq 'x86') { $global:architecture = 'x86' }
+    else { $global:architecture = 'amd64' }
+    Write-Host "   [架构探针] 回退使用环境变量/默认值: $($global:architecture)" -ForegroundColor DarkYellow
+}
 
 # ----------------- 2. 移除预装 AppX (Bloatware + Edge + Cortana) -----------------
 $targetAppxPatterns = @(
@@ -1517,6 +1666,11 @@ Write-Host "[完成] 离线注册表配置与多余服务清理全部完毕。" 
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
+#  [新增] 映像文件夹模式（sourceMode == "3"）：
+#         跳过 $workDir\autounattend.xml 写入（$workDir 为临时空目录，写入无意义）；
+#         $scratchDir\Windows\System32\Sysprep\ 与 $scratchDir\Windows\Panther\ 下的
+#         三个应答文件仍正常注入（若该文件夹后续被重新捕获或由部署工具直接使用，
+#         应答仍生效）。
 # ==============================================================================
 
 Write-Host "`n[步骤 9/11] 正在加载全局配置并注入 Windows 安装引导应答文件..." -ForegroundColor Cyan
@@ -1981,12 +2135,21 @@ function Write-XmlSafely {
     }
 }
 
+# ---- 注入目标文件夹内的三个路径（文件夹 / ISO / 单文件模式通用）----
 Write-XmlSafely -Path (Join-Path $sysprepDir "unattend.xml") -Content $finalXml
 Write-XmlSafely -Path (Join-Path $sysprepDir "autounattend.xml") -Content $finalXml
 Write-XmlSafely -Path (Join-Path $pantherDir "unattend.xml") -Content $finalXml
-Write-XmlSafely -Path (Join-Path $workDir "autounattend.xml") -Content $finalXml
 
-Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自适应语言: $lang | 架构: $arch)。" -ForegroundColor Green
+# ---- ISO 根目录应答文件：仅在非文件夹模式写入 ----
+# 文件夹模式下 $workDir 是 win11_folder_mode_tmp（临时空目录），
+# 写入 autounattend.xml 无任何意义（会被 10 模块清理删除），故跳过。
+if ($global:sourceMode -eq "3") {
+    Write-Host "   [映像文件夹模式] 已跳过写入 `$workDir\autounattend.xml（临时目录，写入无意义）。" -ForegroundColor DarkGray
+    Write-Host "[完成] 高级无人值守应答文件注入完毕（目标文件夹内 3 个通道，自适应语言: $lang | 架构: $arch）。" -ForegroundColor Green
+} else {
+    Write-XmlSafely -Path (Join-Path $workDir "autounattend.xml") -Content $finalXml
+    Write-Host "[完成] 高级无人值守应答文件多通道注入完毕 (自适应语言: $lang | 架构: $arch)。" -ForegroundColor Green
+}
 
 # <<< [分块结束] 文件来源: src/07-UnattendInject.ps1
 
@@ -2174,6 +2337,9 @@ if ($currentTrimMode -ne "2") {
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 10/11] 映像提交、二次重构与 WinPE/BCD 深度修补 (src/09-ExportAndPE.ps1)
+#  [新增] 映像文件夹模式（sourceMode == "3"）：
+#         跳过 Unmount/Commit、二次重构、boot.wim 修补、BCD 修补、
+#         ISO 根目录清洗；仅保留快捷方式清理（属于精简语义，路径对文件夹模式有效）。
 # ==============================================================================
 
 Write-Host "`n[步骤 11/11] 正在安全提交主映像并优化引导资产..." -ForegroundColor Cyan
@@ -2183,189 +2349,14 @@ $destWim2Path  = Join-Path $sourcesDir "install2.wim"
 $bootWimPath   = Join-Path $sourcesDir "boot.wim"
 $legacyBcdPath = Join-Path $workDir "boot\bcd"
 
-# ----------------- 1. 提交并卸载主系统映像 (install.wim) -----------------
-Write-Host "正在提交并卸载主系统映像 install.wim (请耐心等待写入磁盘)..." -ForegroundColor Yellow
-
-# 强制垃圾回收以释放可能附着的目录句柄
-[System.GC]::Collect()
-[System.GC]::WaitForPendingFinalizers()
-Start-Sleep -Seconds 2
-
-& dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "[严重错误] install.wim 提交卸载失败，退出码: $LASTEXITCODE！正在尝试强制放弃挂载以保护母盘..." -ForegroundColor Red
-    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
-    if ($global:transcriptActive) { Stop-Transcript }
-    pause
-    exit 1
-}
-Write-Host "[完成] 主系统映像修改已安全提交。" -ForegroundColor Green
-
-# 清理挂载点残留，避免后续 boot.wim 挂载失败
-if (Test-Path -LiteralPath $scratchDir) {
-    Force-NukeFolderOrFile -Target $scratchDir
-}
-New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
-
-# ----------------- 2. 二次重构 install.wim 消除存储碎片 -----------------
-Write-Host "正在二次导出并重构压缩 install.wim (消除内部精简碎片)..." -ForegroundColor Cyan
-& dism.exe /English /Export-Image "/SourceImageFile:$destWimPath" "/SourceIndex:1" "/DestinationImageFile:$destWim2Path" /Compress:max /CheckIntegrity
-
-if (Test-Path -LiteralPath $destWim2Path) {
-    attrib.exe -R -S -H "$destWimPath" 2>&1 | Out-Null
-    Remove-Item -LiteralPath $destWimPath -Force -ErrorAction SilentlyContinue
-    Rename-Item -LiteralPath $destWim2Path -NewName "install.wim" -Force
-    Write-Host "[完成] install.wim 导出重构完毕，体积已达最佳压缩状态。" -ForegroundColor Green
-} else {
-    Write-Host "[提示] 二次压缩镜像未能生成，安全保留原镜像继续推进。" -ForegroundColor Yellow
-}
-
 # ==============================================================================
-# 如果是单文件 WIM/ESD 模式，跳过 boot.wim 修补
+# 映像文件夹模式：整体旁路提交/重构/boot.wim/BCD/根目录清洗
 # ==============================================================================
-if ($global:sourceMode -eq "2" -and $global:sourceFile -match '\.(wim|esd)$') {
-    Write-Host "[提示] 当前为单文件处理模式，已跳过 boot.wim 和 BCD 修补工作。" -ForegroundColor DarkGray
-} else {
+if ($global:sourceMode -eq "3") {
+    Write-Host "[步骤 11/11] 映像文件夹模式：跳过 install.wim 提交、二次重构、boot.wim 修补、BCD 修补、ISO 根目录清洗。" -ForegroundColor Magenta
 
-    # ----------------- 3. 稳固修补 boot.wim (双卷全覆盖·原地提交保全元数据) -----------------
-    Write-Host "`n正在以【原地修改提交】模式深度修补 boot.wim (彻底解决 Legacy 卡 Logo 问题)..." -ForegroundColor Cyan
-
-    if (-not (Test-Path -LiteralPath $bootWimPath)) {
-        Write-Host "[严重错误] 未在 sources 目录中检测到 boot.wim，无法构建可引导介质！" -ForegroundColor Red
-        if ($global:transcriptActive) { Stop-Transcript }
-        pause
-        exit 1
-    }
-
-    # 接管 boot.wim 物理所有权与文件属性
-    attrib.exe -R -S -H "$bootWimPath" 2>&1 | Out-Null
-    & takeown.exe /F "$bootWimPath" /A 2>&1 | Out-Null
-    & icacls.exe "$bootWimPath" /grant "*S-1-5-32-544:F" /C /Q 2>&1 | Out-Null
-    try {
-        (Get-Item -LiteralPath $bootWimPath).IsReadOnly = $false
-    } catch {}
-
-    # 解析 boot.wim 内部包含的分卷数量 (行首锚定，避免误计 "Image Index" 等上下文)
-    $bootWimInfo = & dism.exe /English /Get-WimInfo "/WimFile:$bootWimPath"
-    $totalBootIndexes = 1
-    $indexMatches = [regex]::Matches($bootWimInfo, '(?m)^\s*Index\s*:\s*(\d+)\s*$')
-    if ($indexMatches.Count -gt 0) {
-        $totalBootIndexes = $indexMatches.Count
-    }
-    Write-Host "检测到 boot.wim 包含 $totalBootIndexes 个分卷，启动全卷深度渗透修补..." -ForegroundColor Green
-
-    # 循环修补 boot.wim 的每个分卷
-    for ($idx = 1; $idx -le $totalBootIndexes; $idx++) {
-        Write-Host "`n>>> 正在原地挂载修补 boot.wim 分卷 [$idx/$totalBootIndexes]..." -ForegroundColor Yellow
-
-        # 挂载当前分卷
-        & dism.exe /English /Mount-Image "/ImageFile:$bootWimPath" "/Index:$idx" "/MountDir:$scratchDir"
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "[错误] 挂载 boot.wim 分卷 $idx 失败，跳过该卷修补。" -ForegroundColor Red
-            continue
-        }
-
-        # 跟踪本卷已成功加载的 hive，便于 continue 前精确卸载
-        $loadedHives = New-Object System.Collections.Generic.List[string]
-
-        $hiveCandidates = @(
-            @{ Name = "HKLM\zDEFAULT";  Path = "$scratchDir\Windows\System32\config\default" },
-            @{ Name = "HKLM\zNTUSER";   Path = "$scratchDir\Users\Default\ntuser.dat" },
-            @{ Name = "HKLM\zSYSTEM";   Path = "$scratchDir\Windows\System32\config\SYSTEM" },
-            @{ Name = "HKLM\zSOFTWARE"; Path = "$scratchDir\Windows\System32\config\SOFTWARE" }
-        )
-
-        foreach ($hc in $hiveCandidates) {
-            if (-not (Test-Path -LiteralPath $hc.Path)) {
-                Write-Host "   [跳过] 分卷 $idx 中不存在 hive 文件: $($hc.Path)" -ForegroundColor DarkYellow
-                continue
-            }
-            & reg.exe load $hc.Name $hc.Path 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                $loadedHives.Add($hc.Name) | Out-Null
-            } else {
-                Write-Host "   [警告] hive 加载失败: $($hc.Name) <- $($hc.Path)，退出码 $LASTEXITCODE" -ForegroundColor DarkYellow
-            }
-        }
-
-        # 1. 注入全套硬件检测豁免规则 (WinPE Setup 阶段)
-        if ($loadedHives -contains "HKLM\zDEFAULT") {
-            & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-            & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-        }
-        if ($loadedHives -contains "HKLM\zNTUSER") {
-            & 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-            & 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-        }
-        if ($loadedHives -contains "HKLM\zSYSTEM") {
-            & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassCPUCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-            & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassRAMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-            & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassSecureBootCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-            & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassStorageCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-            & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassTPMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-            & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassDiskCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-            & 'reg' 'add' 'HKLM\zSYSTEM\Setup\MoSetup' '/v' 'AllowUpgradesWithUnsupportedTPMOrCPU' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-
-            # 2. 禁用 WinPE 阶段的 BitLocker 设备自动加密
-            & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker' '/v' 'PreventDeviceEncryption' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-
-            # 3. 【关键：解决 Legacy 卡死】注入内核级早期驱动启动与基本显示豁免策略
-            & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch' '/v' 'DriverLoadPolicy' '/t' 'REG_DWORD' '/d' '8' '/f' 2>&1 | Out-Null
-            & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\BasicDisplay' '/v' 'Start' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-        }
-
-        # 卸载本卷已加载的注册表配置单元 (带重试，先非 SYSTEM 后 SYSTEM)
-        [System.GC]::Collect()
-        [System.GC]::WaitForPendingFinalizers()
-        foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
-            if ($loadedHives -contains $h) {
-                Safely-UnloadHive -HiveName $h | Out-Null
-            }
-        }
-
-        # 原地安全提交修改
-        Write-Host "   正在原地提交 boot.wim 分卷 $idx 修改..." -ForegroundColor DarkGray
-        Start-Sleep -Seconds 2
-        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "   [警告] boot.wim 分卷 $idx 提交异常，执行强制释放..." -ForegroundColor Yellow
-            & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
-        }
-    }
-    Write-Host "[完成] boot.wim 所有分卷修补完成，原生架构与元数据完全保留。" -ForegroundColor Green
-
-    # ----------------- 4. 修复 Legacy BCD 显卡防死锁参数 -----------------
-    if (Test-Path -LiteralPath $legacyBcdPath) {
-        Write-Host "`n正在对 Legacy BIOS BCD 启动菜单注入兼容性保护..." -ForegroundColor Cyan
-        attrib.exe -R -S -H "$legacyBcdPath" 2>&1 | Out-Null
-
-        & bcdedit.exe /store "$legacyBcdPath" /set '{default}' detecthal Yes 2>&1 | Out-Null
-        & bcdedit.exe /store "$legacyBcdPath" /set '{bootmgr}' displaybootmenu No 2>&1 | Out-Null
-        Write-Host "[完成] Legacy BCD 启动项防死锁参数注入完毕。" -ForegroundColor Green
-    }
-
-    # ----------------- 5. ISO 根目录结构规范化清理 -----------------
-    Write-Host "`n正在对 ISO 根目录执行合规性清洗..." -ForegroundColor Cyan
-    $keepList = @(
-        "boot",
-        "efi",
-        "sources",
-        "support",
-        "bootmgr",
-        "bootmgr.efi",
-        "setup.exe",
-        "autorun.inf",
-        "autounattend.xml"
-    )
-
-    Get-ChildItem -Path $workDir | Where-Object { $_.Name -notin $keepList } | ForEach-Object {
-        Write-Host "   清除根目录多余文件/目录: $($_.Name)" -ForegroundColor DarkGray
-        Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    # ----------------- 6. 清理残留的 Edge 和 Cortana 快捷方式 -----------------
-    Write-Host "`n正在清理可能残留的 Edge 和 Cortana 快捷方式..." -ForegroundColor Cyan
+    # 仅保留精简语义内的快捷方式清理（路径对文件夹模式天然正确）
+    Write-Host "正在清理可能残留的 Edge 和 Cortana 快捷方式..." -ForegroundColor Cyan
     $shortcutPaths = @(
         "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk",
         "$scratchDir\Users\Default\Desktop\Microsoft Edge.lnk",
@@ -2379,7 +2370,210 @@ if ($global:sourceMode -eq "2" -and $global:sourceFile -match '\.(wim|esd)$') {
         }
     }
 
-    Write-Host "[完成] WinPE 引导与 BCD 修补全部圆满就绪。" -ForegroundColor Green
+    Write-Host "[完成] 映像文件夹模式精简收尾完毕。" -ForegroundColor Green
+} else {
+    # ==========================================================================
+    # 以下为原有 ISO / WIM / ESD 模式逻辑，完整保留
+    # ==========================================================================
+
+    # ----------------- 1. 提交并卸载主系统映像 (install.wim) -----------------
+    Write-Host "正在提交并卸载主系统映像 install.wim (请耐心等待写入磁盘)..." -ForegroundColor Yellow
+
+    # 强制垃圾回收以释放可能附着的目录句柄
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+    Start-Sleep -Seconds 2
+
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[严重错误] install.wim 提交卸载失败，退出码: $LASTEXITCODE！正在尝试强制放弃挂载以保护母盘..." -ForegroundColor Red
+        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
+    }
+    Write-Host "[完成] 主系统映像修改已安全提交。" -ForegroundColor Green
+
+    # 清理挂载点残留，避免后续 boot.wim 挂载失败
+    if (Test-Path -LiteralPath $scratchDir) {
+        Force-NukeFolderOrFile -Target $scratchDir
+    }
+    New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
+
+    # ----------------- 2. 二次重构 install.wim 消除存储碎片 -----------------
+    Write-Host "正在二次导出并重构压缩 install.wim (消除内部精简碎片)..." -ForegroundColor Cyan
+    & dism.exe /English /Export-Image "/SourceImageFile:$destWimPath" "/SourceIndex:1" "/DestinationImageFile:$destWim2Path" /Compress:max /CheckIntegrity
+
+    if (Test-Path -LiteralPath $destWim2Path) {
+        attrib.exe -R -S -H "$destWimPath" 2>&1 | Out-Null
+        Remove-Item -LiteralPath $destWimPath -Force -ErrorAction SilentlyContinue
+        Rename-Item -LiteralPath $destWim2Path -NewName "install.wim" -Force
+        Write-Host "[完成] install.wim 导出重构完毕，体积已达最佳压缩状态。" -ForegroundColor Green
+    } else {
+        Write-Host "[提示] 二次压缩镜像未能生成，安全保留原镜像继续推进。" -ForegroundColor Yellow
+    }
+
+    # ==========================================================================
+    # 如果是单文件 WIM/ESD 模式，跳过 boot.wim 修补
+    # ==========================================================================
+    if ($global:sourceMode -eq "2" -and $global:sourceFile -match '\.(wim|esd)$') {
+        Write-Host "[提示] 当前为单文件处理模式，已跳过 boot.wim 和 BCD 修补工作。" -ForegroundColor DarkGray
+    } else {
+
+        # ----------------- 3. 稳固修补 boot.wim (双卷全覆盖·原地提交保全元数据) -----------------
+        Write-Host "`n正在以【原地修改提交】模式深度修补 boot.wim (彻底解决 Legacy 卡 Logo 问题)..." -ForegroundColor Cyan
+
+        if (-not (Test-Path -LiteralPath $bootWimPath)) {
+            Write-Host "[严重错误] 未在 sources 目录中检测到 boot.wim，无法构建可引导介质！" -ForegroundColor Red
+            if ($global:transcriptActive) { Stop-Transcript }
+            pause
+            exit 1
+        }
+
+        # 接管 boot.wim 物理所有权与文件属性
+        attrib.exe -R -S -H "$bootWimPath" 2>&1 | Out-Null
+        & takeown.exe /F "$bootWimPath" /A 2>&1 | Out-Null
+        & icacls.exe "$bootWimPath" /grant "*S-1-5-32-544:F" /C /Q 2>&1 | Out-Null
+        try {
+            (Get-Item -LiteralPath $bootWimPath).IsReadOnly = $false
+        } catch {}
+
+        # 解析 boot.wim 内部包含的分卷数量 (行首锚定，避免误计 "Image Index" 等上下文)
+        $bootWimInfo = & dism.exe /English /Get-WimInfo "/WimFile:$bootWimPath"
+        $totalBootIndexes = 1
+        $indexMatches = [regex]::Matches($bootWimInfo, '(?m)^\s*Index\s*:\s*(\d+)\s*$')
+        if ($indexMatches.Count -gt 0) {
+            $totalBootIndexes = $indexMatches.Count
+        }
+        Write-Host "检测到 boot.wim 包含 $totalBootIndexes 个分卷，启动全卷深度渗透修补..." -ForegroundColor Green
+
+        # 循环修补 boot.wim 的每个分卷
+        for ($idx = 1; $idx -le $totalBootIndexes; $idx++) {
+            Write-Host "`n>>> 正在原地挂载修补 boot.wim 分卷 [$idx/$totalBootIndexes]..." -ForegroundColor Yellow
+
+            # 挂载当前分卷
+            & dism.exe /English /Mount-Image "/ImageFile:$bootWimPath" "/Index:$idx" "/MountDir:$scratchDir"
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[错误] 挂载 boot.wim 分卷 $idx 失败，跳过该卷修补。" -ForegroundColor Red
+                continue
+            }
+
+            # 跟踪本卷已成功加载的 hive，便于 continue 前精确卸载
+            $loadedHives = New-Object System.Collections.Generic.List[string]
+
+            $hiveCandidates = @(
+                @{ Name = "HKLM\zDEFAULT";  Path = "$scratchDir\Windows\System32\config\default" },
+                @{ Name = "HKLM\zNTUSER";   Path = "$scratchDir\Users\Default\ntuser.dat" },
+                @{ Name = "HKLM\zSYSTEM";   Path = "$scratchDir\Windows\System32\config\SYSTEM" },
+                @{ Name = "HKLM\zSOFTWARE"; Path = "$scratchDir\Windows\System32\config\SOFTWARE" }
+            )
+
+            foreach ($hc in $hiveCandidates) {
+                if (-not (Test-Path -LiteralPath $hc.Path)) {
+                    Write-Host "   [跳过] 分卷 $idx 中不存在 hive 文件: $($hc.Path)" -ForegroundColor DarkYellow
+                    continue
+                }
+                & reg.exe load $hc.Name $hc.Path 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    $loadedHives.Add($hc.Name) | Out-Null
+                } else {
+                    Write-Host "   [警告] hive 加载失败: $($hc.Name) <- $($hc.Path)，退出码 $LASTEXITCODE" -ForegroundColor DarkYellow
+                }
+            }
+
+            # 1. 注入全套硬件检测豁免规则 (WinPE Setup 阶段)
+            if ($loadedHives -contains "HKLM\zDEFAULT") {
+                & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+                & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+            }
+            if ($loadedHives -contains "HKLM\zNTUSER") {
+                & 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+                & 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+            }
+            if ($loadedHives -contains "HKLM\zSYSTEM") {
+                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassCPUCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassRAMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassSecureBootCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassStorageCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassTPMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassDiskCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\MoSetup' '/v' 'AllowUpgradesWithUnsupportedTPMOrCPU' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+
+                # 2. 禁用 WinPE 阶段的 BitLocker 设备自动加密
+                & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker' '/v' 'PreventDeviceEncryption' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+
+                # 3. 【关键：解决 Legacy 卡死】注入内核级早期驱动启动与基本显示豁免策略
+                & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch' '/v' 'DriverLoadPolicy' '/t' 'REG_DWORD' '/d' '8' '/f' 2>&1 | Out-Null
+                & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\BasicDisplay' '/v' 'Start' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+            }
+
+            # 卸载本卷已加载的注册表配置单元 (带重试，先非 SYSTEM 后 SYSTEM)
+            [System.GC]::Collect()
+            [System.GC]::WaitForPendingFinalizers()
+            foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
+                if ($loadedHives -contains $h) {
+                    Safely-UnloadHive -HiveName $h | Out-Null
+                }
+            }
+
+            # 原地安全提交修改
+            Write-Host "   正在原地提交 boot.wim 分卷 $idx 修改..." -ForegroundColor DarkGray
+            Start-Sleep -Seconds 2
+            & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Commit
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "   [警告] boot.wim 分卷 $idx 提交异常，执行强制释放..." -ForegroundColor Yellow
+                & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /Discard 2>&1 | Out-Null
+            }
+        }
+        Write-Host "[完成] boot.wim 所有分卷修补完成，原生架构与元数据完全保留。" -ForegroundColor Green
+
+        # ----------------- 4. 修复 Legacy BCD 显卡防死锁参数 -----------------
+        if (Test-Path -LiteralPath $legacyBcdPath) {
+            Write-Host "`n正在对 Legacy BIOS BCD 启动菜单注入兼容性保护..." -ForegroundColor Cyan
+            attrib.exe -R -S -H "$legacyBcdPath" 2>&1 | Out-Null
+
+            & bcdedit.exe /store "$legacyBcdPath" /set '{default}' detecthal Yes 2>&1 | Out-Null
+            & bcdedit.exe /store "$legacyBcdPath" /set '{bootmgr}' displaybootmenu No 2>&1 | Out-Null
+            Write-Host "[完成] Legacy BCD 启动项防死锁参数注入完毕。" -ForegroundColor Green
+        }
+
+        # ----------------- 5. ISO 根目录结构规范化清理 -----------------
+        Write-Host "`n正在对 ISO 根目录执行合规性清洗..." -ForegroundColor Cyan
+        $keepList = @(
+            "boot",
+            "efi",
+            "sources",
+            "support",
+            "bootmgr",
+            "bootmgr.efi",
+            "setup.exe",
+            "autorun.inf",
+            "autounattend.xml"
+        )
+
+        Get-ChildItem -Path $workDir | Where-Object { $_.Name -notin $keepList } | ForEach-Object {
+            Write-Host "   清除根目录多余文件/目录: $($_.Name)" -ForegroundColor DarkGray
+            Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        # ----------------- 6. 清理残留的 Edge 和 Cortana 快捷方式 -----------------
+        Write-Host "`n正在清理可能残留的 Edge 和 Cortana 快捷方式..." -ForegroundColor Cyan
+        $shortcutPaths = @(
+            "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk",
+            "$scratchDir\Users\Default\Desktop\Microsoft Edge.lnk",
+            "$scratchDir\Users\Public\Desktop\Microsoft Edge.lnk",
+            "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Cortana.lnk"
+        )
+        foreach ($sc in $shortcutPaths) {
+            if (Test-Path -LiteralPath $sc) {
+                Write-Host "   清理快捷方式: $sc" -ForegroundColor DarkGray
+                Remove-Item -LiteralPath $sc -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        Write-Host "[完成] WinPE 引导与 BCD 修补全部圆满就绪。" -ForegroundColor Green
+    }
 }
 
 # <<< [分块结束] 文件来源: src/09-ExportAndPE.ps1
@@ -2395,6 +2589,9 @@ if ($global:sourceMode -eq "2" -and $global:sourceFile -match '\.(wim|esd)$') {
 #   2. ESD 转换失败回退分支增加 $destWimPath 存在性校验，避免 Move-Item 抛错。
 #   3. 保留 ISO 模式 ESD 开关、oscdimg 探测/下载/PE 头校验、双模引导校验、
 #      打包参数与清理收尾全部逻辑。
+#   4. [新增] 映像文件夹模式（sourceMode == "3"）：不打包、不转换 ESD、
+#      不拉取 oscdimg、不触碰用户文件夹；仅做最终健康检查 + 清理临时工作区
+#      + 关闭 Transcript，然后退出主脚本。
 # ==============================================================================
 
 Write-Host "`n[步骤 12/12] 正在校验资产并执行最终打包流程..." -ForegroundColor Cyan
@@ -2404,6 +2601,38 @@ $esdEnabled = if ($null -ne $global:enableEsdConversion) { [bool]$global:enableE
 
 $destWimPath = Join-Path $sourcesDir "install.wim"
 $destEsdPath = Join-Path $sourcesDir "install.esd"
+
+# ==============================================================================
+# 映像文件夹模式：不打包、不转换 ESD、不拉取 oscdimg，直接收尾退出
+# ==============================================================================
+if ($global:sourceMode -eq "3") {
+    Write-Host "`n[步骤 12/12] 映像文件夹模式：跳过 ISO 打包、ESD 转换、oscdimg 拉取与校验。" -ForegroundColor Magenta
+
+    # 最终健康检查（非致命提示）
+    $sys32Final = Join-Path $scratchDir "Windows\System32"
+    if (Test-Path -LiteralPath $sys32Final) {
+        Write-Host "[完成] 精简结果已原地保留于: $($global:imageFolder)" -ForegroundColor Green
+    } else {
+        Write-Host "[警告] 目标文件夹最终健康检查未通过：$sys32Final 不存在。" -ForegroundColor Yellow
+        Write-Host "        请手动核查该文件夹是否被外部进程修改或删除。" -ForegroundColor Yellow
+    }
+
+    # 仅清理本脚本产生的临时工作区（$workDir 在文件夹模式下是 win11_folder_mode_tmp），
+    # 绝不触碰 $scratchDir（用户目标文件夹）。
+    if ($workDir -and (Test-Path -LiteralPath $workDir)) {
+        Write-Host "正在清理临时工作区: $workDir" -ForegroundColor DarkGray
+        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($global:transcriptActive) {
+        Stop-Transcript
+        Start-Sleep -Milliseconds 300
+    }
+    Write-Host "`n[结束] 映像文件夹原地精简流程完成。结果目录: $($global:imageFolder)" -ForegroundColor Green
+
+    # 10 模块是主脚本最后一个模块，此 return 退出整个 dot-source 主脚本，安全
+    return
+}
 
 # ==============================================================================
 # 单文件模式：直接输出精简后的 WIM/ESD 文件，跳过 ISO 打包
