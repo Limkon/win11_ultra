@@ -6,6 +6,9 @@
 #   2. ESD 转换失败回退分支增加 $destWimPath 存在性校验，避免 Move-Item 抛错。
 #   3. 保留 ISO 模式 ESD 开关、oscdimg 探测/下载/PE 头校验、双模引导校验、
 #      打包参数与清理收尾全部逻辑。
+#   4. [新增] 映像文件夹模式（sourceMode == "3"）：不打包、不转换 ESD、
+#      不拉取 oscdimg、不触碰用户文件夹；仅做最终健康检查 + 清理临时工作区
+#      + 关闭 Transcript，然后退出主脚本。
 # ==============================================================================
 
 Write-Host "`n[步骤 12/12] 正在校验资产并执行最终打包流程..." -ForegroundColor Cyan
@@ -15,6 +18,38 @@ $esdEnabled = if ($null -ne $global:enableEsdConversion) { [bool]$global:enableE
 
 $destWimPath = Join-Path $sourcesDir "install.wim"
 $destEsdPath = Join-Path $sourcesDir "install.esd"
+
+# ==============================================================================
+# 映像文件夹模式：不打包、不转换 ESD、不拉取 oscdimg，直接收尾退出
+# ==============================================================================
+if ($global:sourceMode -eq "3") {
+    Write-Host "`n[步骤 12/12] 映像文件夹模式：跳过 ISO 打包、ESD 转换、oscdimg 拉取与校验。" -ForegroundColor Magenta
+
+    # 最终健康检查（非致命提示）
+    $sys32Final = Join-Path $scratchDir "Windows\System32"
+    if (Test-Path -LiteralPath $sys32Final) {
+        Write-Host "[完成] 精简结果已原地保留于: $($global:imageFolder)" -ForegroundColor Green
+    } else {
+        Write-Host "[警告] 目标文件夹最终健康检查未通过：$sys32Final 不存在。" -ForegroundColor Yellow
+        Write-Host "        请手动核查该文件夹是否被外部进程修改或删除。" -ForegroundColor Yellow
+    }
+
+    # 仅清理本脚本产生的临时工作区（$workDir 在文件夹模式下是 win11_folder_mode_tmp），
+    # 绝不触碰 $scratchDir（用户目标文件夹）。
+    if ($workDir -and (Test-Path -LiteralPath $workDir)) {
+        Write-Host "正在清理临时工作区: $workDir" -ForegroundColor DarkGray
+        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($global:transcriptActive) {
+        Stop-Transcript
+        Start-Sleep -Milliseconds 300
+    }
+    Write-Host "`n[结束] 映像文件夹原地精简流程完成。结果目录: $($global:imageFolder)" -ForegroundColor Green
+
+    # 10 模块是主脚本最后一个模块，此 return 退出整个 dot-source 主脚本，安全
+    return
+}
 
 # ==============================================================================
 # 单文件模式：直接输出精简后的 WIM/ESD 文件，跳过 ISO 打包
