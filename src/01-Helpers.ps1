@@ -98,6 +98,12 @@ function Safely-UnloadHive {
 }
 
 # ----------------- 3. reg.exe 静默执行器 (根治管道死锁) -----------------
+# 模块级共享临时文件：Start-Process 的 -RedirectStandardOutput/Error 不允许
+# 两个参数指向同一文件（"NUL" 与 "nul" 在 Start-Process 的字符串比较里仍被判相同），
+# 因此用两个不同的 TEMP 文件，一次性创建、全程复用，避免 340 次文件 I/O。
+$script:InvokeRegStdOut = [System.IO.Path]::GetTempFileName()
+$script:InvokeRegStdErr = [System.IO.Path]::GetTempFileName()
+
 function Invoke-RegSilent {
     <#
     .SYNOPSIS
@@ -105,15 +111,16 @@ function Invoke-RegSilent {
     .DESCRIPTION
         本次卡死根因：主脚本密集调用 `& 'reg' 'add' ... 2>&1 | Out-Null`，
         PowerShell 的匿名管道 + `Out-Null` 同步消费 + `&` 同步等待子进程退出，
-        三者叠加形成单线程死锁：主线程等 reg.exe 退出，reg.exe 等管道排空，
-        管道排空要主线程调度 → 永久挂起（WaitReason=Executive, CPU=0）。
-        本函数改用 Start-Process 的 -RedirectStandardOutput/Error "NUL"，
-        由 CreateProcess 直接把子进程 stdout/stderr 句柄指向 NUL 设备，
-        子进程输出同步丢弃，无管道、无缓冲区、无调度死锁。
+        三者叠加形成单线程死锁（reg.exe WaitReason=Executive, CPU=0 永久挂起）。
+        本函数改用 Start-Process 的 -RedirectStandardOutput/Error 指向两个不同的
+        TEMP 文件（Start-Process 不允许两个重定向参数指向同一文件），
+        由 CreateProcess 直接把子进程 stdout/stderr 句柄指向文件，
+        子进程输出同步写文件丢弃，无管道、无缓冲区、无调度死锁。
     .PARAMETER RegArgs
         reg.exe 的完整参数数组，每个元素对应一个独立 argv token。
         带空格 / 中文 / % / & / | 的值作为单个数组元素传入即可，
         PowerShell 自动加引号，无需手动转义。
+        允许空字符串元素（如 /d ''），供 NullFile / AlwaysShowExt 等空值场景使用。
     .EXAMPLE
         Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\.txt', '/ve', '/t', 'REG_SZ', '/d', 'txtfile', '/f')
     .OUTPUTS
@@ -121,12 +128,15 @@ function Invoke-RegSilent {
     #>
     param (
         [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [AllowEmptyCollection()]
         [string[]]$RegArgs
     )
 
     try {
         $p = Start-Process -FilePath "reg.exe" -ArgumentList $RegArgs -Wait -NoNewWindow -PassThru `
-                           -RedirectStandardOutput "NUL" -RedirectStandardError "NUL" `
+                           -RedirectStandardOutput $script:InvokeRegStdOut `
+                           -RedirectStandardError  $script:InvokeRegStdErr `
                            -ErrorAction Stop
         if ($null -eq $p) { return -1 }
         return $p.ExitCode
