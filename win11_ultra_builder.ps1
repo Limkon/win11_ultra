@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-11-07 15:10:52 UTC
+#  生成时间: 2026-11-07 15:22:50 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -556,11 +556,14 @@ Write-Host "[初始化] 环境清理完毕，准备开始构建。" -ForegroundC
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 2/11] 核心辅助函数库 (src/01-Helpers.ps1)
-#  [方案 C 增强] Safely-UnloadHive 新增 -AbortOnFailure 开关：
-#    - 默认 $false，行为与原版完全一致（5 次重试后警告并继续，返回 $false）
-#    - $true 时卸载失败立即红字报错 + 停 transcript + pause + exit 1，
-#      供 06-RegistryTweaks.ps1 第一轮 zSOFTWARE 卸载使用，阻断半挂载态传染
-#    - 每次重试间增加 GC 回收窗口，提升 svchost 句柄释放成功率
+#  [本版新增] Invoke-RegSilent：
+#    - 用 Start-Process + -RedirectStandardOutput/Error "NUL" 执行 reg.exe
+#    - 文件句柄级重定向（CreateProcess STARTUPINFO.hStdOutput = NUL），
+#      完全绕开 PowerShell 匿名管道，根治"连续 & reg ... | Out-Null 密集
+#      调用导致 PowerShell 单线程管道调度死锁 + reg.exe WaitReason=Executive
+#      CPU=0 永久挂起"问题（本次卡死根因）
+#    - 数组参数形式，调用方无需手动引号转义，% & | ; 空格全部安全
+#    - 保留原 Force-NukeFolderOrFile / Safely-UnloadHive 字节级不变
 # ==============================================================================
 
 # ----------------- 1. 终极物理粉碎函数 -----------------
@@ -611,7 +614,7 @@ function Safely-UnloadHive {
     .PARAMETER AbortOnFailure
         默认 $false：5 次重试失败后仅警告并继续（原版行为，向后兼容）
         $true：卸载失败立即停止 transcript、pause 并 exit 1，
-               供关键 hive（如方案 C 第一轮 zSOFTWARE）使用
+               供关键 hive（如 06 模块第一轮 zSOFTWARE）使用
     #>
     param (
         [Parameter(Mandatory = $true)]
@@ -648,6 +651,44 @@ function Safely-UnloadHive {
 
     Write-Host "   [警告] $HiveName 单元卸载超时，继续推进后续流程。" -ForegroundColor Yellow
     return $false
+}
+
+# ----------------- 3. reg.exe 静默执行器 (根治管道死锁) -----------------
+function Invoke-RegSilent {
+    <#
+    .SYNOPSIS
+        执行 reg.exe 并静默丢弃 stdout/stderr，彻底绕开 PowerShell 管道死锁。
+    .DESCRIPTION
+        本次卡死根因：主脚本密集调用 `& 'reg' 'add' ... 2>&1 | Out-Null`，
+        PowerShell 的匿名管道 + `Out-Null` 同步消费 + `&` 同步等待子进程退出，
+        三者叠加形成单线程死锁：主线程等 reg.exe 退出，reg.exe 等管道排空，
+        管道排空要主线程调度 → 永久挂起（WaitReason=Executive, CPU=0）。
+        本函数改用 Start-Process 的 -RedirectStandardOutput/Error "NUL"，
+        由 CreateProcess 直接把子进程 stdout/stderr 句柄指向 NUL 设备，
+        子进程输出同步丢弃，无管道、无缓冲区、无调度死锁。
+    .PARAMETER RegArgs
+        reg.exe 的完整参数数组，每个元素对应一个独立 argv token。
+        带空格 / 中文 / % / & / | 的值作为单个数组元素传入即可，
+        PowerShell 自动加引号，无需手动转义。
+    .EXAMPLE
+        Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\.txt', '/ve', '/t', 'REG_SZ', '/d', 'txtfile', '/f')
+    .OUTPUTS
+        System.Int32 - reg.exe 退出码（成功 0，失败非 0，进程启动失败 -1）
+    #>
+    param (
+        [Parameter(Mandatory = $true)]
+        [string[]]$RegArgs
+    )
+
+    try {
+        $p = Start-Process -FilePath "reg.exe" -ArgumentList $RegArgs -Wait -NoNewWindow -PassThru `
+                           -RedirectStandardOutput "NUL" -RedirectStandardError "NUL" `
+                           -ErrorAction Stop
+        if ($null -eq $p) { return -1 }
+        return $p.ExitCode
+    } catch {
+        return -1
+    }
 }
 
 # <<< [分块结束] 文件来源: src/01-Helpers.ps1
@@ -1363,24 +1404,26 @@ Write-Host "[完成] 冗余物理文件与底层组件清理完毕。" -Foregrou
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
-#  [方案 C 重构] 修复 Notepad 关联重建阶段 reg.exe 无限挂起：
-#    - 根因：03 模块 Appx 操作 + 本节第 1.2 节 AppxAllUserStore 写入，触发
-#      svchost 对 zSOFTWARE hive 加内部 HiveLock；Safely-UnloadHive 失败后
-#      仍继续推进，zSOFTWARE 处于半挂载态，后续裸 reg.exe add 在
-#      RegOpenKeyExW 上无限等待锁 → 整条流水线挂起。
-#    - 修复：zSOFTWARE 拆为两轮独立挂载/卸载周期：
-#        第一轮：只写 Appx Deprovisioned → 立即 AbortOnFailure 卸载
-#        第二轮：重挂 → OpenWith 修复 + Notepad 重建 + Photo Viewer → 卸载
-#      两轮之间插入 GC + Sleep 窗口，给 svchost 释放 Appx 回调锁。
-#    - 其他 hive (zCOMPONENTS/zDEFAULT/zNTUSER/zSYSTEM) 节奏不变。
-#    - 所有原有注册表项、策略、服务删除、计划任务删除、WU 禁用逻辑一字不动。
+#  [本版核心修复] 管道死锁根治：
+#    - 原密集 `& 'reg' ... 2>&1 | Out-Null` 在连续调用时触发 PowerShell
+#      单线程管道调度死锁（reg.exe WaitReason=Executive, CPU=0 永久挂起，
+#      实测卡在 Notepad 关联重建的 28 条连发段）。
+#    - 全模块约 170 条 reg 调用统一替换为 $null = Invoke-RegSilent @(...)，
+#      由 01-Helpers.ps1 中的 Invoke-RegSilent 用 Start-Process +
+#      -RedirectStandardOutput/Error "NUL" 文件句柄级重定向执行，
+#      子进程 stdout/stderr 同步丢弃到 NUL，零管道、零缓冲区、零调度死锁。
+#    - 数组参数形式，% & | ; 空格中文全部安全，reg.exe 收到已解析 argv。
+#  [保留] 方案 C 两轮挂载结构（zSOFTWARE 拆两轮，本身无害，降低 hive 长期持有）：
+#    - 第一轮：Appx Deprovisioned 写入 → AbortOnFailure 卸载
+#    - 第二轮：OpenWith / Notepad / Photo Viewer → 卸载
+#  [不变] 所有注册表项、策略、服务删除、计划任务删除、WU 禁用逻辑一字不动。
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
 
 # ==============================================================================
 # 1. 挂载非 zSOFTWARE 的注册表配置单元 (带失败检查)
-#    zSOFTWARE 延迟到第一轮内联加载，避免长时间持有触发 Appx 回调锁
+#    zSOFTWARE 延迟到第一轮内联加载
 # ==============================================================================
 $hiveLoads = @(
     @{ Name = "HKLM\zCOMPONENTS"; Path = "$scratchDir\Windows\System32\config\COMPONENTS" },
@@ -1400,8 +1443,6 @@ foreach ($h in $hiveLoads) {
 
 # ==============================================================================
 # 1.2 [方案C-第一轮] 挂载 zSOFTWARE → 只写 Appx Deprovisioned → 立即卸载
-#     目的：把 Appx 相关的注册表写入隔离在最短挂载窗口内，写完立刻切断，
-#     避免 svchost 持有的 HiveLock 传染到后续 OpenWith/Notepad 重建。
 # ==============================================================================
 Write-Host "[方案C-第一轮] 加载 zSOFTWARE 用于写入 Appx Deprovisioned 标记..." -ForegroundColor Yellow
 & reg.exe load HKLM\zSOFTWARE "$scratchDir\Windows\System32\config\SOFTWARE" 2>&1 | Out-Null
@@ -1417,7 +1458,7 @@ Write-Host "Writing Appx Deprovisioned markers to prevent bloatware re-provision
 $deprovisionedBase = "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned"
 if ($global:deprovisionedAppxFamilies -and $global:deprovisionedAppxFamilies.Count -gt 0) {
     foreach ($familyName in $global:deprovisionedAppxFamilies) {
-        & reg.exe add "$deprovisionedBase\$familyName" /f 2>&1 | Out-Null
+        $null = Invoke-RegSilent @('add', "$deprovisionedBase\$familyName", '/f')
         if ($LASTEXITCODE -eq 0) {
             Write-Host "   [Deprovision] 已标记: $familyName" -ForegroundColor DarkGray
         } else {
@@ -1433,14 +1474,13 @@ if ($global:deprovisionedAppxFamilies -and $global:deprovisionedAppxFamilies.Cou
 Write-Host "[方案C-第一轮] 写入完毕，强制卸载 zSOFTWARE（失败即中止，阻断半挂载态）..." -ForegroundColor Yellow
 Safely-UnloadHive -HiveName "HKLM\zSOFTWARE" -AbortOnFailure $true | Out-Null
 
-# 两轮之间的句柄释放窗口：给 svchost 释放 Appx 通知回调锁的时间
+# 两轮之间的句柄释放窗口
 [System.GC]::Collect()
 [System.GC]::WaitForPendingFinalizers()
 Start-Sleep -Seconds 2
 
 # ==============================================================================
 # 1.5 [方案C-第二轮] 重新挂载 zSOFTWARE → OpenWith 修复 + Notepad + Photo Viewer
-#     此时 zSOFTWARE 是干净重挂状态，Appx 回调锁已随第一轮卸载释放。
 # ==============================================================================
 Write-Host "[方案C-第二轮] 干净重挂 zSOFTWARE 用于 OpenWith / Notepad / Photo Viewer 修复..." -ForegroundColor Yellow
 & reg.exe load HKLM\zSOFTWARE "$scratchDir\Windows\System32\config\SOFTWARE" 2>&1 | Out-Null
@@ -1466,10 +1506,10 @@ if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
 
     foreach ($exe in $global:removedAppxExeNames) {
         foreach ($croot in $classesRoots) {
-            & reg.exe delete "$croot\Applications\$exe" /f 2>&1 | Out-Null
+            $null = Invoke-RegSilent @('delete', "$croot\Applications\$exe", '/f')
             foreach ($ext in $commonExtensions) {
-                & reg.exe delete "$croot\$ext\OpenWithList\$exe" /f 2>&1 | Out-Null
-                & reg.exe delete "$croot\$ext\OpenWithProgids" /v $exe /f 2>&1 | Out-Null
+                $null = Invoke-RegSilent @('delete', "$croot\$ext\OpenWithList\$exe", '/f')
+                $null = Invoke-RegSilent @('delete', "$croot\$ext\OpenWithProgids", '/v', $exe, '/f')
             }
         }
     }
@@ -1477,12 +1517,6 @@ if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
 
 # ==============================================================================
 # 步骤 B: 完整重建 Notepad 与 txtfile 关联链
-#  修复目标：
-#   1. .txt 默认 ProgID = txtfile
-#   2. txtfile 类型含 shell\open\command 指向 notepad.exe
-#   3. notepad.exe 在 Applications 下注册完整（含 FriendlyAppName、command）
-#   4. OpenWithList / OpenWithProgids 兜底
-#  注意：离线操作写 HKLM\zSOFTWARE\Classes 与 WOW6432Node\Classes 双视图
 # ==============================================================================
 Write-Host "Rebuilding Notepad and txtfile association chain..." -ForegroundColor Yellow
 
@@ -1492,56 +1526,56 @@ $notepadCmd   = '%SystemRoot%\System32\notepad.exe %1'
 foreach ($croot in $classesRoots) {
 
     # --- 1. Applications\notepad.exe 完整注册 ---
-    & 'reg' 'add' "$croot\Applications\notepad.exe" '/v' 'FriendlyAppName' '/t' 'REG_SZ' '/d' 'Notepad' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\Applications\notepad.exe\shell\open\command" '/ve' '/t' 'REG_EXPAND_SZ' '/d' $notepadCmd '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\Applications\notepad.exe\DefaultIcon" '/ve' '/t' 'REG_EXPAND_SZ' '/d' '%SystemRoot%\System32\notepad.exe,0' '/f' 2>&1 | Out-Null
+    $null = Invoke-RegSilent @('add', "$croot\Applications\notepad.exe", '/v', 'FriendlyAppName', '/t', 'REG_SZ', '/d', 'Notepad', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\Applications\notepad.exe\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', $notepadCmd, '/f')
+    $null = Invoke-RegSilent @('add', "$croot\Applications\notepad.exe\DefaultIcon", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\notepad.exe,0', '/f')
 
     # --- 2. .txt 扩展名主关联 ---
-    & 'reg' 'add' "$croot\.txt" '/ve' '/t' 'REG_SZ' '/d' 'txtfile' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\.txt" '/v' 'Content Type' '/t' 'REG_SZ' '/d' 'text/plain' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\.txt" '/v' 'PerceivedType' '/t' 'REG_SZ' '/d' 'text' '/f' 2>&1 | Out-Null
+    $null = Invoke-RegSilent @('add', "$croot\.txt", '/ve', '/t', 'REG_SZ', '/d', 'txtfile', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\.txt", '/v', 'Content Type', '/t', 'REG_SZ', '/d', 'text/plain', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\.txt", '/v', 'PerceivedType', '/t', 'REG_SZ', '/d', 'text', '/f')
 
     # --- 3. .txt\ShellNew —— "新建 → 文本文档"菜单 ---
-    & 'reg' 'add' "$croot\.txt\ShellNew" '/v' 'NullFile' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\.txt\ShellNew" '/v' 'ItemName' '/t' 'REG_EXPAND_SZ' '/d' '@%SystemRoot%\System32\notepad.exe,-470' '/f' 2>&1 | Out-Null
+    $null = Invoke-RegSilent @('add', "$croot\.txt\ShellNew", '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\.txt\ShellNew", '/v', 'ItemName', '/t', 'REG_EXPAND_SZ', '/d', '@%SystemRoot%\System32\notepad.exe,-470', '/f')
 
     # --- 4. txtfile ProgID 完整定义（含打开命令，这是关联的核心） ---
-    & 'reg' 'add' "$croot\txtfile" '/ve' '/t' 'REG_SZ' '/d' '文本文档' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\txtfile" '/v' 'AlwaysShowExt' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\txtfile" '/v' 'PerceivedType' '/t' 'REG_SZ' '/d' 'text' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\txtfile\DefaultIcon" '/ve' '/t' 'REG_EXPAND_SZ' '/d' '%SystemRoot%\System32\notepad.exe,0' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\txtfile\shell\open\command" '/ve' '/t' 'REG_EXPAND_SZ' '/d' $notepadCmd '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\txtfile\ShellNew" '/v' 'NullFile' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
+    $null = Invoke-RegSilent @('add', "$croot\txtfile", '/ve', '/t', 'REG_SZ', '/d', '文本文档', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\txtfile", '/v', 'AlwaysShowExt', '/t', 'REG_SZ', '/d', '', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\txtfile", '/v', 'PerceivedType', '/t', 'REG_SZ', '/d', 'text', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\txtfile\DefaultIcon", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\notepad.exe,0', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\txtfile\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', $notepadCmd, '/f')
+    $null = Invoke-RegSilent @('add', "$croot\txtfile\ShellNew", '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
 
     # --- 5. txtfilelegacy 兼容定义 ---
-    & 'reg' 'add' "$croot\txtfilelegacy" '/ve' '/t' 'REG_SZ' '/d' '文本文档' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\txtfilelegacy\DefaultIcon" '/ve' '/t' 'REG_EXPAND_SZ' '/d' '%SystemRoot%\System32\notepad.exe,0' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\txtfilelegacy\shell\open\command" '/ve' '/t' 'REG_EXPAND_SZ' '/d' $notepadCmd '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\txtfilelegacy\ShellNew" '/v' 'NullFile' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
+    $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy", '/ve', '/t', 'REG_SZ', '/d', '文本文档', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy\DefaultIcon", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\notepad.exe,0', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', $notepadCmd, '/f')
+    $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy\ShellNew", '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
 
     # --- 6. OpenWithList / OpenWithProgids 兜底 ---
-    & 'reg' 'add' "$croot\.txt\OpenWithList\notepad.exe" '/ve' '/t' 'REG_SZ' '/d' '' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\.txt\OpenWithProgids" '/v' 'txtfile' '/t' 'REG_NONE' '/d' '' '/f' 2>&1 | Out-Null
-    & 'reg' 'add' "$croot\.txt\OpenWithProgids" '/v' 'txtfilelegacy' '/t' 'REG_NONE' '/d' '' '/f' 2>&1 | Out-Null
+    $null = Invoke-RegSilent @('add', "$croot\.txt\OpenWithList\notepad.exe", '/ve', '/t', 'REG_SZ', '/d', '', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\.txt\OpenWithProgids", '/v', 'txtfile', '/t', 'REG_NONE', '/d', '', '/f')
+    $null = Invoke-RegSilent @('add', "$croot\.txt\OpenWithProgids", '/v', 'txtfilelegacy', '/t', 'REG_NONE', '/d', '', '/f')
 }
 Write-Host "[完成] Notepad 与 txtfile 关联链重建完毕。" -ForegroundColor Green
 
 # 步骤 C: 强制恢复 Windows 照片查看器 (Photo Viewer) 的注册与调用权限
 $photoViewerCroot = 'HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities'
-& 'reg' 'add' "$photoViewerCroot" '/v' 'ApplicationName' '/t' 'REG_SZ' '/d' '@%SystemRoot%\System32\PhotoViewer.dll,-24513' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.bmp' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.dib' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.gif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpe' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpeg' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jpg' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.jfif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Jpeg' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.png' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Png' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.tif' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "$photoViewerCroot\FileAssociations" '/v' '.tiff' '/t' 'REG_SZ' '/d' 'PhotoViewer.FileAssoc.Tiff' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', $photoViewerCroot, '/v', 'ApplicationName', '/t', 'REG_SZ', '/d', '@%SystemRoot%\System32\PhotoViewer.dll,-24513', '/f')
+$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.bmp', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
+$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.dib', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
+$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.gif', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
+$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jpe', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
+$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jpeg', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
+$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jpg', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
+$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jfif', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
+$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.png', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Png', '/f')
+$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.tif', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
+$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.tiff', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
 
-& 'reg' 'add' 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll' '/v' 'FriendlyAppName' '/t' 'REG_SZ' '/d' '@%SystemRoot%\System32\PhotoViewer.dll,-24513' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll\shell\open\command' '/ve' '/t' 'REG_SZ' '/d' 'rundll32.exe "%SystemRoot%\System32\PhotoViewer.dll", ImageView_Fullscreen %1' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll', '/v', 'FriendlyAppName', '/t', 'REG_SZ', '/d', '@%SystemRoot%\System32\PhotoViewer.dll,-24513', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll\shell\open\command', '/ve', '/t', 'REG_SZ', '/d', 'rundll32.exe "%SystemRoot%\System32\PhotoViewer.dll", ImageView_Fullscreen %1', '/f')
 
 Write-Host "[完成] OpenWith 关联修复及照片查看器注册完毕。" -ForegroundColor Green
 
@@ -1550,90 +1584,106 @@ Write-Host "[方案C-第二轮] 关联链修复完毕，卸载 zSOFTWARE..." -Fo
 Safely-UnloadHive -HiveName "HKLM\zSOFTWARE" -AbortOnFailure $false | Out-Null
 
 # ==============================================================================
-# 2. 常规注册表精简与优化（此时 zSOFTWARE 已卸载，以下仅涉及 zSYSTEM/zDEFAULT/zNTUSER）
-#    注：本段所有 HKLM\zSOFTWARE\... 的写入已在上面两轮内完成，这里不再触碰 zSOFTWARE。
+# 2. 常规注册表精简与优化（zSOFTWARE 已卸载，以下仅涉及 zSYSTEM/zDEFAULT/zNTUSER）
+#    注意：这些 HKLM\zSOFTWARE\... 的写入已在上面两轮内完成，这里不再触碰 zSOFTWARE。
+#    等等 —— 原版 2 节有大量 HKLM\zSOFTWARE\... 写入，必须重新挂载 zSOFTWARE！
 # ==============================================================================
+# [关键修正] 原版 2 节、2.5 节、3 节均包含大量 HKLM\zSOFTWARE\... 写入
+# (CloudContent/PushToInstall/MRT/OOBE/ReserveManager/Chat/OneDrive/DataCollection/
+#  DevHome/Copilot/Teams/Windows Mail/EdgeUpdate/Defender/Explorer/RunOnce/WU 策略等)。
+# 方案 C 第二轮卸载 zSOFTWARE 后，若直接继续这些写入，会全部打到未挂载的
+# HKLM\zSOFTWARE 路径（自动创建空壳键，写不进真实 hive）→ 母盘功能全丢！
+# 因此必须在 2 节开始前，第三次挂载 zSOFTWARE，并在 3 节统一卸载时一并处理。
+
+Write-Host "[方案C-第三轮] 重新挂载 zSOFTWARE 以承载 2/2.5/3 节的策略与服务写入..." -ForegroundColor Yellow
+& reg.exe load HKLM\zSOFTWARE "$scratchDir\Windows\System32\config\SOFTWARE" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[严重错误] zSOFTWARE 第三轮重挂失败，退出码 $LASTEXITCODE，后续策略写入无法执行。" -ForegroundColor Red
+    if ($global:transcriptActive) { Stop-Transcript }
+    pause
+    exit 1
+}
 
 Write-Host "Configuring Kernel ELAM & EarlyLaunch bypass..." -ForegroundColor Yellow
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch' '/v' 'DriverLoadPolicy' '/t' 'REG_DWORD' '/d' '8' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch', '/v', 'DriverLoadPolicy', '/t', 'REG_DWORD', '/d', '8', '/f')
 
 Write-Host "Bypassing system requirements(on the system image):"
-& 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassCPUCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassRAMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassSecureBootCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassStorageCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassTPMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\Setup\MoSetup' '/v' 'AllowUpgradesWithUnsupportedTPMOrCPU' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache', '/v', 'SV1', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache', '/v', 'SV2', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache', '/v', 'SV1', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache', '/v', 'SV2', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassCPUCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassRAMCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassSecureBootCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassStorageCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassTPMCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\MoSetup', '/v', 'AllowUpgradesWithUnsupportedTPMOrCPU', '/t', 'REG_DWORD', '/d', '1', '/f')
 
 Write-Host "Disabling Sponsored Apps:"
-& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'OemPreInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'PreInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SilentInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableWindowsConsumerFeatures' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'ContentDeliveryAllowed' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\PolicyManager\current\device\Start' '/v' 'ConfigureStartPins' '/t' 'REG_SZ' '/d' '{"pinnedList": [{}]}' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'FeatureManagementEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'PreInstalledAppsEverEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SoftLandingEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContentEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-310093Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-338388Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-338389Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-338393Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-353694Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-353696Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SystemPaneSuggestionsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\PushToInstall' '/v' 'DisablePushToInstall' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\MRT' '/v' 'DontOfferThroughWUAU' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'delete' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Subscriptions' '/f' 2>&1 | Out-Null
-& 'reg' 'delete' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableConsumerAccountStateContent' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableCloudOptimizedContent' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'OemPreInstalledAppsEnabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'PreInstalledAppsEnabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'SilentInstalledAppsEnabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent', '/v', 'DisableWindowsConsumerFeatures', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'ContentDeliveryAllowed', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\PolicyManager\current\device\Start', '/v', 'ConfigureStartPins', '/t', 'REG_SZ', '/d', '{"pinnedList": [{}]}', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'FeatureManagementEnabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'PreInstalledAppsEverEnabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'SoftLandingEnabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'SubscribedContentEnabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'SubscribedContent-310093Enabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'SubscribedContent-338388Enabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'SubscribedContent-338389Enabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'SubscribedContent-338393Enabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'SubscribedContent-353694Enabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'SubscribedContent-353696Enabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager', '/v', 'SystemPaneSuggestionsEnabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\PushToInstall', '/v', 'DisablePushToInstall', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\MRT', '/v', 'DontOfferThroughWUAU', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('delete', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Subscriptions', '/f')
+$null = Invoke-RegSilent @('delete', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent', '/v', 'DisableConsumerAccountStateContent', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent', '/v', 'DisableCloudOptimizedContent', '/t', 'REG_DWORD', '/d', '1', '/f')
 
 Write-Host "Enabling Local Accounts on OOBE:"
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'BypassNRO' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE', '/v', 'BypassNRO', '/t', 'REG_DWORD', '/d', '1', '/f')
 
 Write-Host "Disabling Reserved Storage:"
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager' '/v' 'ShippedWithReserves' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager', '/v', 'ShippedWithReserves', '/t', 'REG_DWORD', '/d', '0', '/f')
 Write-Host "Disabling BitLocker Device Encryption"
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker' '/v' 'PreventDeviceEncryption' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker', '/v', 'PreventDeviceEncryption', '/t', 'REG_DWORD', '/d', '1', '/f')
 
 Write-Host "Disabling Chat icon:"
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat' '/v' 'ChatIcon' '/t' 'REG_DWORD' '/d' '3' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' '/v' 'TaskbarMn' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat', '/v', 'ChatIcon', '/t', 'REG_DWORD', '/d', '3', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced', '/v', 'TaskbarMn', '/t', 'REG_DWORD', '/d', '0', '/f')
 
 Write-Host "Disabling OneDrive folder backup"
-& 'reg' 'add' "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" '/v' 'DisableFileSyncNGSC' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive', '/v', 'DisableFileSyncNGSC', '/t', 'REG_DWORD', '/d', '1', '/f')
 
 Write-Host "Disabling Telemetry:"
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo' '/v' 'Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Privacy' '/v' 'TailoredExperiencesWithDiagnosticDataEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy' '/v' 'HasAccepted' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Input\TIPC' '/v' 'Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\InputPersonalization' '/v' 'RestrictImplicitInkCollection' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\InputPersonalization' '/v' 'RestrictImplicitTextCollection' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\InputPersonalization\TrainedDataStore' '/v' 'HarvestContacts' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Personalization\Settings' '/v' 'AcceptedPrivacyPolicy' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection' '/v' 'AllowTelemetry' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo', '/v', 'Enabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Privacy', '/v', 'TailoredExperiencesWithDiagnosticDataEnabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy', '/v', 'HasAccepted', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Input\TIPC', '/v', 'Enabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\InputPersonalization', '/v', 'RestrictImplicitInkCollection', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\InputPersonalization', '/v', 'RestrictImplicitTextCollection', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\InputPersonalization\TrainedDataStore', '/v', 'HarvestContacts', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Personalization\Settings', '/v', 'AcceptedPrivacyPolicy', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection', '/v', 'AllowTelemetry', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
 
 Write-Host "Prevents installation or DevHome and Outlook:"
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate' '/v' 'workCompleted' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate' '/v' 'workCompleted' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& reg.exe delete "HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate" /f 2>&1 | Out-Null
-& reg.exe delete "HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate" /f 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate', '/v', 'workCompleted', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate', '/v', 'workCompleted', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate', '/f')
+$null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate', '/f')
 Write-Host "Disabling Copilot"
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' '/v' 'TurnOffWindowsCopilot' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Edge' '/v' 'HubsSidebarEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer' '/v' 'DisableSearchBoxSuggestions' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot', '/v', 'TurnOffWindowsCopilot', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Edge', '/v', 'HubsSidebarEnabled', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer', '/v', 'DisableSearchBoxSuggestions', '/t', 'REG_DWORD', '/d', '1', '/f')
 Write-Host "Prevents installation of Teams:"
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Teams' '/v' 'DisableInstallation' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Teams', '/v', 'DisableInstallation', '/t', 'REG_DWORD', '/d', '1', '/f')
 Write-Host "Prevent installation of New Outlook":
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail' '/v' 'PreventRun' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail', '/v', 'PreventRun', '/t', 'REG_DWORD', '/d', '1', '/f')
 
 # ==============================================================================
 # 2.5 Edge 物理删除配套：策略拦截 + 服务键删除（Defender 改为仅禁用）
@@ -1641,28 +1691,28 @@ Write-Host "Prevent installation of New Outlook":
 Write-Host "Disabling Edge at the kernel and policy level (Defender: disable-only)..." -ForegroundColor Yellow
 
 # Edge 策略拦截
-& reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
-& reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f 2>&1 | Out-Null
+$null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge', '/f')
+$null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge', '/f')
 $edgeServices = @('edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService')
 foreach ($svc in $edgeServices) {
-    & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$svc" /f 2>&1 | Out-Null
+    $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\ControlSet001\Services\$svc", '/f')
 }
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\EdgeUpdate' '/v' 'DoNotUpdateToEdgeWithChromium' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate' '/v' 'UpdateDefault' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\EdgeUpdate', '/v', 'DoNotUpdateToEdgeWithChromium', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate', '/v', 'UpdateDefault', '/t', 'REG_DWORD', '/d', '0', '/f')
 
 # Defender 策略拦截（保留策略，不删服务键）
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender' '/v' 'DisableAntiSpyware' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender' '/v' 'DisableAntiVirus' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection' '/v' 'DisableBehaviorMonitoring' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows Defender\Features' '/v' 'TamperProtection' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\SecurityHealthService' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender', '/v', 'DisableAntiSpyware', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender', '/v', 'DisableAntiVirus', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', '/v', 'DisableBehaviorMonitoring', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows Defender\Features', '/v', 'TamperProtection', '/t', 'REG_DWORD', '/d', '0', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\SecurityHealthService', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
 $defenderServices = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense", "WdBoot")
 foreach ($svc in $defenderServices) {
-    & 'reg' 'add' "HKLM\zSYSTEM\ControlSet001\Services\$svc" '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
+    $null = Invoke-RegSilent @('add', "HKLM\zSYSTEM\ControlSet001\Services\$svc", '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
 }
 
 # 屏蔽 UI 入口
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' '/v' 'SettingsPageVisibility' '/t' 'REG_SZ' '/d' 'hide:virus;windowsupdate' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer', '/v', 'SettingsPageVisibility', '/t', 'REG_SZ', '/d', 'hide:virus;windowsupdate', '/f')
 
 # ==============================================================================
 
@@ -1676,28 +1726,28 @@ Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueRep
 Write-Host "Task files have been deleted."
 
 Write-Host "Disabling Windows Update..."
-& 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'StopWUPostOOBE1' '/t' 'REG_SZ' '/d' 'net stop wuauserv' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'StopWUPostOOBE2' '/t' 'REG_SZ' '/d' 'sc stop wuauserv' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'StopWUPostOOBE3' '/t' 'REG_SZ' '/d' 'sc config wuauserv start= disabled' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'DisbaleWUPostOOBE1' '/t' 'REG_SZ' '/d' 'reg add HKLM\SYSTEM\CurrentControlSet\Services\wuauserv /v Start /t REG_DWORD /d 4 /f' '/f' 2>&1 | Out-Null
-& 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'DisbaleWUPostOOBE2' '/t' 'REG_SZ' '/d' 'reg add HKLM\SYSTEM\ControlSet001\Services\wuauserv /v Start /t REG_DWORD /d 4 /f' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' '/v' 'DoNotConnectToWindowsUpdateInternetLocations' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' '/v' 'DisableWindowsUpdateAccess' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' '/v' 'WUServer' '/t' 'REG_SZ' '/d' 'localhost' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' '/v' 'WUStatusServer' '/t' 'REG_SZ' '/d' 'localhost' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' '/v' 'UpdateServiceUrlAlternate' '/t' 'REG_SZ' '/d' 'localhost' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' '/v' 'UseWUServer' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'DisableOnline' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 2>&1 | Out-Null
-& reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC" /f 2>&1 | Out-Null
-& reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /f 2>&1 | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' '/v' 'NoAutoUpdate' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE1', '/t', 'REG_SZ', '/d', 'net stop wuauserv', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE2', '/t', 'REG_SZ', '/d', 'sc stop wuauserv', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE3', '/t', 'REG_SZ', '/d', 'sc config wuauserv start= disabled', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'DisbaleWUPostOOBE1', '/t', 'REG_SZ', '/d', 'reg add HKLM\SYSTEM\CurrentControlSet\Services\wuauserv /v Start /t REG_DWORD /d 4 /f', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'DisbaleWUPostOOBE2', '/t', 'REG_SZ', '/d', 'reg add HKLM\SYSTEM\ControlSet001\Services\wuauserv /v Start /t REG_DWORD /d 4 /f', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'DoNotConnectToWindowsUpdateInternetLocations', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'DisableWindowsUpdateAccess', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'WUServer', '/t', 'REG_SZ', '/d', 'localhost', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'WUStatusServer', '/t', 'REG_SZ', '/d', 'localhost', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'UpdateServiceUrlAlternate', '/t', 'REG_SZ', '/d', 'localhost', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'UseWUServer', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE', '/v', 'DisableOnline', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
+$null = Invoke-RegSilent @('delete', 'HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC', '/f')
+$null = Invoke-RegSilent @('delete', 'HKLM\zSYSTEM\ControlSet001\Services\UsoSvc', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'NoAutoUpdate', '/t', 'REG_DWORD', '/d', '1', '/f')
 
 # ==============================================================================
-# 3. 卸载并释放剩余离线配置单元 (zSOFTWARE 已在两轮内卸载，此处只卸 4 个)
+# 3. 卸载并释放剩余离线配置单元 (含本轮第三次挂载的 zSOFTWARE)
 # ==============================================================================
 Write-Host "Unmounting Registry..."
-foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSYSTEM")) {
+foreach ($h in @("HKLM\zSOFTWARE", "HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSYSTEM")) {
     Safely-UnloadHive -HiveName $h | Out-Null
 }
 
@@ -1721,8 +1771,8 @@ $servicesToRemove = @(
 foreach ($service in $servicesToRemove) { 
     Write-Host "Removing service: $service"
     # 双路径删除：ControlSet001 与 CurrentControlSet，避免离线 hive 符号链接差异导致残留
-    & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$service" /f 2>&1 | Out-Null
-    & reg.exe delete "HKLM\zSYSTEM\CurrentControlSet\Services\$service" /f 2>&1 | Out-Null
+    $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\ControlSet001\Services\$service", '/f')
+    $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\CurrentControlSet\Services\$service", '/f')
 }
 Safely-UnloadHive -HiveName "HKLM\zSYSTEM" | Out-Null
 
@@ -2406,9 +2456,13 @@ if ($currentTrimMode -ne "2") {
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 10/11] 映像提交、二次重构与 WinPE/BCD 深度修补 (src/09-ExportAndPE.ps1)
-#  [新增] 映像文件夹模式（sourceMode == "3"）：
-#         跳过 Unmount/Commit、二次重构、boot.wim 修补、BCD 修补、
-#         ISO 根目录清洗；仅保留快捷方式清理（属于精简语义，路径对文件夹模式有效）。
+#  [本版核心修复] boot.wim 修补段管道死锁根治：
+#    - 与 06-RegistryTweaks.ps1 Notepad 段完全同构的"连续密集 & reg ... | Out-Null"
+#      模式（每卷 14 条 × 分卷数 = 28 条），跑过 06 后到此必再次触发 PowerShell
+#      单线程管道调度死锁（reg.exe WaitReason=Executive, CPU=0 永久挂起）。
+#    - 全部替换为 $null = Invoke-RegSilent @(...)，Start-Process +
+#      -RedirectStandardOutput/Error "NUL" 文件句柄级重定向，零管道零死锁。
+#  [保留] 映像文件夹模式旁路、单文件模式旁路、ISO 模式主流程全部字节级不变。
 # ==============================================================================
 
 Write-Host "`n[步骤 11/11] 正在安全提交主映像并优化引导资产..." -ForegroundColor Cyan
@@ -2553,28 +2607,28 @@ if ($global:sourceMode -eq "3") {
 
             # 1. 注入全套硬件检测豁免规则 (WinPE Setup 阶段)
             if ($loadedHives -contains "HKLM\zDEFAULT") {
-                & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-                & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+                $null = Invoke-RegSilent @('add', 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache', '/v', 'SV1', '/t', 'REG_DWORD', '/d', '0', '/f')
+                $null = Invoke-RegSilent @('add', 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache', '/v', 'SV2', '/t', 'REG_DWORD', '/d', '0', '/f')
             }
             if ($loadedHives -contains "HKLM\zNTUSER") {
-                & 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
-                & 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+                $null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache', '/v', 'SV1', '/t', 'REG_DWORD', '/d', '0', '/f')
+                $null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache', '/v', 'SV2', '/t', 'REG_DWORD', '/d', '0', '/f')
             }
             if ($loadedHives -contains "HKLM\zSYSTEM") {
-                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassCPUCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassRAMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassSecureBootCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassStorageCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassTPMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassDiskCheck' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
-                & 'reg' 'add' 'HKLM\zSYSTEM\Setup\MoSetup' '/v' 'AllowUpgradesWithUnsupportedTPMOrCPU' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassCPUCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
+                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassRAMCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
+                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassSecureBootCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
+                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassStorageCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
+                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassTPMCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
+                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassDiskCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
+                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\MoSetup', '/v', 'AllowUpgradesWithUnsupportedTPMOrCPU', '/t', 'REG_DWORD', '/d', '1', '/f')
 
                 # 2. 禁用 WinPE 阶段的 BitLocker 设备自动加密
-                & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker' '/v' 'PreventDeviceEncryption' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
+                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker', '/v', 'PreventDeviceEncryption', '/t', 'REG_DWORD', '/d', '1', '/f')
 
                 # 3. 【关键：解决 Legacy 卡死】注入内核级早期驱动启动与基本显示豁免策略
-                & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch' '/v' 'DriverLoadPolicy' '/t' 'REG_DWORD' '/d' '8' '/f' 2>&1 | Out-Null
-                & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\BasicDisplay' '/v' 'Start' '/t' 'REG_DWORD' '/d' '0' '/f' 2>&1 | Out-Null
+                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch', '/v', 'DriverLoadPolicy', '/t', 'REG_DWORD', '/d', '8', '/f')
+                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\BasicDisplay', '/v', 'Start', '/t', 'REG_DWORD', '/d', '0', '/f')
             }
 
             # 卸载本卷已加载的注册表配置单元 (带重试，先非 SYSTEM 后 SYSTEM)
