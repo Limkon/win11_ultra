@@ -1,17 +1,18 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
-#  [本版核心修复] 管道死锁根治：
+#  [本版核心修复] 管道死锁根治（方案 D 配套）：
 #    - 原密集 `& 'reg' ... 2>&1 | Out-Null` 在连续调用时触发 PowerShell
 #      单线程管道调度死锁（reg.exe WaitReason=Executive, CPU=0 永久挂起，
 #      实测卡在 Notepad 关联重建的 28 条连发段）。
 #    - 全模块约 170 条 reg 调用统一替换为 $null = Invoke-RegSilent @(...)，
-#      由 01-Helpers.ps1 中的 Invoke-RegSilent 用 Start-Process +
-#      -RedirectStandardOutput/Error "NUL" 文件句柄级重定向执行，
-#      子进程 stdout/stderr 同步丢弃到 NUL，零管道、零缓冲区、零调度死锁。
-#    - 数组参数形式，% & | ; 空格中文全部安全，reg.exe 收到已解析 argv。
-#  [保留] 方案 C 两轮挂载结构（zSOFTWARE 拆两轮，本身无害，降低 hive 长期持有）：
+#      由 01-Helpers.ps1 中的 Invoke-RegSilent 用 & reg.exe @RegArgs 直接调用，
+#      不接任何管道/重定向/Start-Process。reg.exe 的 stdout/stderr 直接继承
+#      父 console 句柄，同步写入 console 子系统，零管道、零缓冲区、零调度死锁。
+#    - 数组参数形式，% & | ; 空格中文全部安全，空字符串 /d '' 也正常传递。
+#  [保留] 方案 C 三轮挂载结构（zSOFTWARE 拆三轮，本身无害，降低 hive 长期持有）：
 #    - 第一轮：Appx Deprovisioned 写入 → AbortOnFailure 卸载
 #    - 第二轮：OpenWith / Notepad / Photo Viewer → 卸载
+#    - 第三轮：2/2.5/3 节策略与服务写入 → 第 3 节统一卸载
 #  [不变] 所有注册表项、策略、服务删除、计划任务删除、WU 禁用逻辑一字不动。
 # ==============================================================================
 
@@ -180,16 +181,14 @@ Write-Host "[方案C-第二轮] 关联链修复完毕，卸载 zSOFTWARE..." -Fo
 Safely-UnloadHive -HiveName "HKLM\zSOFTWARE" -AbortOnFailure $false | Out-Null
 
 # ==============================================================================
-# 2. 常规注册表精简与优化（zSOFTWARE 已卸载，以下仅涉及 zSYSTEM/zDEFAULT/zNTUSER）
-#    注意：这些 HKLM\zSOFTWARE\... 的写入已在上面两轮内完成，这里不再触碰 zSOFTWARE。
-#    等等 —— 原版 2 节有大量 HKLM\zSOFTWARE\... 写入，必须重新挂载 zSOFTWARE！
+# 2. 常规注册表精简与优化
+#    [关键修正] 原版 2 节、2.5 节、3 节均包含大量 HKLM\zSOFTWARE\... 写入
+#    (CloudContent/PushToInstall/MRT/OOBE/ReserveManager/Chat/OneDrive/DataCollection/
+#     DevHome/Copilot/Teams/Windows Mail/EdgeUpdate/Defender/Explorer/RunOnce/WU 策略等)。
+#    方案 C 第二轮卸载 zSOFTWARE 后，若直接继续这些写入，会全部打到未挂载的
+#    HKLM\zSOFTWARE 路径（自动创建空壳键，写不进真实 hive）→ 母盘功能全丢！
+#    因此必须在 2 节开始前，第三次挂载 zSOFTWARE，并在 3 节统一卸载时一并处理。
 # ==============================================================================
-# [关键修正] 原版 2 节、2.5 节、3 节均包含大量 HKLM\zSOFTWARE\... 写入
-# (CloudContent/PushToInstall/MRT/OOBE/ReserveManager/Chat/OneDrive/DataCollection/
-#  DevHome/Copilot/Teams/Windows Mail/EdgeUpdate/Defender/Explorer/RunOnce/WU 策略等)。
-# 方案 C 第二轮卸载 zSOFTWARE 后，若直接继续这些写入，会全部打到未挂载的
-# HKLM\zSOFTWARE 路径（自动创建空壳键，写不进真实 hive）→ 母盘功能全丢！
-# 因此必须在 2 节开始前，第三次挂载 zSOFTWARE，并在 3 节统一卸载时一并处理。
 
 Write-Host "[方案C-第三轮] 重新挂载 zSOFTWARE 以承载 2/2.5/3 节的策略与服务写入..." -ForegroundColor Yellow
 & reg.exe load HKLM\zSOFTWARE "$scratchDir\Windows\System32\config\SOFTWARE" 2>&1 | Out-Null
