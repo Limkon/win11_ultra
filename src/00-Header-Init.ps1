@@ -215,11 +215,11 @@ if ($trimChoice -eq "2") {
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Magenta
 Write-Host " [配置 2/5] 请选择 Windows 安装引导模式 (Unattend Mode):" -ForegroundColor Magenta
-Write-Host " [1] 全无人值守 (全自动安装、自动创建指定账户并自动登录)" -ForegroundColor Green
-Write-Host " [2] 半无人值守 (跳过硬件检测限制，在 OOBE 阶段手动输入用户名/密码)" -ForegroundColor Yellow
+Write-Host " [1] 全无人值守 (全自动安装、自动创建指定账户并自动登录)" -ForegroundColor Yellow
+Write-Host " [2] 半无人值守 (跳过硬件检测限制，在 OOBE 阶段手动输入用户名/密码) [推荐]" -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Magenta
 
-$unattendChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2]" -Seconds 15 -DefaultChoice "1"
+$unattendChoice = Read-ChoiceWithTimeout -PromptText "请输入对应数字 [1 或 2]" -Seconds 15 -DefaultChoice "2"
 if ($unattendChoice -eq "2") {
     $global:unattendMode = "2"
     $global:customUser   = ""
