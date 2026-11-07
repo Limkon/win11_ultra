@@ -1,13 +1,18 @@
 # ==============================================================================
 #  win11 Builder - [模块 2/11] 核心辅助函数库 (src/01-Helpers.ps1)
-#  [本版新增] Invoke-RegSilent：
-#    - 用 Start-Process + -RedirectStandardOutput/Error "NUL" 执行 reg.exe
-#    - 文件句柄级重定向（CreateProcess STARTUPINFO.hStdOutput = NUL），
-#      完全绕开 PowerShell 匿名管道，根治"连续 & reg ... | Out-Null 密集
-#      调用导致 PowerShell 单线程管道调度死锁 + reg.exe WaitReason=Executive
-#      CPU=0 永久挂起"问题（本次卡死根因）
-#    - 数组参数形式，调用方无需手动引号转义，% & | ; 空格全部安全
-#    - 保留原 Force-NukeFolderOrFile / Safely-UnloadHive 字节级不变
+#  [本版修复] Invoke-RegSilent 方案 D：& reg.exe @RegArgs 直接调用
+#    - 根因：原密集 `& 'reg' ... 2>&1 | Out-Null` 在连续调用时触发 PowerShell
+#      匿名管道 + Out-Null 同步消费 + & 同步等待子进程的三重叠加单线程死锁
+#      （reg.exe WaitReason=Executive, CPU=0 永久挂起）。
+#    - 方案 D：& reg.exe @RegArgs 直接调用，不接任何管道/重定向/Start-Process。
+#      reg.exe 的 stdout/stderr 继承父 console 句柄，同步写入 console 子系统，
+#      不经过 PowerShell 匿名管道 → 零管道、零缓冲区、零调度死锁。
+#      同时绕过 Start-Process 的两个坑：
+#        ① -RedirectStandardOutput/Error 不能指向同一文件（含 "NUL"/"nul"）
+#        ② -ArgumentList 拒绝含空字符串元素的数组（/d '' 场景）
+#    - 副作用（有意保留）：reg.exe 输出会打印到控制台/日志，
+#      使每条注册表操作的真实结果可见，失败时紧跟 错误: ... 行，便于追溯。
+#  [保留] Force-NukeFolderOrFile / Safely-UnloadHive 字节级不变。
 # ==============================================================================
 
 # ----------------- 1. 终极物理粉碎函数 -----------------
@@ -97,34 +102,36 @@ function Safely-UnloadHive {
     return $false
 }
 
-# ----------------- 3. reg.exe 静默执行器 (根治管道死锁) -----------------
-# 模块级共享临时文件：Start-Process 的 -RedirectStandardOutput/Error 不允许
-# 两个参数指向同一文件（"NUL" 与 "nul" 在 Start-Process 的字符串比较里仍被判相同），
-# 因此用两个不同的 TEMP 文件，一次性创建、全程复用，避免 340 次文件 I/O。
-$script:InvokeRegStdOut = [System.IO.Path]::GetTempFileName()
-$script:InvokeRegStdErr = [System.IO.Path]::GetTempFileName()
-
+# ----------------- 3. reg.exe 直接执行器 (根治管道死锁) -----------------
 function Invoke-RegSilent {
     <#
     .SYNOPSIS
-        执行 reg.exe 并静默丢弃 stdout/stderr，彻底绕开 PowerShell 管道死锁。
+        执行 reg.exe 并返回退出码，完全绕开 PowerShell 管道死锁。
     .DESCRIPTION
         本次卡死根因：主脚本密集调用 `& 'reg' 'add' ... 2>&1 | Out-Null`，
-        PowerShell 的匿名管道 + `Out-Null` 同步消费 + `&` 同步等待子进程退出，
+        PowerShell 的匿名管道 + Out-Null 同步消费 + & 同步等待子进程退出，
         三者叠加形成单线程死锁（reg.exe WaitReason=Executive, CPU=0 永久挂起）。
-        本函数改用 Start-Process 的 -RedirectStandardOutput/Error 指向两个不同的
-        TEMP 文件（Start-Process 不允许两个重定向参数指向同一文件），
-        由 CreateProcess 直接把子进程 stdout/stderr 句柄指向文件，
-        子进程输出同步写文件丢弃，无管道、无缓冲区、无调度死锁。
+
+        本函数用 `& reg.exe @RegArgs` 直接调用：
+          - reg.exe 的 stdout/stderr 继承父进程 console 句柄
+          - 输出同步写入 console 子系统，不经过 PowerShell 匿名管道
+          - 无管道缓冲区、无 Out-Null 消费、无单线程调度死锁
+
+        同时绕开 Start-Process 的两个坑：
+          - ① -RedirectStandardOutput/Error 不能指向同一文件（含 "NUL"/"nul"）
+          - ② -ArgumentList 拒绝含空字符串元素的数组（/d '' 场景）
+
+        副作用（有意保留）：reg.exe 输出会打印到控制台/日志，
+        使每条注册表操作的真实结果可见。失败时紧跟 "错误: ..." 行，便于追溯。
     .PARAMETER RegArgs
         reg.exe 的完整参数数组，每个元素对应一个独立 argv token。
-        带空格 / 中文 / % / & / | 的值作为单个数组元素传入即可，
-        PowerShell 自动加引号，无需手动转义。
-        允许空字符串元素（如 /d ''），供 NullFile / AlwaysShowExt 等空值场景使用。
+        带空格 / 中文 / % / & / | / 空字符串的值作为单个数组元素传入即可，
+        splatting 机制自动处理引号，无需手动转义。
     .EXAMPLE
         Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\.txt', '/ve', '/t', 'REG_SZ', '/d', 'txtfile', '/f')
+        Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\.txt\ShellNew', '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
     .OUTPUTS
-        System.Int32 - reg.exe 退出码（成功 0，失败非 0，进程启动失败 -1）
+        System.Int32 - reg.exe 退出码（成功 0，失败非 0）
     #>
     param (
         [Parameter(Mandatory = $true)]
@@ -133,14 +140,10 @@ function Invoke-RegSilent {
         [string[]]$RegArgs
     )
 
-    try {
-        $p = Start-Process -FilePath "reg.exe" -ArgumentList $RegArgs -Wait -NoNewWindow -PassThru `
-                           -RedirectStandardOutput $script:InvokeRegStdOut `
-                           -RedirectStandardError  $script:InvokeRegStdErr `
-                           -ErrorAction Stop
-        if ($null -eq $p) { return -1 }
-        return $p.ExitCode
-    } catch {
-        return -1
-    }
+    # 直接调用，不接任何管道/重定向/Start-Process：
+    #   - 空字符串元素（/d ''）作为独立 argv token 正常传给 reg.exe
+    #   - %、&、|、空格、中文全部安全（splatting 不经过 cmd 解析）
+    #   - 输出打印到控制台/日志，真实结果可追溯
+    & reg.exe @RegArgs
+    return $LASTEXITCODE
 }
