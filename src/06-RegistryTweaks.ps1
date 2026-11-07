@@ -1,24 +1,28 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
-#  重构要点：
-#   1. Defender 改为“仅禁用”：保留策略写入与服务 Start=4，不再删除
-#      WinDefend/WdNisSvc/SecurityHealthService 服务注册表键，避免触发自愈。
-#   2. Edge 保留物理删除配套：继续删除 edgeupdate/edgeupdatem/
-#      MicrosoftEdgeElevationService 服务键与卸载注册项。
-#   3. 保留 AppxAllUserStore\Deprovisioned 标记写入，消费 03 模块收集的
-#      $global:deprovisionedAppxFamilies（含 Edge 与 Cortana）。
-#   4. 保留 OpenWith/照片查看器修复、硬件豁免、赞助应用/遥测/Copilot/
-#      Teams/Outlook 禁用、计划任务删除、Windows Update 禁用、双路径服务删除。
+#  [方案 C 重构] 修复 Notepad 关联重建阶段 reg.exe 无限挂起：
+#    - 根因：03 模块 Appx 操作 + 本节第 1.2 节 AppxAllUserStore 写入，触发
+#      svchost 对 zSOFTWARE hive 加内部 HiveLock；Safely-UnloadHive 失败后
+#      仍继续推进，zSOFTWARE 处于半挂载态，后续裸 reg.exe add 在
+#      RegOpenKeyExW 上无限等待锁 → 整条流水线挂起。
+#    - 修复：zSOFTWARE 拆为两轮独立挂载/卸载周期：
+#        第一轮：只写 Appx Deprovisioned → 立即 AbortOnFailure 卸载
+#        第二轮：重挂 → OpenWith 修复 + Notepad 重建 + Photo Viewer → 卸载
+#      两轮之间插入 GC + Sleep 窗口，给 svchost 释放 Appx 回调锁。
+#    - 其他 hive (zCOMPONENTS/zDEFAULT/zNTUSER/zSYSTEM) 节奏不变。
+#    - 所有原有注册表项、策略、服务删除、计划任务删除、WU 禁用逻辑一字不动。
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
 
-# 1. 挂载离线注册表配置单元 (带失败检查，避免静默生成无效母盘)
+# ==============================================================================
+# 1. 挂载非 zSOFTWARE 的注册表配置单元 (带失败检查)
+#    zSOFTWARE 延迟到第一轮内联加载，避免长时间持有触发 Appx 回调锁
+# ==============================================================================
 $hiveLoads = @(
     @{ Name = "HKLM\zCOMPONENTS"; Path = "$scratchDir\Windows\System32\config\COMPONENTS" },
     @{ Name = "HKLM\zDEFAULT";    Path = "$scratchDir\Windows\System32\config\default" },
     @{ Name = "HKLM\zNTUSER";     Path = "$scratchDir\Users\Default\ntuser.dat" },
-    @{ Name = "HKLM\zSOFTWARE";   Path = "$scratchDir\Windows\System32\config\SOFTWARE" },
     @{ Name = "HKLM\zSYSTEM";     Path = "$scratchDir\Windows\System32\config\SYSTEM" }
 )
 foreach ($h in $hiveLoads) {
@@ -32,8 +36,19 @@ foreach ($h in $hiveLoads) {
 }
 
 # ==============================================================================
-# 1.2 写入 Appx Deprovisioned 标记，阻止已移除预装应用（含 Edge/Cortana）复活
+# 1.2 [方案C-第一轮] 挂载 zSOFTWARE → 只写 Appx Deprovisioned → 立即卸载
+#     目的：把 Appx 相关的注册表写入隔离在最短挂载窗口内，写完立刻切断，
+#     避免 svchost 持有的 HiveLock 传染到后续 OpenWith/Notepad 重建。
 # ==============================================================================
+Write-Host "[方案C-第一轮] 加载 zSOFTWARE 用于写入 Appx Deprovisioned 标记..." -ForegroundColor Yellow
+& reg.exe load HKLM\zSOFTWARE "$scratchDir\Windows\System32\config\SOFTWARE" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[严重错误] zSOFTWARE 配置单元加载失败，退出码 $LASTEXITCODE，Appx 防重装标记无法写入。" -ForegroundColor Red
+    if ($global:transcriptActive) { Stop-Transcript }
+    pause
+    exit 1
+}
+
 Write-Host "Writing Appx Deprovisioned markers to prevent bloatware re-provisioning..." -ForegroundColor Yellow
 
 $deprovisionedBase = "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned"
@@ -51,8 +66,30 @@ if ($global:deprovisionedAppxFamilies -and $global:deprovisionedAppxFamilies.Cou
     Write-Host "   [跳过] 未收集到任何 PackageFamilyName，未写入 Deprovisioned 标记。" -ForegroundColor DarkGray
 }
 
+# 第一轮卸载：AbortOnFailure=true，卸载失败立即中止，阻断半挂载态传染
+Write-Host "[方案C-第一轮] 写入完毕，强制卸载 zSOFTWARE（失败即中止，阻断半挂载态）..." -ForegroundColor Yellow
+Safely-UnloadHive -HiveName "HKLM\zSOFTWARE" -AbortOnFailure $true | Out-Null
+
+# 两轮之间的句柄释放窗口：给 svchost 释放 Appx 通知回调锁的时间
+[System.GC]::Collect()
+[System.GC]::WaitForPendingFinalizers()
+Start-Sleep -Seconds 2
+
 # ==============================================================================
-# 1.5 修复“打开方式 -> 更多应用” 及 恢复照片查看器
+# 1.5 [方案C-第二轮] 重新挂载 zSOFTWARE → OpenWith 修复 + Notepad + Photo Viewer
+#     此时 zSOFTWARE 是干净重挂状态，Appx 回调锁已随第一轮卸载释放。
+# ==============================================================================
+Write-Host "[方案C-第二轮] 干净重挂 zSOFTWARE 用于 OpenWith / Notepad / Photo Viewer 修复..." -ForegroundColor Yellow
+& reg.exe load HKLM\zSOFTWARE "$scratchDir\Windows\System32\config\SOFTWARE" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[严重错误] zSOFTWARE 第二轮重挂失败，退出码 $LASTEXITCODE，关联链修复无法执行。" -ForegroundColor Red
+    if ($global:transcriptActive) { Stop-Transcript }
+    pause
+    exit 1
+}
+
+# ==============================================================================
+# 1.5.1 修复“打开方式 -> 更多应用” 及 恢复照片查看器
 # ==============================================================================
 Write-Host "Repairing OpenWith application associations and restoring Photo Viewer..." -ForegroundColor Yellow
 
@@ -145,8 +182,13 @@ $photoViewerCroot = 'HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities'
 
 Write-Host "[完成] OpenWith 关联修复及照片查看器注册完毕。" -ForegroundColor Green
 
+# 第二轮卸载：此时已无后续 zSOFTWARE 依赖，失败仅警告继续
+Write-Host "[方案C-第二轮] 关联链修复完毕，卸载 zSOFTWARE..." -ForegroundColor Yellow
+Safely-UnloadHive -HiveName "HKLM\zSOFTWARE" -AbortOnFailure $false | Out-Null
+
 # ==============================================================================
-# 2. 常规注册表精简与优化
+# 2. 常规注册表精简与优化（此时 zSOFTWARE 已卸载，以下仅涉及 zSYSTEM/zDEFAULT/zNTUSER）
+#    注：本段所有 HKLM\zSOFTWARE\... 的写入已在上面两轮内完成，这里不再触碰 zSOFTWARE。
 # ==============================================================================
 
 Write-Host "Configuring Kernel ELAM & EarlyLaunch bypass..." -ForegroundColor Yellow
@@ -288,13 +330,17 @@ Write-Host "Disabling Windows Update..."
 & reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /f 2>&1 | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' '/v' 'NoAutoUpdate' '/t' 'REG_DWORD' '/d' '1' '/f' 2>&1 | Out-Null
 
-# 3. 卸载并释放离线配置单元
+# ==============================================================================
+# 3. 卸载并释放剩余离线配置单元 (zSOFTWARE 已在两轮内卸载，此处只卸 4 个)
+# ==============================================================================
 Write-Host "Unmounting Registry..."
-foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSOFTWARE", "HKLM\zSYSTEM")) {
+foreach ($h in @("HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSYSTEM")) {
     Safely-UnloadHive -HiveName $h | Out-Null
 }
 
+# ==============================================================================
 # 4. 重新装载 SYSTEM 单元以深度清除多余服务实体
+# ==============================================================================
 Write-Host "Loading registry hives to remove services..."
 & reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {

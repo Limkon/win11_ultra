@@ -1,5 +1,10 @@
 # ==============================================================================
 #  win11 Builder - [模块 2/11] 核心辅助函数库 (src/01-Helpers.ps1)
+#  [方案 C 增强] Safely-UnloadHive 新增 -AbortOnFailure 开关：
+#    - 默认 $false，行为与原版完全一致（5 次重试后警告并继续，返回 $false）
+#    - $true 时卸载失败立即红字报错 + 停 transcript + pause + exit 1，
+#      供 06-RegistryTweaks.ps1 第一轮 zSOFTWARE 卸载使用，阻断半挂载态传染
+#    - 每次重试间增加 GC 回收窗口，提升 svchost 句柄释放成功率
 # ==============================================================================
 
 # ----------------- 1. 终极物理粉碎函数 -----------------
@@ -47,10 +52,16 @@ function Safely-UnloadHive {
         带有垃圾回收与 5 次重试容错机制的离线注册表 Hive 卸载器
     .PARAMETER HiveName
         完整 Hive 路径，必须包含 HKLM\ 前缀（例如 "HKLM\zSYSTEM"）
+    .PARAMETER AbortOnFailure
+        默认 $false：5 次重试失败后仅警告并继续（原版行为，向后兼容）
+        $true：卸载失败立即停止 transcript、pause 并 exit 1，
+               供关键 hive（如方案 C 第一轮 zSOFTWARE）使用
     #>
     param (
         [Parameter(Mandatory = $true)]
-        [string]$HiveName
+        [string]$HiveName,
+
+        [bool]$AbortOnFailure = $false
     )
 
     [System.GC]::Collect()
@@ -64,7 +75,19 @@ function Safely-UnloadHive {
             return $true
         }
         Write-Host "   [等待句柄释放] 正在尝试第 $i 次重试卸载 $HiveName..." -ForegroundColor DarkYellow
+
+        # 每次重试前做一次 GC 回收窗口，提升 svchost 句柄释放成功率
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
         Start-Sleep -Seconds 1
+    }
+
+    if ($AbortOnFailure) {
+        Write-Host "[严重错误] $HiveName 单元卸载超时（5 次重试全部失败），为避免半挂载态污染后续操作，流程中止。" -ForegroundColor Red
+        Write-Host "           可能原因：svchost 仍持有该 hive 句柄，建议重启系统后重试。" -ForegroundColor Yellow
+        if ($global:transcriptActive) { Stop-Transcript }
+        pause
+        exit 1
     }
 
     Write-Host "   [警告] $HiveName 单元卸载超时，继续推进后续流程。" -ForegroundColor Yellow
