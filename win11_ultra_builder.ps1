@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-11-08 05:59:17 UTC
+#  生成时间: 2026-11-08 09:17:22 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -1221,7 +1221,6 @@ foreach ($critical in @($openWithExe, $shell32Dll, $shCoreDll)) {
 
 # ----------------- 4. 移除系统底层功能包 Packages (FOD，官方 Remove-Package) -----------------
 $packagePatterns = @(
-    "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
