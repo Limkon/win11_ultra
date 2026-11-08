@@ -271,7 +271,6 @@ foreach ($critical in @($openWithExe, $shell32Dll, $shCoreDll)) {
 
 # ----------------- 4. 移除系统底层功能包 Packages (FOD，官方 Remove-Package) -----------------
 $packagePatterns = @(
-    "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
