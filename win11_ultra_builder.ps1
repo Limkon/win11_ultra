@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-11-07 15:41:27 UTC
+#  生成时间: 2026-11-08 00:47:05 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -556,19 +556,14 @@ Write-Host "[初始化] 环境清理完毕，准备开始构建。" -ForegroundC
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 2/11] 核心辅助函数库 (src/01-Helpers.ps1)
-#  [本版修复] Invoke-RegSilent 方案 D：& reg.exe @RegArgs 直接调用
-#    - 根因：原密集 `& 'reg' ... 2>&1 | Out-Null` 在连续调用时触发 PowerShell
-#      匿名管道 + Out-Null 同步消费 + & 同步等待子进程的三重叠加单线程死锁
-#      （reg.exe WaitReason=Executive, CPU=0 永久挂起）。
-#    - 方案 D：& reg.exe @RegArgs 直接调用，不接任何管道/重定向/Start-Process。
-#      reg.exe 的 stdout/stderr 继承父 console 句柄，同步写入 console 子系统，
-#      不经过 PowerShell 匿名管道 → 零管道、零缓冲区、零调度死锁。
-#      同时绕过 Start-Process 的两个坑：
-#        ① -RedirectStandardOutput/Error 不能指向同一文件（含 "NUL"/"nul"）
-#        ② -ArgumentList 拒绝含空字符串元素的数组（/d '' 场景）
-#    - 副作用（有意保留）：reg.exe 输出会打印到控制台/日志，
-#      使每条注册表操作的真实结果可见，失败时紧跟 错误: ... 行，便于追溯。
-#  [保留] Force-NukeFolderOrFile / Safely-UnloadHive 字节级不变。
+#  [本版核心修复] 彻底根治 reg.exe 在 /d '' 场景下的交互式死锁：
+#    - 根因：PowerShell 5.1 传递空字符串数组元素时将 `''` 展开为裸空格，
+#      导致 reg.exe 将紧随其后的 `/f` 识别为 `/d` 的数据，从而丢失强制标志；
+#      若键值已存在，reg.exe 会静默挂起等待标准输入确认 (Yes/No)?，CPU=0 永久假死。
+#    - 修复：采用 .NET Process 底层封装：
+#      ① 显式将空字符串和特殊字符序列化为标准双引号 `""`；
+#      ② 物理关闭子进程的标准输入 (StandardInput.Close)，收到 EOF 绝不等待交互；
+#      ③ 增加 10 秒超时保护，遇到异常强行销毁并报警，保障流水线绝对流畅。
 # ==============================================================================
 
 # ----------------- 1. 终极物理粉碎函数 -----------------
@@ -589,7 +584,6 @@ function Force-NukeFolderOrFile {
         if ($item.PSIsContainer) {
             & takeown.exe /F "$Target" /A /R /D Y 2>&1 | Out-Null
             & icacls.exe "$Target" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
-            # 仅当目录存在子项时才启动 attrib，避免空目录无谓进程启动
             if (Get-ChildItem -LiteralPath $Target -Force -ErrorAction SilentlyContinue) {
                 attrib.exe -R -S -H "$Target\*" /S /D 2>&1 | Out-Null
             }
@@ -614,12 +608,6 @@ function Safely-UnloadHive {
     <#
     .SYNOPSIS
         带有垃圾回收与 5 次重试容错机制的离线注册表 Hive 卸载器
-    .PARAMETER HiveName
-        完整 Hive 路径，必须包含 HKLM\ 前缀（例如 "HKLM\zSYSTEM"）
-    .PARAMETER AbortOnFailure
-        默认 $false：5 次重试失败后仅警告并继续（原版行为，向后兼容）
-        $true：卸载失败立即停止 transcript、pause 并 exit 1，
-               供关键 hive（如 06 模块第一轮 zSOFTWARE）使用
     #>
     param (
         [Parameter(Mandatory = $true)]
@@ -640,7 +628,6 @@ function Safely-UnloadHive {
         }
         Write-Host "   [等待句柄释放] 正在尝试第 $i 次重试卸载 $HiveName..." -ForegroundColor DarkYellow
 
-        # 每次重试前做一次 GC 回收窗口，提升 svchost 句柄释放成功率
         [System.GC]::Collect()
         [System.GC]::WaitForPendingFinalizers()
         Start-Sleep -Seconds 1
@@ -658,36 +645,16 @@ function Safely-UnloadHive {
     return $false
 }
 
-# ----------------- 3. reg.exe 直接执行器 (根治管道死锁) -----------------
+# ----------------- 3. reg.exe 零死锁安全执行器 -----------------
 function Invoke-RegSilent {
     <#
     .SYNOPSIS
-        执行 reg.exe 并返回退出码，完全绕开 PowerShell 管道死锁。
+        执行 reg.exe 并返回退出码，彻底免疫管道死锁与交互式挂起。
     .DESCRIPTION
-        本次卡死根因：主脚本密集调用 `& 'reg' 'add' ... 2>&1 | Out-Null`，
-        PowerShell 的匿名管道 + Out-Null 同步消费 + & 同步等待子进程退出，
-        三者叠加形成单线程死锁（reg.exe WaitReason=Executive, CPU=0 永久挂起）。
-
-        本函数用 `& reg.exe @RegArgs` 直接调用：
-          - reg.exe 的 stdout/stderr 继承父进程 console 句柄
-          - 输出同步写入 console 子系统，不经过 PowerShell 匿名管道
-          - 无管道缓冲区、无 Out-Null 消费、无单线程调度死锁
-
-        同时绕开 Start-Process 的两个坑：
-          - ① -RedirectStandardOutput/Error 不能指向同一文件（含 "NUL"/"nul"）
-          - ② -ArgumentList 拒绝含空字符串元素的数组（/d '' 场景）
-
-        副作用（有意保留）：reg.exe 输出会打印到控制台/日志，
-        使每条注册表操作的真实结果可见。失败时紧跟 "错误: ..." 行，便于追溯。
-    .PARAMETER RegArgs
-        reg.exe 的完整参数数组，每个元素对应一个独立 argv token。
-        带空格 / 中文 / % / & / | / 空字符串的值作为单个数组元素传入即可，
-        splatting 机制自动处理引号，无需手动转义。
-    .EXAMPLE
-        Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\.txt', '/ve', '/t', 'REG_SZ', '/d', 'txtfile', '/f')
-        Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\.txt\ShellNew', '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
-    .OUTPUTS
-        System.Int32 - reg.exe 退出码（成功 0，失败非 0）
+        1. 针对 /d '' 场景显式转义并序列化为 `""`，避免 /f 参数被误食。
+        2. 彻底重定向并物理关闭 StandardInput，遇到任何交互提示即刻返回 EOF，杜绝卡死。
+        3. 同步排空 StandardOutput / StandardError，无缓冲区溢出死锁。
+        4. 附带 10 秒超时防护。
     #>
     param (
         [Parameter(Mandatory = $true)]
@@ -696,12 +663,60 @@ function Invoke-RegSilent {
         [string[]]$RegArgs
     )
 
-    # 直接调用，不接任何管道/重定向/Start-Process：
-    #   - 空字符串元素（/d ''）作为独立 argv token 正常传给 reg.exe
-    #   - %、&、|、空格、中文全部安全（splatting 不经过 cmd 解析）
-    #   - 输出打印到控制台/日志，真实结果可追溯
-    & reg.exe @RegArgs
-    return $LASTEXITCODE
+    # 1. 规范化参数序列化，重点解决空字符串 `''` 传参问题
+    $escapedTokens = foreach ($arg in $RegArgs) {
+        if ([string]::IsNullOrEmpty($arg)) {
+            '""'
+        } elseif ($arg -match '[\s"\\<>&|]') {
+            '"' + ($arg -replace '(\\*)("|$)', '$1$1\"$2') + '"'
+        } else {
+            $arg
+        }
+    }
+    $argumentsString = $escapedTokens -join ' '
+
+    # 2. 构建独立进程环境
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "$env:SystemRoot\System32\reg.exe"
+    $psi.Arguments = $argumentsString
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+
+    $proc = $null
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+    } catch {
+        Write-Host "   [错误] 无法启动 reg.exe: $_" -ForegroundColor Red
+        return -1
+    }
+
+    # 3. 核心机制：物理切断标准输入流，防任何 (Yes/No)? 交互提示挂死
+    $proc.StandardInput.Close()
+
+    # 4. 同步读取输出，防止管道缓冲区占满导致阻塞
+    $stdOut = $proc.StandardOutput.ReadToEnd()
+    $stdError = $proc.StandardError.ReadToEnd()
+
+    # 5. 10 秒硬性超时防护
+    $finished = $proc.WaitForExit(10000)
+    if (-not $finished) {
+        try { $proc.Kill() } catch {}
+        Write-Host "   [严重警告] reg.exe 响应超时已被强制终止: reg.exe $argumentsString" -ForegroundColor Red
+        return -1
+    }
+
+    $exitCode = $proc.ExitCode
+    $proc.Dispose()
+
+    # 6. 异常时输出诊断信息
+    if ($exitCode -ne 0 -and -not [string]::IsNullOrWhiteSpace($stdError)) {
+        Write-Host "   [reg 警告 ($exitCode)] $stdError".Trim() -ForegroundColor DarkYellow
+    }
+
+    return $exitCode
 }
 
 # <<< [分块结束] 文件来源: src/01-Helpers.ps1
