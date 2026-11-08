@@ -1,26 +1,16 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
-#  [本版核心修复] 管道死锁根治（方案 D 配套）：
-#    - 原密集 `& 'reg' ... 2>&1 | Out-Null` 在连续调用时触发 PowerShell
-#      单线程管道调度死锁（reg.exe WaitReason=Executive, CPU=0 永久挂起，
-#      实测卡在 Notepad 关联重建的 28 条连发段）。
-#    - 全模块约 170 条 reg 调用统一替换为 $null = Invoke-RegSilent @(...)，
-#      由 01-Helpers.ps1 中的 Invoke-RegSilent 用 & reg.exe @RegArgs 直接调用，
-#      不接任何管道/重定向/Start-Process。reg.exe 的 stdout/stderr 直接继承
-#      父 console 句柄，同步写入 console 子系统，零管道、零缓冲区、零调度死锁。
-#    - 数组参数形式，% & | ; 空格中文全部安全，空字符串 /d '' 也正常传递。
-#  [保留] 方案 C 三轮挂载结构（zSOFTWARE 拆三轮，本身无害，降低 hive 长期持有）：
-#    - 第一轮：Appx Deprovisioned 写入 → AbortOnFailure 卸载
-#    - 第二轮：OpenWith / Notepad / Photo Viewer → 卸载
-#    - 第三轮：2/2.5/3 节策略与服务写入 → 第 3 节统一卸载
-#  [不变] 所有注册表项、策略、服务删除、计划任务删除、WU 禁用逻辑一字不动。
+#  [本版重磅修复] 根治“打开方式 -> 更多应用”点击无反应缺陷：
+#    - 策略拦截：注入 NoUseStoreOpenWith=1，阻断应用商店死锁等待。
+#    - 扩展屏蔽：向 Shell Extensions\Blocked 注入现代 XAML 扩展 GUID
+#      {e44e9428-bdbc-4987-a099-40dc8fd255e7}，回退到极速稳定的原生 OpenWith。
+#    - 关联加固：完整注入 Applications\OpenWith.exe 与系统级枚举配置。
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
 
 # ==============================================================================
 # 1. 挂载非 zSOFTWARE 的注册表配置单元 (带失败检查)
-#    zSOFTWARE 延迟到第一轮内联加载
 # ==============================================================================
 $hiveLoads = @(
     @{ Name = "HKLM\zCOMPONENTS"; Path = "$scratchDir\Windows\System32\config\COMPONENTS" },
@@ -67,17 +57,15 @@ if ($global:deprovisionedAppxFamilies -and $global:deprovisionedAppxFamilies.Cou
     Write-Host "   [跳过] 未收集到任何 PackageFamilyName，未写入 Deprovisioned 标记。" -ForegroundColor DarkGray
 }
 
-# 第一轮卸载：AbortOnFailure=true，卸载失败立即中止，阻断半挂载态传染
 Write-Host "[方案C-第一轮] 写入完毕，强制卸载 zSOFTWARE（失败即中止，阻断半挂载态）..." -ForegroundColor Yellow
 Safely-UnloadHive -HiveName "HKLM\zSOFTWARE" -AbortOnFailure $true | Out-Null
 
-# 两轮之间的句柄释放窗口
 [System.GC]::Collect()
 [System.GC]::WaitForPendingFinalizers()
 Start-Sleep -Seconds 2
 
 # ==============================================================================
-# 1.5 [方案C-第二轮] 重新挂载 zSOFTWARE → OpenWith 修复 + Notepad + Photo Viewer
+# 1.5 [方案C-第二轮] 重新挂载 zSOFTWARE → OpenWith 深度修复 + Notepad + Photo Viewer
 # ==============================================================================
 Write-Host "[方案C-第二轮] 干净重挂 zSOFTWARE 用于 OpenWith / Notepad / Photo Viewer 修复..." -ForegroundColor Yellow
 & reg.exe load HKLM\zSOFTWARE "$scratchDir\Windows\System32\config\SOFTWARE" 2>&1 | Out-Null
@@ -89,11 +77,41 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ==============================================================================
-# 1.5.1 修复“打开方式 -> 更多应用” 及 恢复照片查看器
+# 1.5.1 彻底根治“打开方式 -> 更多应用”点击无反应缺陷
 # ==============================================================================
-Write-Host "Repairing OpenWith application associations and restoring Photo Viewer..." -ForegroundColor Yellow
+Write-Host "Applying ultimate fix for 'Open With -> More Apps' deadlock..." -ForegroundColor Green
 
-# 步骤 A: 清理已删 AppX 产生的死链
+# 1. 屏蔽破坏性的 Win11 现代 XAML OpenWith 扩展，回退至原生稳健的经典 C++ OpenWith 对话框
+$blockedGuid = '{e44e9428-bdbc-4987-a099-40dc8fd255e7}'
+$blockedPaths = @(
+    'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked',
+    'HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked'
+)
+foreach ($bp in $blockedPaths) {
+    $null = Invoke-RegSilent @('add', $bp, '/v', $blockedGuid, '/t', 'REG_SZ', '/d', 'OpenWith Modern Dialog Bypass', '/f')
+}
+
+# 2. 策略级彻底禁止“打开方式”尝试连接应用商店（阻断 Store 超时死锁）
+$explorerPolicyPaths = @(
+    'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer',
+    'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+)
+foreach ($ep in $explorerPolicyPaths) {
+    $null = Invoke-RegSilent @('add', $ep, '/v', 'NoUseStoreOpenWith', '/t', 'REG_DWORD', '/d', '1', '/f')
+}
+# 同时注入到默认用户 Hive 中
+$null = Invoke-RegSilent @('add', 'HKLM\zDEFAULT\Software\Policies\Microsoft\Windows\Explorer', '/v', 'NoUseStoreOpenWith', '/t', 'REG_DWORD', '/d', '1', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Policies\Microsoft\Windows\Explorer', '/v', 'NoUseStoreOpenWith', '/t', 'REG_DWORD', '/d', '1', '/f')
+
+# 3. 补齐并加固 OpenWith.exe 核心原生应用项
+$openWithAppRoots = @('HKLM\zSOFTWARE\Classes\Applications\OpenWith.exe', 'HKLM\zSOFTWARE\WOW6432Node\Classes\Applications\OpenWith.exe')
+foreach ($owRoot in $openWithAppRoots) {
+    $null = Invoke-RegSilent @('add', $owRoot, '/v', 'NoOpenWith', '/t', 'REG_SZ', '/d', '', '/f')
+    $null = Invoke-RegSilent @('add', "$owRoot\shell\open", '/v', 'MultiSelectModel', '/t', 'REG_SZ', '/d', 'Single', '/f')
+    $null = Invoke-RegSilent @('add', "$owRoot\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\OpenWith.exe "%1"', '/f')
+}
+
+# 4. 清理已删 AppX 产生的死链，防止死链阻碍枚举
 if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     $commonExtensions = @(
         '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.heic', '.heif',
@@ -121,7 +139,6 @@ $classesRoots = @('HKLM\zSOFTWARE\Classes', 'HKLM\zSOFTWARE\WOW6432Node\Classes'
 $notepadCmd   = '%SystemRoot%\System32\notepad.exe %1'
 
 foreach ($croot in $classesRoots) {
-
     # --- 1. Applications\notepad.exe 完整注册 ---
     $null = Invoke-RegSilent @('add', "$croot\Applications\notepad.exe", '/v', 'FriendlyAppName', '/t', 'REG_SZ', '/d', 'Notepad', '/f')
     $null = Invoke-RegSilent @('add', "$croot\Applications\notepad.exe\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', $notepadCmd, '/f')
@@ -136,7 +153,7 @@ foreach ($croot in $classesRoots) {
     $null = Invoke-RegSilent @('add', "$croot\.txt\ShellNew", '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
     $null = Invoke-RegSilent @('add', "$croot\.txt\ShellNew", '/v', 'ItemName', '/t', 'REG_EXPAND_SZ', '/d', '@%SystemRoot%\System32\notepad.exe,-470', '/f')
 
-    # --- 4. txtfile ProgID 完整定义（含打开命令，这是关联的核心） ---
+    # --- 4. txtfile ProgID 完整定义 ---
     $null = Invoke-RegSilent @('add', "$croot\txtfile", '/ve', '/t', 'REG_SZ', '/d', '文本文档', '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfile", '/v', 'AlwaysShowExt', '/t', 'REG_SZ', '/d', '', '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfile", '/v', 'PerceivedType', '/t', 'REG_SZ', '/d', 'text', '/f')
@@ -150,10 +167,8 @@ foreach ($croot in $classesRoots) {
     $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', $notepadCmd, '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy\ShellNew", '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
 
-    # --- 6. OpenWithList / OpenWithProgids 兜底 ---
+    # --- 6. OpenWithList 兜底 ---
     $null = Invoke-RegSilent @('add', "$croot\.txt\OpenWithList\notepad.exe", '/ve', '/t', 'REG_SZ', '/d', '', '/f')
-    $null = Invoke-RegSilent @('add', "$croot\.txt\OpenWithProgids", '/v', 'txtfile', '/t', 'REG_NONE', '/d', '', '/f')
-    $null = Invoke-RegSilent @('add', "$croot\.txt\OpenWithProgids", '/v', 'txtfilelegacy', '/t', 'REG_NONE', '/d', '', '/f')
 }
 Write-Host "[完成] Notepad 与 txtfile 关联链重建完毕。" -ForegroundColor Green
 
@@ -176,20 +191,12 @@ $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\Applications\photoview
 
 Write-Host "[完成] OpenWith 关联修复及照片查看器注册完毕。" -ForegroundColor Green
 
-# 第二轮卸载：此时已无后续 zSOFTWARE 依赖，失败仅警告继续
 Write-Host "[方案C-第二轮] 关联链修复完毕，卸载 zSOFTWARE..." -ForegroundColor Yellow
 Safely-UnloadHive -HiveName "HKLM\zSOFTWARE" -AbortOnFailure $false | Out-Null
 
 # ==============================================================================
 # 2. 常规注册表精简与优化
-#    [关键修正] 原版 2 节、2.5 节、3 节均包含大量 HKLM\zSOFTWARE\... 写入
-#    (CloudContent/PushToInstall/MRT/OOBE/ReserveManager/Chat/OneDrive/DataCollection/
-#     DevHome/Copilot/Teams/Windows Mail/EdgeUpdate/Defender/Explorer/RunOnce/WU 策略等)。
-#    方案 C 第二轮卸载 zSOFTWARE 后，若直接继续这些写入，会全部打到未挂载的
-#    HKLM\zSOFTWARE 路径（自动创建空壳键，写不进真实 hive）→ 母盘功能全丢！
-#    因此必须在 2 节开始前，第三次挂载 zSOFTWARE，并在 3 节统一卸载时一并处理。
 # ==============================================================================
-
 Write-Host "[方案C-第三轮] 重新挂载 zSOFTWARE 以承载 2/2.5/3 节的策略与服务写入..." -ForegroundColor Yellow
 & reg.exe load HKLM\zSOFTWARE "$scratchDir\Windows\System32\config\SOFTWARE" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
@@ -285,7 +292,6 @@ $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Win
 # ==============================================================================
 Write-Host "Disabling Edge at the kernel and policy level (Defender: disable-only)..." -ForegroundColor Yellow
 
-# Edge 策略拦截
 $null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge', '/f')
 $null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge', '/f')
 $edgeServices = @('edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService')
@@ -295,7 +301,6 @@ foreach ($svc in $edgeServices) {
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\EdgeUpdate', '/v', 'DoNotUpdateToEdgeWithChromium', '/t', 'REG_DWORD', '/d', '1', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate', '/v', 'UpdateDefault', '/t', 'REG_DWORD', '/d', '0', '/f')
 
-# Defender 策略拦截（保留策略，不删服务键）
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender', '/v', 'DisableAntiSpyware', '/t', 'REG_DWORD', '/d', '1', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender', '/v', 'DisableAntiVirus', '/t', 'REG_DWORD', '/d', '1', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', '/v', 'DisableBehaviorMonitoring', '/t', 'REG_DWORD', '/d', '1', '/f')
@@ -306,7 +311,6 @@ foreach ($svc in $defenderServices) {
     $null = Invoke-RegSilent @('add', "HKLM\zSYSTEM\ControlSet001\Services\$svc", '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
 }
 
-# 屏蔽 UI 入口
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer', '/v', 'SettingsPageVisibility', '/t', 'REG_SZ', '/d', 'hide:virus;windowsupdate', '/f')
 
 # ==============================================================================
@@ -339,7 +343,7 @@ $null = Invoke-RegSilent @('delete', 'HKLM\zSYSTEM\ControlSet001\Services\UsoSvc
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'NoAutoUpdate', '/t', 'REG_DWORD', '/d', '1', '/f')
 
 # ==============================================================================
-# 3. 卸载并释放剩余离线配置单元 (含本轮第三次挂载的 zSOFTWARE)
+# 3. 卸载并释放剩余离线配置单元
 # ==============================================================================
 Write-Host "Unmounting Registry..."
 foreach ($h in @("HKLM\zSOFTWARE", "HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPONENTS", "HKLM\zSYSTEM")) {
@@ -365,7 +369,6 @@ $servicesToRemove = @(
 )
 foreach ($service in $servicesToRemove) { 
     Write-Host "Removing service: $service"
-    # 双路径删除：ControlSet001 与 CurrentControlSet，避免离线 hive 符号链接差异导致残留
     $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\ControlSet001\Services\$service", '/f')
     $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\CurrentControlSet\Services\$service", '/f')
 }
