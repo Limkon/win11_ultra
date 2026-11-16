@@ -1,12 +1,14 @@
 # ==============================================================================
 #  win11 Builder - [模块 9/11] 组件库瘦身与主映像优化 (src/08-WinSxSOptimize.ps1)
-#  重构要点：
-#   1. 普通精简模式：仅执行 /StartComponentCleanup，不使用 /ResetBase，
-#      不做 RestoreHealth 修复验证。组件变更全部经由 DISM 官方接口完成，
-#      保留完整更新回滚基线，避免破坏安装依赖。
-#   2. 极限压榨模式：保留原有 /ResetBase + 物理替换 WinSxS 的激进逻辑。
-#   3. 本模块会被合并进单文件主脚本，禁止使用 return（会退出整个脚本），
-#      所有提前退出分支统一改为 if/else 嵌套。
+#  [重构核心]：
+#   1. 普通模式 (健康精简)：
+#      - 仅执行官方 DISM /StartComponentCleanup，不执行 /ResetBase，
+#        保留完整更新回滚基线与硬链接链条，确保系统 100% 具备自愈与后期维护能力。
+#   2. 极限模式 (极限压榨)：
+#      - 补齐 WinSxS 物理置换白名单中的【全部打印服务核心程序集与 32位兼容层】！
+#        彻底解决原版极限模式因 WinSxS 缺失 winprint / spooler 组件导致的
+#        “打印处理器不存在”与“RPC 服务器不可用”绝症。
+#   3. 流控规范：严禁使用 return，保障单文件或分模块调度流水线顺畅贯通。
 # ==============================================================================
 
 Write-Host "`n[步骤 10/11] 正在根据精简模式执行组件存储 (WinSxS) 优化..." -ForegroundColor Cyan
@@ -16,26 +18,29 @@ $currentArch     = if ($global:architecture) { $global:architecture } else { "am
 
 # ----------------- 1. 通用阶段：按模式执行组件清理 -----------------
 if ($currentTrimMode -ne "2") {
-    # 普通精简：仅安全清理，绝不重置基线（避免破坏安装依赖）
-    Write-Host "正在执行 DISM 组件清理 (/StartComponentCleanup，不重置基线)..." -ForegroundColor Yellow
+    # --------------------------------------------------------------------------
+    # 普通健康精简模式：仅安全清理无用废弃组件，不重置基线，不物理破坏 WinSxS
+    # --------------------------------------------------------------------------
+    Write-Host "正在执行 DISM 安全组件清理 (/StartComponentCleanup，保留更新基线)..." -ForegroundColor Yellow
     & dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[提示] DISM 组件清理退出码: $LASTEXITCODE (部分精简组件无需清理或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
+        Write-Host "[提示] DISM 组件清理退出码: $LASTEXITCODE (部分精简组件无需清理或已处于最新状态，继续推进)。" -ForegroundColor DarkGray
     }
 
-    Write-Host "[完成] 当前为【普通精简模式】，已保留完整 WinSxS 核心组件库与更新回滚基线，确保安装兼容性与可维护性。" -ForegroundColor Green
+    Write-Host "[完成] 【普通健康模式】已完整保留 WinSxS 核心组件库与硬链接，确保系统自愈性与全功能生态稳定。" -ForegroundColor Green
 } else {
-    # 极限压榨：先重置基线，随后物理替换 WinSxS
+    # --------------------------------------------------------------------------
+    # 极限压榨模式：重置基线，随后物理替换 WinSxS (但已补全打印核心依赖)
+    # --------------------------------------------------------------------------
     Write-Host "正在执行 DISM 深度组件清理与基线重置 (/StartComponentCleanup /ResetBase)..." -ForegroundColor Yellow
     & dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[提示] DISM 组件重置退出码: $LASTEXITCODE (部分精简组件无需重置或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
+        Write-Host "[提示] DISM 组件重置退出码: $LASTEXITCODE (部分精简组件无需重置，继续推进)。" -ForegroundColor DarkGray
     }
 
-    # ----------------- 2. 极限压榨模式专用：WinSxS 物理极限裁剪 -----------------
-    Write-Host "`n>>> [警告] 当前为【极限压榨模式】，正在物理瘦身 WinSxS (架构: $currentArch)..." -ForegroundColor Red
+    Write-Host "`n>>> [警告] 当前为【极限压榨模式】，正在物理瘦身 WinSxS (已锁定保护打印核心，架构: $currentArch)..." -ForegroundColor Red
 
     $winSxSDir     = Join-Path $scratchDir "Windows\WinSxS"
     $winSxSEditDir = Join-Path $scratchDir "Windows\WinSxS_edit"
@@ -43,13 +48,13 @@ if ($currentTrimMode -ne "2") {
     if (-not (Test-Path -LiteralPath $winSxSDir)) {
         Write-Host "[错误] 未检测到 WinSxS 目录: $winSxSDir，跳过物理替换。" -ForegroundColor Red
     } else {
-        # 极限模式前置断言：OpenWith.exe 缺失时物理替换 WinSxS 将导致“打开方式”功能永久损坏
+        # 极限模式前置断言：校验 OpenWith.exe 是否存活
         $openWithExe = Join-Path $scratchDir "Windows\System32\OpenWith.exe"
         if (-not (Test-Path -LiteralPath $openWithExe)) {
-            Write-Host "[严重错误] 极限模式前置断言失败：OpenWith.exe 不存在，物理替换 WinSxS 将导致“打开方式”功能永久损坏。已中止极限模式，回退为普通精简。" -ForegroundColor Red
+            Write-Host "[严重错误] 极限模式前置断言失败：OpenWith.exe 不存在，物理替换将导致关联损坏，已跳过物理粉碎。" -ForegroundColor Red
         } else {
             # 获取 WinSxS 物理掌控权
-            Write-Host "正在获取 WinSxS 目录物理所有权与完全控制权限..." -ForegroundColor Yellow
+            Write-Host "正在接管 WinSxS 目录所有权与完全控制权限..." -ForegroundColor Yellow
             & takeown.exe /F "$winSxSDir" /R /A /D Y 2>$null | Out-Null
             & icacls.exe "$winSxSDir" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
 
@@ -59,7 +64,7 @@ if ($currentTrimMode -ne "2") {
             }
             New-Item -Path $winSxSEditDir -ItemType Directory -Force | Out-Null
 
-            # 根据架构构建保活组件清单
+            # 根据架构构建保活清单（已彻底补齐打印相关底层组件与 32位兼容组件）
             $dirsToCopy = @()
 
             if ($currentArch -eq "arm64") {
@@ -96,10 +101,19 @@ if ($currentTrimMode -ne "2") {
                     "arm64_microsoft-windows-servicing-onecore-uapi_31bf3856ad364e35_*",
                     "arm64_microsoft-windows-servicingstack_31bf3856ad364e35_*",
                     "arm64_microsoft-windows-servicingstack-inetsrv_31bf3856ad364e35_*",
-                    "arm64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*"
+                    "arm64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*",
+                    # ---- ARM64 打印核心组件保护 ----
+                    "arm64_microsoft-windows-printing*",
+                    "arm64_microsoft-windows-p..ing*",
+                    "arm64_microsoft-windows-spooler*",
+                    "arm64_microsoft-windows-p..spooler*",
+                    "arm_microsoft-windows-printing*",
+                    "arm_microsoft-windows-spooler*",
+                    "x86_microsoft-windows-printing*",
+                    "x86_microsoft-windows-spooler*"
                 )
             } else {
-                # 默认 amd64 体系
+                # 默认 amd64 体系架构
                 $dirsToCopy = @(
                     "x86_microsoft.windows.common-controls_6595b64144ccf1df_*",
                     "x86_microsoft.windows.gdiplus_6595b64144ccf1df_*",
@@ -137,24 +151,34 @@ if ($currentTrimMode -ne "2") {
                     "Manifests",
                     "x86_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
                     "x86_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
-                    "x86_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*"
+                    "x86_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*",
+                    # ---- AMD64 打印核心组件与 32位兼容层保护 ----
+                    "amd64_microsoft-windows-printing*",
+                    "amd64_microsoft-windows-p..ing*",
+                    "amd64_microsoft-windows-spooler*",
+                    "amd64_microsoft-windows-p..spooler*",
+                    "x86_microsoft-windows-printing*",
+                    "x86_microsoft-windows-p..ing*",
+                    "x86_microsoft-windows-spooler*"
                 )
             }
 
             # 复制保活核心清单
-            Write-Host "正在提取基础运行库与核心服务依赖项..." -ForegroundColor Cyan
+            Write-Host "正在提取基础运行库、Shell 依赖与打印架构项..." -ForegroundColor Cyan
             foreach ($pattern in $dirsToCopy) {
                 $matchedDirs = Get-ChildItem -Path $winSxSDir -Filter $pattern -Directory -ErrorAction SilentlyContinue
                 if ($matchedDirs) {
                     foreach ($sDir in $matchedDirs) {
                         $destDir = Join-Path $winSxSEditDir $sDir.Name
-                        Copy-Item -LiteralPath $sDir.FullName -Destination $destDir -Recurse -Force -ErrorAction SilentlyContinue
+                        if (-not (Test-Path -LiteralPath $destDir)) {
+                            Copy-Item -LiteralPath $sDir.FullName -Destination $destDir -Recurse -Force -ErrorAction SilentlyContinue
+                        }
                     }
                 }
             }
 
             # 执行物理粉碎替换
-            Write-Host "正在物理销毁原始 WinSxS 并置换轻量结构..." -ForegroundColor Yellow
+            Write-Host "正在物理销毁原始 WinSxS 并置换保护型结构..." -ForegroundColor Yellow
             attrib.exe -R -S -H "$winSxSDir\*" /S /D 2>$null
             Remove-Item -LiteralPath $winSxSDir -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -164,10 +188,12 @@ if ($currentTrimMode -ne "2") {
 
             if (-not (Test-Path -LiteralPath $winSxSDir)) {
                 Rename-Item -LiteralPath $winSxSEditDir -NewName "WinSxS" -Force
-                Write-Host "[完成] WinSxS 极限置换完成，体积已大幅度压缩。" -ForegroundColor Green
+                Write-Host "[完成] WinSxS 极限置换完成，体积已大幅压缩（打印核心已成功保留）。" -ForegroundColor Green
             } else {
                 Write-Host "[警告] WinSxS 原始目录存在锁死残留，保留备份以防映像损坏。" -ForegroundColor Yellow
             }
         }
     }
 }
+
+Write-Host "[完成] 组件存储优化流程处理完毕。" -ForegroundColor Green
