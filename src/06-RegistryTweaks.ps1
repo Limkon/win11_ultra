@@ -1,9 +1,16 @@
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
-#  [终极修复版]：
-#    1. 根治“打开方式 -> 更多应用”点击无反应缺陷（屏蔽现代 XAML 岛 + 阻断 Store 查询）
-#    2. 解决底层 RPC 崩溃：WU 服务仅禁用（Start=4），不再物理 delete 键
-#    3. 完整重建 Notepad、Photo Viewer、ShellNew 关联链
+#  [重构核心]：
+#   1. 打印体系绝对保护（双模式通用）：
+#      - 彻底剔除针对 Spooler 和 PrintNotify 的删除指令！
+#      - 显式锁定 Spooler (Start=2 自动) 与 PrintNotify (Start=3 手动)，根治 RPC 崩溃。
+#   2. 普通模式 (健康精简)：
+#      - 蓝牙生态保护：坚决保留 BthAvctpSvc (耳机切歌/音量) 与 BluetoothUserService (蓝牙配对)。
+#      - Windows Update 策略优化：采用“策略防打扰 + 按需启动 (Start=3)”方案，不堵死 localhost，
+#        确保【微软商店正常下载】、【新插外设自动拉取官方驱动】、【.NET 3.5 / 功能包按需启用】。
+#   3. 极限模式 (极限压榨)：
+#      - 保留原有对 Windows Update 的极限封死策略及非关键服务清理，但绝对保护打印服务存活。
+#   4. 完整保留 OpenWith 现代死锁修复、Notepad/照片查看器全链路修复、硬件限制跳过。
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -56,7 +63,7 @@ if ($global:deprovisionedAppxFamilies -and $global:deprovisionedAppxFamilies.Cou
     Write-Host "   [跳过] 未收集到任何 PackageFamilyName，未写入 Deprovisioned 标记。" -ForegroundColor DarkGray
 }
 
-Write-Host "[方案C-第一轮] 写入完毕，强制卸载 zSOFTWARE（失败即中止，阻断半挂载态）..." -ForegroundColor Yellow
+Write-Host "[方案C-第一轮] 写入完毕，强制卸载 zSOFTWARE（阻断半挂载态）..." -ForegroundColor Yellow
 Safely-UnloadHive -HiveName "HKLM\zSOFTWARE" -AbortOnFailure $true | Out-Null
 
 [System.GC]::Collect()
@@ -78,7 +85,6 @@ if ($LASTEXITCODE -ne 0) {
 # ----------------- 步骤 A: 彻底根治“打开方式 -> 更多应用”无反应 -----------------
 Write-Host "Applying ultimate fix for 'Open With -> More Apps' deadlock..." -ForegroundColor Green
 
-# 1. 屏蔽容易崩溃的现代 XAML 扩展，回退至原生经典 C++ OpenWith 窗口
 $blockedGuid = '{e44e9428-bdbc-4987-a099-40dc8fd255e7}'
 $blockedRoots = @(
     'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked',
@@ -88,7 +94,6 @@ foreach ($br in $blockedRoots) {
     $null = Invoke-RegSilent @('add', $br, '/v', $blockedGuid, '/t', 'REG_SZ', '/d', 'OpenWith Modern Dialog Bypass', '/f')
 }
 
-# 2. 策略级彻底阻断 OpenWith 访问应用商店（避免超时与未捕获异常）
 $explorerPolicies = @(
     'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer',
     'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
@@ -99,7 +104,6 @@ foreach ($ep in $explorerPolicies) {
 $null = Invoke-RegSilent @('add', 'HKLM\zDEFAULT\Software\Policies\Microsoft\Windows\Explorer', '/v', 'NoUseStoreOpenWith', '/t', 'REG_DWORD', '/d', '1', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Policies\Microsoft\Windows\Explorer', '/v', 'NoUseStoreOpenWith', '/t', 'REG_DWORD', '/d', '1', '/f')
 
-# 3. 补齐 OpenWith.exe 系统级执行关联
 $openWithRoots = @('HKLM\zSOFTWARE\Classes\Applications\OpenWith.exe', 'HKLM\zSOFTWARE\WOW6432Node\Classes\Applications\OpenWith.exe')
 foreach ($ow in $openWithRoots) {
     $null = Invoke-RegSilent @('add', $ow, '/v', 'NoOpenWith', '/t', 'REG_SZ', '/d', '', '/f')
@@ -107,7 +111,6 @@ foreach ($ow in $openWithRoots) {
     $null = Invoke-RegSilent @('add', "$ow\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\OpenWith.exe "%1"', '/f')
 }
 
-# 4. 清理已删 AppX 产生的死链，防止死链阻碍枚举
 if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     $commonExtensions = @(
         '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.heic', '.heif',
@@ -133,21 +136,17 @@ $classesRoots = @('HKLM\zSOFTWARE\Classes', 'HKLM\zSOFTWARE\WOW6432Node\Classes'
 $notepadCmd   = '%SystemRoot%\System32\notepad.exe %1'
 
 foreach ($croot in $classesRoots) {
-    # 1. Applications\notepad.exe 完整注册
     $null = Invoke-RegSilent @('add', "$croot\Applications\notepad.exe", '/v', 'FriendlyAppName', '/t', 'REG_SZ', '/d', 'Notepad', '/f')
     $null = Invoke-RegSilent @('add', "$croot\Applications\notepad.exe\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', $notepadCmd, '/f')
     $null = Invoke-RegSilent @('add', "$croot\Applications\notepad.exe\DefaultIcon", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\notepad.exe,0', '/f')
 
-    # 2. .txt 扩展名主关联
     $null = Invoke-RegSilent @('add', "$croot\.txt", '/ve', '/t', 'REG_SZ', '/d', 'txtfile', '/f')
     $null = Invoke-RegSilent @('add', "$croot\.txt", '/v', 'Content Type', '/t', 'REG_SZ', '/d', 'text/plain', '/f')
     $null = Invoke-RegSilent @('add', "$croot\.txt", '/v', 'PerceivedType', '/t', 'REG_SZ', '/d', 'text', '/f')
 
-    # 3. .txt\ShellNew —— "新建 → 文本文档"菜单
     $null = Invoke-RegSilent @('add', "$croot\.txt\ShellNew", '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
     $null = Invoke-RegSilent @('add', "$croot\.txt\ShellNew", '/v', 'ItemName', '/t', 'REG_EXPAND_SZ', '/d', '@%SystemRoot%\System32\notepad.exe,-470', '/f')
 
-    # 4. txtfile ProgID 完整定义
     $null = Invoke-RegSilent @('add', "$croot\txtfile", '/ve', '/t', 'REG_SZ', '/d', '文本文档', '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfile", '/v', 'AlwaysShowExt', '/t', 'REG_SZ', '/d', '', '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfile", '/v', 'PerceivedType', '/t', 'REG_SZ', '/d', 'text', '/f')
@@ -155,13 +154,11 @@ foreach ($croot in $classesRoots) {
     $null = Invoke-RegSilent @('add', "$croot\txtfile\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', $notepadCmd, '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfile\ShellNew", '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
 
-    # 5. txtfilelegacy 兼容定义
     $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy", '/ve', '/t', 'REG_SZ', '/d', '文本文档', '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy\DefaultIcon", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\notepad.exe,0', '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', $notepadCmd, '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy\ShellNew", '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
 
-    # 6. OpenWithList 兜底
     $null = Invoke-RegSilent @('add', "$croot\.txt\OpenWithList\notepad.exe", '/ve', '/t', 'REG_SZ', '/d', '', '/f')
 }
 Write-Host "[完成] Notepad 与 txtfile 关联链重建完毕。" -ForegroundColor Green
@@ -267,7 +264,7 @@ $null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Personalizati
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection', '/v', 'AllowTelemetry', '/t', 'REG_DWORD', '/d', '0', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
 
-Write-Host "Prevents installation or DevHome and Outlook:"
+Write-Host "Prevents installation of DevHome and Outlook:"
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate', '/v', 'workCompleted', '/t', 'REG_DWORD', '/d', '1', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate', '/v', 'workCompleted', '/t', 'REG_DWORD', '/d', '1', '/f')
 $null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate', '/f')
@@ -282,7 +279,7 @@ Write-Host "Prevent installation of New Outlook":
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail', '/v', 'PreventRun', '/t', 'REG_DWORD', '/d', '1', '/f')
 
 # ----------------- 2.5 Edge 策略拦截与 Defender 禁用 -----------------
-Write-Host "Disabling Edge at the kernel and policy level (Defender: disable-only)..." -ForegroundColor Yellow
+Write-Host "Disabling Edge at policy level (Defender: disable-only)..." -ForegroundColor Yellow
 
 $null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge', '/f')
 $null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge', '/f')
@@ -315,26 +312,46 @@ Remove-Item -Path "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorActio
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
 Write-Host "Task files have been deleted."
 
-# ----------------- 彻底停用 Windows Update（策略级切断，服务设为禁用4，绝不物理删除键） -----------------
-Write-Host "Disabling Windows Update..."
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE1', '/t', 'REG_SZ', '/d', 'net stop wuauserv', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE2', '/t', 'REG_SZ', '/d', 'sc stop wuauserv', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE3', '/t', 'REG_SZ', '/d', 'sc config wuauserv start= disabled', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'DisbaleWUPostOOBE1', '/t', 'REG_SZ', '/d', 'reg add HKLM\SYSTEM\CurrentControlSet\Services\wuauserv /v Start /t REG_DWORD /d 4 /f', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'DisbaleWUPostOOBE2', '/t', 'REG_SZ', '/d', 'reg add HKLM\SYSTEM\ControlSet001\Services\wuauserv /v Start /t REG_DWORD /d 4 /f', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'DoNotConnectToWindowsUpdateInternetLocations', '/t', 'REG_DWORD', '/d', '1', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'DisableWindowsUpdateAccess', '/t', 'REG_DWORD', '/d', '1', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'WUServer', '/t', 'REG_SZ', '/d', 'localhost', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'WUStatusServer', '/t', 'REG_SZ', '/d', 'localhost', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'UpdateServiceUrlAlternate', '/t', 'REG_SZ', '/d', 'localhost', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'UseWUServer', '/t', 'REG_DWORD', '/d', '1', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE', '/v', 'DisableOnline', '/t', 'REG_DWORD', '/d', '1', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'NoAutoUpdate', '/t', 'REG_DWORD', '/d', '1', '/f')
+# ----------------- Windows Update 策略差异化处理 -----------------
+if ($global:trimMode -eq "2") {
+    # --------------------------------------------------------------------------
+    # 极限模式：保留原有极限彻底断网阻断策略 (注意：会连带商店与自动驱动安装失效)
+    # --------------------------------------------------------------------------
+    Write-Host ">>> [极限压榨模式] 彻底物理截断 Windows Update (服务设为4 + 伪造本地服务器)..." -ForegroundColor Yellow
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE1', '/t', 'REG_SZ', '/d', 'net stop wuauserv', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE2', '/t', 'REG_SZ', '/d', 'sc stop wuauserv', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE3', '/t', 'REG_SZ', '/d', 'sc config wuauserv start= disabled', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'DisbaleWUPostOOBE1', '/t', 'REG_SZ', '/d', 'reg add HKLM\SYSTEM\CurrentControlSet\Services\wuauserv /v Start /t REG_DWORD /d 4 /f', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'DisbaleWUPostOOBE2', '/t', 'REG_SZ', '/d', 'reg add HKLM\SYSTEM\ControlSet001\Services\wuauserv /v Start /t REG_DWORD /d 4 /f', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'DoNotConnectToWindowsUpdateInternetLocations', '/t', 'REG_DWORD', '/d', '1', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'DisableWindowsUpdateAccess', '/t', 'REG_DWORD', '/d', '1', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'WUServer', '/t', 'REG_SZ', '/d', 'localhost', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'WUStatusServer', '/t', 'REG_SZ', '/d', 'localhost', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'UpdateServiceUrlAlternate', '/t', 'REG_SZ', '/d', 'localhost', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'UseWUServer', '/t', 'REG_DWORD', '/d', '1', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE', '/v', 'DisableOnline', '/t', 'REG_DWORD', '/d', '1', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'NoAutoUpdate', '/t', 'REG_DWORD', '/d', '1', '/f')
 
-# 关键：将更新服务设为禁用 (Start=4)，绝不可删除键以防底层 RPC 崩溃
-$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\UsoSvc', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\UsoSvc', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
+} else {
+    # --------------------------------------------------------------------------
+    # 普通健康模式：静默防打扰 + 按需触发 (Start=3 手动)
+    # 不篡改 WUServer，保证【微软商店正常下应用】、【插新硬件自动装驱动】、【.NET 3.5 按需安装】
+    # --------------------------------------------------------------------------
+    Write-Host "   [普通健康模式] 配置 Windows Update 为防打扰按需模式（保留应用商店与外设自动拉取驱动链路）..." -ForegroundColor Green
+    
+    # 策略级关闭自动强行重启与自动强推，AUOptions=2 (检查到更新但通知用户，绝不静默下载与重启)
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'NoAutoUpdate', '/t', 'REG_DWORD', '/d', '0', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'AUOptions', '/t', 'REG_DWORD', '/d', '2', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'NoAutoRebootWithLoggedOnUsers', '/t', 'REG_DWORD', '/d', '1', '/f')
+
+    # 更新核心服务设为 3 (Manual 手动按需启动)，平时后台 0 资源占用，商店下载或插入新设备时自动唤醒
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv', '/v', 'Start', '/t', 'REG_DWORD', '/d', '3', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\UsoSvc', '/v', 'Start', '/t', 'REG_DWORD', '/d', '3', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC', '/v', 'Start', '/t', 'REG_DWORD', '/d', '3', '/f')
+}
 
 # ==============================================================================
 # 3. 卸载并释放离线配置单元
@@ -345,29 +362,50 @@ foreach ($h in @("HKLM\zSOFTWARE", "HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPO
 }
 
 # ==============================================================================
-# 4. 重新装载 SYSTEM 单元以清除多余服务实体
-#    [修复]：绝不物理删除 wuauserv、UsoSvc、WaaSMedicSVC，保障系统关联完整
+# 4. 重新装载 SYSTEM 单元以精炼多余服务实体 (打印与核心蓝牙绝对豁免)
 # ==============================================================================
-Write-Host "Loading registry hives to remove non-essential services..."
+Write-Host "Loading registry hives to clean services..."
 & reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "[严重错误] 重新装载 SYSTEM 配置单元失败，退出码 $LASTEXITCODE，服务删除阶段中止。" -ForegroundColor Red
+    Write-Host "[严重错误] 重新装载 SYSTEM 配置单元失败，退出码 $LASTEXITCODE，服务精炼阶段中止。" -ForegroundColor Red
     if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
 
-# 剔除了 wuauserv、UsoSvc、WaaSMedicSVC，仅删除真正冗余的非系统支撑服务
-$servicesToRemove = @( 
-    'Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 
-    'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
-    'BluetoothUserService', 'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService'
-)
-foreach ($service in $servicesToRemove) { 
-    Write-Host "Removing service: $service"
-    $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\ControlSet001\Services\$service", '/f')
-    $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\CurrentControlSet\Services\$service", '/f')
+# ----------------- 核心关键保障：确保 Spooler 服务配置百分之百健康 -----------------
+Write-Host ">>> [打印保障] 正在锁定 Print Spooler 服务为自动启动 (Start=2)..." -ForegroundColor Green
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\Spooler', '/v', 'Start', '/t', 'REG_DWORD', '/d', '2', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\PrintNotify', '/v', 'Start', '/t', 'REG_DWORD', '/d', '3', '/f')
+
+# ----------------- 服务移除/精简差异化处理 -----------------
+if ($global:trimMode -eq "2") {
+    # 极限模式：清理非关键服务，但【坚决排除 Spooler 和 PrintNotify】
+    $servicesToRemove = @( 
+        'Fax', 'RemoteRegistry', 'diagsvc', 
+        'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
+        'BluetoothUserService', 'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService'
+    )
+    foreach ($service in $servicesToRemove) { 
+        Write-Host "   [极限瘦身] 移除多余服务实体: $service" -ForegroundColor DarkGray
+        $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\ControlSet001\Services\$service", '/f')
+        $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\CurrentControlSet\Services\$service", '/f')
+    }
+} else {
+    # 普通健康模式：仅清理纯 Edge 更新独立残余，绝对不删系统底层服务，保护蓝牙与打印
+    Write-Host "   [普通健康模式] 保留蓝牙核心服务 (BthAvctpSvc, BluetoothUserService) 与打印核心服务。" -ForegroundColor Green
+    
+    # 确保蓝牙核心服务为手动按需
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\BthAvctpSvc', '/v', 'Start', '/t', 'REG_DWORD', '/d', '3', '/f')
+    
+    $safeToRemoveServices = @('RemoteRegistry', 'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService')
+    foreach ($service in $safeToRemoveServices) { 
+        Write-Host "   [健康清理] 移除无用服务: $service" -ForegroundColor DarkGray
+        $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\ControlSet001\Services\$service", '/f')
+        $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\CurrentControlSet\Services\$service", '/f')
+    }
 }
+
 Safely-UnloadHive -HiveName "HKLM\zSYSTEM" | Out-Null
 
-Write-Host "[完成] 离线注册表配置与多余服务清理全部完毕。" -ForegroundColor Green
+Write-Host "[完成] 离线注册表配置与服务配置精炼全部就绪。" -ForegroundColor Green
