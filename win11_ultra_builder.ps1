@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-11-10 13:18:54 UTC
+#  生成时间: 2026-11-16 14:48:01 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -950,17 +950,17 @@ if ($global:sourceMode -eq "3") {
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
-#  重构要点：
-#   1. 普通精简模式（trimMode != 2）：仅通过官方接口移除 Appx
-#      (Remove-AppxProvisionedPackage) 与 FOD (Dism /Remove-Package)，
-#      不再物理删除 SystemApps 目录、不再物理粉碎 WindowsApps 残留。
-#   2. 极限压榨模式（trimMode == 2）：保留原有物理粉碎 SystemApps /
-#      WindowsApps 残留逻辑。
-#   3. Edge/Cortana 的 Appx 匹配、PackageFamilyName 解析、框架白名单、
-#      关键组件校验全部保留。
-#   4. [新增] 架构探测修复：文件夹模式（sourceMode == "3"）或 install.wim
-#      不存在时，改为从 $scratchDir\Windows\System32\ntoskrnl.exe 的 PE 头
-#      Machine 字段读取架构，避免 arm64 母盘被误判为 amd64。
+#  [重构核心]：
+#   1. 打印生态绝对保护：双模式下均不再移除 Printing-PMCPPC 打印管理包。
+#   2. 普通模式 (健康精简)：
+#      - 保留所有多媒体扩展解码器 (AV1, HEIF, HEVC, WebP)。
+#      - 保留 Xbox 游戏服务架构与手柄联动组件。
+#      - 保留 Windows Hello 生物识别 (人脸与指纹引导)。
+#      - 保留 CJK (日韩繁) 输入法与基础 OCR 语言包。
+#      - 保留 OpenSSH 客户端等开发调试组件。
+#      - 仅通过官方 API 移除纯粹的无用推广及预装垃圾，不粉碎底层物理目录。
+#   3. 极限模式 (极限压榨)：
+#      - 保留原有激进粉碎逻辑与极窄组件库，但绝对豁免打印相关组件。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
@@ -977,11 +977,7 @@ foreach ($line in ($imageIntl -split '\r?\n')) {
 }
 if (-not $matchedLang) { $global:languageCode = "zh-CN" }
 
-# ----------------- 1.1 架构探针（文件夹模式修复） -----------------
-# 优先顺序：
-#   a) 非文件夹模式且 install.wim 存在 → DISM Get-WimInfo（原逻辑）
-#   b) 文件夹模式 / install.wim 不存在 → ntoskrnl.exe PE 头 Machine 字段
-#   c) 进程环境变量兜底 → amd64
+# ----------------- 1.1 架构探针（文件夹模式与通用自适应） -----------------
 function Get-ArchitectureFromPe {
     param([string]$ExePath)
     try {
@@ -992,15 +988,11 @@ function Get-ArchitectureFromPe {
             $buffer = New-Object byte[] 0x400
             $read = $fs.Read($buffer, 0, $buffer.Length)
             if ($read -lt 0x40) { return $null }
-            # 检查 MZ 签名
             if ($buffer[0] -ne 0x4D -or $buffer[1] -ne 0x5A) { return $null }
-            # e_lfanew at 0x3C
             $e_lfanew = [BitConverter]::ToInt32($buffer, 0x3C)
             if ($e_lfanew -lt 0 -or $e_lfanew -gt ($read - 6)) { return $null }
-            # 检查 PE\0\0 签名
             if ($buffer[$e_lfanew] -ne 0x50 -or $buffer[$e_lfanew + 1] -ne 0x45 -or
                 $buffer[$e_lfanew + 2] -ne 0x00 -or $buffer[$e_lfanew + 3] -ne 0x00) { return $null }
-            # Machine at e_lfanew + 4 (2 bytes LE)
             $machine = [BitConverter]::ToUInt16($buffer, $e_lfanew + 4)
             switch ($machine) {
                 0x8664 { return 'amd64' }
@@ -1020,7 +1012,6 @@ function Get-ArchitectureFromPe {
 $matchedArch = $false
 $global:architecture = $null
 
-# a) 优先尝试 install.wim
 $destWimPath = Join-Path $sourcesDir "install.wim"
 if (Test-Path -LiteralPath $destWimPath) {
     $imageInfo = & dism.exe /English /Get-WimInfo "/wimFile:$destWimPath" "/index:1"
@@ -1037,7 +1028,6 @@ if (Test-Path -LiteralPath $destWimPath) {
     }
 }
 
-# b) install.wim 不存在或解析失败 → 从 ntoskrnl.exe PE 头读取
 if (-not $matchedArch) {
     $ntoskrnlPath = Join-Path $scratchDir "Windows\System32\ntoskrnl.exe"
     $peArch = Get-ArchitectureFromPe -ExePath $ntoskrnlPath
@@ -1048,7 +1038,6 @@ if (-not $matchedArch) {
     }
 }
 
-# c) 最终兜底
 if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
     $envArch = if ($env:PROCESSOR_ARCHITECTURE) { $env:PROCESSOR_ARCHITECTURE.ToLower() } else { "" }
     if ($envArch -eq 'arm64') { $global:architecture = 'arm64' }
@@ -1057,27 +1046,44 @@ if (-not $matchedArch -or [string]::IsNullOrWhiteSpace($global:architecture)) {
     Write-Host "   [架构探针] 回退使用环境变量/默认值: $($global:architecture)" -ForegroundColor DarkYellow
 }
 
-# ----------------- 2. 移除预装 AppX (Bloatware + Edge + Cortana) -----------------
-$targetAppxPatterns = @(
-    '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*',
+# ----------------- 2. 区分模式构建预装 AppX 移除清单 -----------------
+# 基础推广与无用流氓软件（双模式均移除）
+$baseBloatAppxPatterns = @(
+    '*Zune*', '*Bing*', '*Clipchamp*', '*People*',
     '*PowerAutomate*', '*Teams*', '*Todos*', '*YourPhone*',
-    '*SoundRecorder*', '*Solitaire*', '*FeedbackHub*', '*Maps*',
-    '*OfficeHub*', '*Help*', '*Family*', '*Alarms*', '*Camera*',
-    '*QuickAssist*', '*PeopleExperienceHost*', '*PinningConfirmationDialog*',
+    '*Solitaire*', '*FeedbackHub*', '*Maps*',
+    '*OfficeHub*', '*Help*', '*Family*',
+    '*PeopleExperienceHost*', '*PinningConfirmationDialog*',
     '*SecureAssessmentBrowser*', '*CommunicationsApps*', '*Copilot*',
-    '*AV1VideoExtension*', '*HEIFImageExtension*', '*HEVCVideoExtension*',
-    '*WebpImageExtension*', '*Cortana*',
-    '*MicrosoftEdge.Stable*', '*MicrosoftEdge*', '*Microsoft.MicrosoftEdge*',
+    '*Cortana*', '*MicrosoftEdge.Stable*', '*MicrosoftEdge*', '*Microsoft.MicrosoftEdge*',
     '*549981C3F5F10*'
 )
 
-# 框架组件保护白名单
+if ($global:trimMode -eq "2") {
+    # 极限压榨模式：额外移除游戏核心组件、现代多媒体扩展、系统录音机与相机
+    $targetAppxPatterns = $baseBloatAppxPatterns + @(
+        '*Gaming*',
+        '*SoundRecorder*',
+        '*Camera*',
+        '*Alarms*',
+        '*QuickAssist*',
+        '*AV1VideoExtension*',
+        '*HEIFImageExtension*',
+        '*HEVCVideoExtension*',
+        '*WebpImageExtension*'
+    )
+} else {
+    # 普通健康模式：严格保护游戏架构、影音解码、相机、录音机、快速助手
+    $targetAppxPatterns = $baseBloatAppxPatterns
+}
+
+# 核心依赖框架白名单（坚决不触碰）
 $protectedFrameworkPatterns = @(
     '*Microsoft.UI.Xaml*', '*Microsoft.VCLibs*', '*Microsoft.WindowsAppRuntime*',
     '*Microsoft.NET.Native*', '*Microsoft.Services.Store*'
 )
 
-# 普通精简模式额外安装依赖保护
+# 系统安装依赖防护清单
 $installDependencyPatterns = @(
     '*OneSettings*', '*UniversalTelemetryClient*', '*CrossDevice*',
     '*Client.WebExperience*', '*Windows.ShellExperience*',
@@ -1108,8 +1114,8 @@ foreach ($pkg in $provisionedPackages) {
     }
 }
 
-Write-Host "   [框架保护] 已自动拦截保留 $($appxToKeep.Count) 个核心依赖框架/安装依赖组件。" -ForegroundColor DarkGray
-Write-Host "   [准备移除] 检测到 $($appxToRemove.Count) 个预装应用符合精简规则。" -ForegroundColor Yellow
+Write-Host "   [框架保护] 已自动拦截保留 $($appxToKeep.Count) 个核心依赖框架/关键组件。" -ForegroundColor DarkGray
+Write-Host "   [准备移除] 检测到 $($appxToRemove.Count) 个预装应用符合当前精简规则。" -ForegroundColor Yellow
 
 $appxExeMap = @{
     'Microsoft.Windows.Photos'            = @('Photos.exe', 'Microsoft.Photos.exe')
@@ -1154,8 +1160,6 @@ foreach ($package in $appxToRemove) {
 
     if ($familyName -and -not $global:deprovisionedAppxFamilies.Contains($familyName)) {
         $global:deprovisionedAppxFamilies.Add($familyName)
-    } elseif (-not $familyName) {
-        Write-Host "   [提示] 无法解析 PackageFamilyName，跳过 Deprovisioned 标记: $($package.PackageName)" -ForegroundColor DarkGray
     }
 
     foreach ($mapKey in $appxExeMap.Keys) {
@@ -1187,7 +1191,7 @@ if ($global:trimMode -eq "2") {
         }
     }
 } else {
-    Write-Host "   [普通精简] 跳过 WindowsApps 物理残留粉碎，保留官方组件注册一致性。" -ForegroundColor DarkGray
+    Write-Host "   [普通健康模式] 跳过 WindowsApps 物理残留粉碎，保留组件注册表链一致性。" -ForegroundColor DarkGray
 }
 
 # ----------------- 3. SystemApps 物理粉碎（仅极限压榨模式） -----------------
@@ -1206,7 +1210,7 @@ if ($global:trimMode -eq "2") {
         }
     }
 } else {
-    Write-Host "   [普通精简] 跳过 SystemApps 物理粉碎，仅依赖 Appx 官方移除与 Deprovisioned 标记。" -ForegroundColor DarkGray
+    Write-Host "   [普通健康模式] 跳过 SystemApps 物理粉碎，仅依赖 AppX 官方通道卸载。" -ForegroundColor DarkGray
 }
 
 # 关键组件完整性校验
@@ -1219,8 +1223,9 @@ foreach ($critical in @($openWithExe, $shell32Dll, $shCoreDll)) {
     }
 }
 
-# ----------------- 4. 移除系统底层功能包 Packages (FOD，官方 Remove-Package) -----------------
-$packagePatterns = @(
+# ----------------- 4. 移除系统底层功能包 Packages (FOD) -----------------
+# 注意：双模式均已剔除 "Microsoft-Windows-Printing-PMCPPC-FoD-Package~"，确保打印管理可用！
+$baseFodPatterns = @(
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
     "Microsoft-Windows-StepsRecorder-Package~",
@@ -1229,25 +1234,33 @@ $packagePatterns = @(
     "Microsoft-Windows-TabletPCMath-Package~",
     "Microsoft-Windows-Xps-Xps-Viewer-Opt-Package~",
     "Microsoft-Windows-PowerShell-ISE-FOD-Package~",
-    "OpenSSH-Client-Package~",
-    "*IME-ja-jp*", "*IME-ko-kr*", "*IME-zh-tw*",
-    "Windows-Defender-Client-Package~",
     "Microsoft-Windows-Kernel-LA57-FoD-Package~",
-    "Microsoft-Windows-Hello-Face-Package~",
-    "Microsoft-Windows-Hello-BioEnrollment-Package~",
-    "Microsoft-Windows-BitLocker-DriveEncryption-FVE-Package~",
-    "Microsoft-Windows-TPM-WMI-Provider-Package~",
-    "Microsoft-Windows-Narrator-App-Package~",
-    "Microsoft-Windows-Magnifier-App-Package~",
-    "Microsoft-Windows-Printing-PMCPPC-FoD-Package~",
-    "Microsoft-Windows-WebcamExperience-Package~",
-    "Microsoft-Media-MPEG2-Decoder-Package~",
     "Microsoft-Windows-Wallpaper-Content-Extended-FoD-Package~"
 )
 
-if ($global:languageCode -ne "zh-CN") {
-    $packagePatterns += "Microsoft-Windows-LanguageFeatures-Handwriting-$($global:languageCode)-Package~"
-    $packagePatterns += "Microsoft-Windows-LanguageFeatures-OCR-$($global:languageCode)-Package~"
+if ($global:trimMode -eq "2") {
+    # 极限压榨模式：额外清除 Defender 客户端、生化识别、辅助工具、远程调试
+    $packagePatterns = $baseFodPatterns + @(
+        "OpenSSH-Client-Package~",
+        "*IME-ja-jp*", "*IME-ko-kr*", "*IME-zh-tw*",
+        "Windows-Defender-Client-Package~",
+        "Microsoft-Windows-Hello-Face-Package~",
+        "Microsoft-Windows-Hello-BioEnrollment-Package~",
+        "Microsoft-Windows-BitLocker-DriveEncryption-FVE-Package~",
+        "Microsoft-Windows-TPM-WMI-Provider-Package~",
+        "Microsoft-Windows-Narrator-App-Package~",
+        "Microsoft-Windows-Magnifier-App-Package~",
+        "Microsoft-Windows-WebcamExperience-Package~",
+        "Microsoft-Media-MPEG2-Decoder-Package~"
+    )
+
+    if ($global:languageCode -ne "zh-CN") {
+        $packagePatterns += "Microsoft-Windows-LanguageFeatures-Handwriting-$($global:languageCode)-Package~"
+        $packagePatterns += "Microsoft-Windows-LanguageFeatures-OCR-$($global:languageCode)-Package~"
+    }
+} else {
+    # 普通健康模式：完整保留 Hello人脸/指纹、OpenSSH、日韩繁输入法、MPEG2解码等基础功能
+    $packagePatterns = $baseFodPatterns
 }
 
 $rawPackageOutput = & dism.exe /English "/Image:$scratchDir" /Get-Packages /Format:Table
@@ -1275,55 +1288,78 @@ Write-Host "[完成] 应用与系统组件包移除完毕。" -ForegroundColor G
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 5/11] 驱动仓库与 .NET 缓存清理 (src/04-DriversFeatures.ps1)
+#  [重构核心]：
+#   1. 普通模式 (健康精简)：
+#      - 完整保留 DriverStore (FileRepository)，杜绝因缺失系统级基础驱动导致
+#        新插打印机、蓝牙、网卡、显卡报 0x00000002 或驱动安装中断故障。
+#      - 仅安全清理可重构的过期 .NET Native Images 缓存（系统空闲时会自动重构）。
+#   2. 极限模式 (极限压榨)：
+#      - 执行激进 DriverStore 瘦身，但【绝对豁免所有打印驱动 prn* 与一体机扫描驱动 wscsmd*】，
+#        确保虚拟打印 (Print to PDF)、通用打印类驱动及打印向导在极限模式下绝对可用。
 # ==============================================================================
 
 Write-Host "`n[步骤 6/11] 正在执行 DriverStore 精简与 .NET 原生映像清理..." -ForegroundColor Cyan
 
-# 1. 移除 pre-compiled .NET assemblies (覆盖旧版与新路径)
-Write-Host "Removing pre-compiled .NET assemblies (Native Images)..."
-$nativeImagePaths = @(
+# ----------------- 1. 通用阶段：移除 pre-compiled .NET assemblies (Native Images) -----------------
+Write-Host "Cleaning pre-compiled .NET assemblies (Native Images)..." -ForegroundColor DarkGray
+
+$nativeSearchPaths = @(
     "$scratchDir\Windows\assembly\NativeImages_*",
     "$scratchDir\Windows\Microsoft.NET\assembly\NativeImages_*"
 )
-foreach ($p in $nativeImagePaths) {
-    Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
-}
 
-# 2. 驱动仓库激进瘦身
-# 注：仅删除通用打印/扫描类 INF 前缀，保留厂商专用驱动；
-#     原 'scan*'、'mfd*' 通配符会误伤扫描仪与多功能设备核心驱动，已收窄。
-$winDir = "$scratchDir\Windows"
-Write-Host "Slimming the DriverStore... (removing non-essential driver classes)"
-$driverRepo = Join-Path -Path $winDir -ChildPath "System32\DriverStore\FileRepository"
-$patternsToRemove = @(
-    'prnms00*',
-    'prnms001*',
-    'prnms002*',
-    'prnms003*',
-    'prnms004*',
-    'prnms005*',
-    'prnca00*',
-    'prnkm00*',
-    'wscsmd.inf*',
-    'tapdrv*',
-    'rdpbus.inf*',
-    'tdibth.inf*'
-)
-
-if (Test-Path $driverRepo) {
-    Get-ChildItem -Path $driverRepo -Directory | ForEach-Object {
-        $driverFolder = $_.Name
-        foreach ($pattern in $patternsToRemove) {
-            if ($driverFolder -like $pattern) {
-                Write-Host "Removing non-essential driver package: $driverFolder"
-                attrib.exe -R -S -H "$($_.FullName)\*" /S /D 2>&1 | Out-Null
-                Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-                break
-            }
+foreach ($searchPath in $nativeSearchPaths) {
+    $matchedItems = Get-Item -Path $searchPath -ErrorAction SilentlyContinue
+    if ($matchedItems) {
+        foreach ($item in $matchedItems) {
+            Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }
-Write-Host "[完成] 驱动与底层运行库缓存精简完毕。" -ForegroundColor Green
+
+# ----------------- 2. 驱动仓库按模式差异化处理 -----------------
+$winDir = "$scratchDir\Windows"
+$driverRepo = Join-Path -Path $winDir -ChildPath "System32\DriverStore\FileRepository"
+
+if ($global:trimMode -eq "2") {
+    # --------------------------------------------------------------------------
+    # 极限压榨模式：清理非关键硬件总线驱动，但【坚决保留所有打印相关驱动】
+    # 绝对排除：prnms00* (Print to PDF/通用打印类), prnca00*, prnkm00*, wscsmd* (WIA扫描)
+    # --------------------------------------------------------------------------
+    Write-Host ">>> [极限压榨模式] 正在精简 DriverStore 非关键总线驱动 (已锁定保护打印驱动)..." -ForegroundColor Yellow
+
+    # 剔除了所有 prn* 及扫描仪驱动，仅清理真正冗余的虚拟总线
+    $patternsToRemove = @(
+        'tapdrv*',
+        'rdpbus.inf*',
+        'tdibth.inf*'
+    )
+
+    if (Test-Path -LiteralPath $driverRepo) {
+        $repoFolders = Get-ChildItem -LiteralPath $driverRepo -Directory -ErrorAction SilentlyContinue
+        if ($repoFolders) {
+            foreach ($folder in $repoFolders) {
+                $driverName = $folder.Name
+                foreach ($pattern in $patternsToRemove) {
+                    if ($driverName -like $pattern) {
+                        Write-Host "   [极限瘦身] 移除驱动包: $driverName" -ForegroundColor DarkGray
+                        attrib.exe -R -S -H "$($folder.FullName)\*" /S /D 2>&1 | Out-Null
+                        Remove-Item -LiteralPath $folder.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                        break
+                    }
+                }
+            }
+        }
+    }
+    Write-Host "[完成] 驱动仓库极限瘦身完毕（打印基础驱动已完整保留）。" -ForegroundColor Green
+} else {
+    # --------------------------------------------------------------------------
+    # 普通健康模式：坚决不碰驱动仓库，保障 100% 硬件生态与即插即用完整性
+    # --------------------------------------------------------------------------
+    Write-Host "   [普通健康模式] 完整保留 DriverStore 驱动仓库，确保全系硬件即插即用、打印机与外设驱动链路绝对完整。" -ForegroundColor Green
+}
+
+Write-Host "[完成] 驱动与底层运行库缓存阶段处理完毕。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/04-DriversFeatures.ps1
 
@@ -1332,56 +1368,75 @@ Write-Host "[完成] 驱动与底层运行库缓存精简完毕。" -ForegroundC
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 6/11] 物理文件实体清理 (src/05-PhysicalNuke.ps1)
-#  重构要点：
-#   1. 普通精简模式（trimMode != 2）：仅清理与组件注册无冲突的纯冗余资产
-#      （字体、语音 TTS、临时目录、Web 壁纸、Help、Cursors、Native Images、
-#      WinRE 占位、Default 用户 OneDrive 残留）。不再对 Program Files、
-#      System32、SysWOW64、WinSxS、SystemApps 做 Edge/OneDrive 物理粉碎，
-#      以避免绕过组件注册造成 DISM 报“可修复”。
-#   2. 极限压榨模式（trimMode == 2）：保留原有地毯式物理粉碎逻辑。
-#   3. Defender 仍由 06 模块“仅禁用服务 + 策略”，本模块不删除 Defender。
+#  [重构核心]：
+#   1. 普通模式 (健康精简)：
+#      - 严禁粉碎 CJK 多语言字体库与输入法，防止游戏、网页、跨国文档与打印乱码。
+#      - 严禁篡改/置空 WinRE 恢复环境 (winre.wim)，确保系统还原、安全模式与“重置此电脑”功能完好。
+#      - 完整保留 TTS 语音引擎与系统光标库 (Cursors)。
+#      - 仅安全清理纯冗余临时缓存、离线病毒库增量包与默认配置文件中的 OneDrive 残留。
+#   2. 极限模式 (极限压榨)：
+#      - 保留原有地毯式物理粉碎 (WinRE 零字节占位、字体库极限剔除、Edge/OneDrive 底层粉碎)。
 # ==============================================================================
 
 Write-Host "`n[步骤 7/11] 正在执行系统冗余物理文件清理..." -ForegroundColor Cyan
 $winDir = "$scratchDir\Windows"
 
-# 1. 字体库精简 (保护微软雅黑与核心英文字体)
+# ----------------- 1. 字体库处理 (按模式差异化) -----------------
 $fontsPath = Join-Path -Path $winDir -ChildPath "Fonts"
-if (Test-Path $fontsPath) {
-    Write-Host "Cleaning up Fonts..."
-    Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "lucon*.*", "calibri*.*", "arial*.*", "times*.*", "cou*.*", "8*.*", "msyh*.*", "simsun*.*", "simhei*.*" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    Get-ChildItem -Path $fontsPath -Include "mingli*", "msjh*", "malgun*", "meiryo*", "yugoth*", "segoeuihistoric.ttf" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $fontsPath) {
+    if ($global:trimMode -eq "2") {
+        # 极限模式：仅保留微软核心英文字体与简体中文字体，清理其他多语言字型
+        Write-Host ">>> [极限压榨模式] 正在极限裁剪非核心字型库..." -ForegroundColor Yellow
+        Get-ChildItem -Path $fontsPath -Exclude "segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "lucon*.*", "calibri*.*", "arial*.*", "times*.*", "cou*.*", "8*.*", "msyh*.*", "simsun*.*", "simhei*.*" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -Path $fontsPath -Include "mingli*", "msjh*", "malgun*", "meiryo*", "yugoth*", "segoeuihistoric.ttf" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    } else {
+        # 普通健康模式：完整保留字体库，确保全语言排版与打印光栅化绝对正常
+        Write-Host "   [普通健康模式] 完整保留系统全套字型库，防止游戏、繁体网站及跨国文档乱码。" -ForegroundColor Green
+    }
 }
 
-# 2. 语音引擎、病毒定义更新与输入法
-Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHT" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\JPN" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force -ErrorAction SilentlyContinue
+# ----------------- 2. 语音引擎与多语言输入法物理目录 -----------------
+if ($global:trimMode -eq "2") {
+    Write-Host ">>> [极限压榨模式] 清理 TTS 语音引擎与外语输入法资产..." -ForegroundColor Yellow
+    Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHT" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\JPN" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+    Write-Host "   [普通健康模式] 保留 TTS 语音引擎与日韩繁输入法架构。" -ForegroundColor Green
+}
 
-# 3. 临时目录、Web 壁纸、Help、Cursors
+# ----------------- 3. 通用安全清理项 (双模式均执行) -----------------
+# 离线病毒定义更新包（开机联网后会自动下载最新基线）
+Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
+
+# Windows 临时工作区
 Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+
+# 用户配置文件下的 OneDrive 初始安装包缓存
+$userProfileOneDrive = "$scratchDir\Users\Default\AppData\Local\Microsoft\OneDrive"
+if (Test-Path -LiteralPath $userProfileOneDrive) {
+    Remove-Item -LiteralPath $userProfileOneDrive -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 帮助文档与示例壁纸清理
+Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
 $webWallpaper = Join-Path $winDir "Web\Wallpaper"
 if (Test-Path -LiteralPath $webWallpaper) {
     Remove-Item -Path $webWallpaper -Recurse -Force -ErrorAction SilentlyContinue
 }
-Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
 
-# 4. 移除预编译 .NET 程序集 (Native Images)
-Write-Host "Removing pre-compiled .NET assemblies (Native Images)..."
-$nativeImagePaths = @(
-    "$scratchDir\Windows\assembly\NativeImages_*",
-    "$scratchDir\Windows\Microsoft.NET\assembly\NativeImages_*"
-)
-foreach ($p in $nativeImagePaths) {
-    Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
+# ----------------- 4. 光标库 (Cursors) 处理 -----------------
+if ($global:trimMode -eq "2") {
+    Write-Host ">>> [极限压榨模式] 清理系统指针库 (Cursors)..." -ForegroundColor Yellow
+    Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+    Write-Host "   [普通健康模式] 完整保留鼠标指针库 (Cursors)，防止高分屏与游戏鼠标花屏。" -ForegroundColor Green
 }
 
-# 5. Edge/OneDrive 地毯式物理粉碎（仅极限压榨模式）
+# ----------------- 5. Edge / OneDrive 物理地毯式粉碎（仅极限压榨模式） -----------------
 if ($global:trimMode -eq "2") {
-    Write-Host "Removing Edge and OneDrive (Universal Search)..." -ForegroundColor Yellow
+    Write-Host ">>> [极限压榨模式] 正在地毯式粉碎 Edge 和 OneDrive 磁盘实体残留..." -ForegroundColor Yellow
 
     $searchBases = @(
         "$scratchDir\Program Files",
@@ -1397,32 +1452,36 @@ if ($global:trimMode -eq "2") {
         if (Test-Path -LiteralPath $base) {
             foreach ($pattern in $patternsToDelete) {
                 $items = Get-ChildItem -Path $base -Filter $pattern -ErrorAction SilentlyContinue
-                foreach ($item in $items) {
-                    Write-Host "   粉碎底层残留: $($item.FullName)" -ForegroundColor DarkGray
-                    if ($item.PSIsContainer) {
-                        & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
-                        & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+                if ($items) {
+                    foreach ($item in $items) {
+                        Write-Host "   [物理粉碎] 残留实体: $($item.FullName)" -ForegroundColor DarkGray
+                        if ($item.PSIsContainer) {
+                            & takeown.exe /F "$($item.FullName)" /A /R /D Y 2>&1 | Out-Null
+                            & icacls.exe "$($item.FullName)" /grant "*S-1-5-32-544:F" /T /C /Q 2>&1 | Out-Null
+                        }
+                        Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
                     }
-                    Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
                 }
             }
         }
     }
 } else {
-    Write-Host "   [普通精简] 跳过 Program Files / System32 / SysWOW64 / WinSxS / SystemApps 的 Edge/OneDrive 物理粉碎，改由 Appx 官方移除与策略禁用处理。" -ForegroundColor DarkGray
+    Write-Host "   [普通健康模式] 跳过 Program Files / System32 / SysWOW64 等系统关键目录的底层实体物理粉碎，改由官方 AppX 卸载与注册表策略禁用安全处理。" -ForegroundColor Green
 }
 
-# 6. 处理用户目录下的 OneDrive 残留（两种模式均清理 Default 配置残留）
-$userProfileOneDrive = "$scratchDir\Users\Default\AppData\Local\Microsoft\OneDrive"
-if (Test-Path $userProfileOneDrive) {
-    Remove-Item -LiteralPath $userProfileOneDrive -Recurse -Force -ErrorAction SilentlyContinue
+# ----------------- 6. WinRE 恢复环境处理 (极其关键) -----------------
+$winrePath = "$scratchDir\Windows\System32\Recovery\winre.wim"
+if ($global:trimMode -eq "2") {
+    # 极限模式：清空 WinRE 以换取 ~500MB 极限体积
+    Write-Host ">>> [极限压榨模式] 正在将 WinRE 执行零字节占位 (释放 500MB)..." -ForegroundColor Yellow
+    Remove-Item -Path $winrePath -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -Path $winrePath -ItemType File -Force | Out-Null
+} else {
+    # 普通健康模式：完整保留官方 winre.wim，确保重置此电脑与高级故障排查 100% 正常
+    Write-Host "   [普通健康模式] 完整保留官方 WinRE 恢复环境，确保系统故障自愈、安全模式与“重置此电脑”功能绝对可用。" -ForegroundColor Green
 }
 
-# 7. WinRE 零字节占位
-Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force | Out-Null
-
-Write-Host "[完成] 冗余物理文件与底层组件清理完毕。" -ForegroundColor Green
+Write-Host "[完成] 冗余物理文件与底层资产清理完毕。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/05-PhysicalNuke.ps1
 
@@ -1431,10 +1490,17 @@ Write-Host "[完成] 冗余物理文件与底层组件清理完毕。" -Foregrou
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
-#  [终极修复版]：
-#    1. 根治“打开方式 -> 更多应用”点击无反应缺陷（屏蔽现代 XAML 岛 + 阻断 Store 查询）
-#    2. 解决底层 RPC 崩溃：WU 服务仅禁用（Start=4），不再物理 delete 键
-#    3. 完整重建 Notepad、Photo Viewer、ShellNew 关联链
+#  [重构核心]：
+#   1. 打印体系绝对保护（双模式通用）：
+#      - 彻底剔除针对 Spooler 和 PrintNotify 的删除指令！
+#      - 显式锁定 Spooler (Start=2 自动) 与 PrintNotify (Start=3 手动)，根治 RPC 崩溃。
+#   2. 普通模式 (健康精简)：
+#      - 蓝牙生态保护：坚决保留 BthAvctpSvc (耳机切歌/音量) 与 BluetoothUserService (蓝牙配对)。
+#      - Windows Update 策略优化：采用“策略防打扰 + 按需启动 (Start=3)”方案，不堵死 localhost，
+#        确保【微软商店正常下载】、【新插外设自动拉取官方驱动】、【.NET 3.5 / 功能包按需启用】。
+#   3. 极限模式 (极限压榨)：
+#      - 保留原有对 Windows Update 的极限封死策略及非关键服务清理，但绝对保护打印服务存活。
+#   4. 完整保留 OpenWith 现代死锁修复、Notepad/照片查看器全链路修复、硬件限制跳过。
 # ==============================================================================
 
 Write-Host "`n[步骤 8/11] 正在配置离线注册表并优化系统核心参数..." -ForegroundColor Cyan
@@ -1487,7 +1553,7 @@ if ($global:deprovisionedAppxFamilies -and $global:deprovisionedAppxFamilies.Cou
     Write-Host "   [跳过] 未收集到任何 PackageFamilyName，未写入 Deprovisioned 标记。" -ForegroundColor DarkGray
 }
 
-Write-Host "[方案C-第一轮] 写入完毕，强制卸载 zSOFTWARE（失败即中止，阻断半挂载态）..." -ForegroundColor Yellow
+Write-Host "[方案C-第一轮] 写入完毕，强制卸载 zSOFTWARE（阻断半挂载态）..." -ForegroundColor Yellow
 Safely-UnloadHive -HiveName "HKLM\zSOFTWARE" -AbortOnFailure $true | Out-Null
 
 [System.GC]::Collect()
@@ -1509,7 +1575,6 @@ if ($LASTEXITCODE -ne 0) {
 # ----------------- 步骤 A: 彻底根治“打开方式 -> 更多应用”无反应 -----------------
 Write-Host "Applying ultimate fix for 'Open With -> More Apps' deadlock..." -ForegroundColor Green
 
-# 1. 屏蔽容易崩溃的现代 XAML 扩展，回退至原生经典 C++ OpenWith 窗口
 $blockedGuid = '{e44e9428-bdbc-4987-a099-40dc8fd255e7}'
 $blockedRoots = @(
     'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked',
@@ -1519,7 +1584,6 @@ foreach ($br in $blockedRoots) {
     $null = Invoke-RegSilent @('add', $br, '/v', $blockedGuid, '/t', 'REG_SZ', '/d', 'OpenWith Modern Dialog Bypass', '/f')
 }
 
-# 2. 策略级彻底阻断 OpenWith 访问应用商店（避免超时与未捕获异常）
 $explorerPolicies = @(
     'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer',
     'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
@@ -1530,7 +1594,6 @@ foreach ($ep in $explorerPolicies) {
 $null = Invoke-RegSilent @('add', 'HKLM\zDEFAULT\Software\Policies\Microsoft\Windows\Explorer', '/v', 'NoUseStoreOpenWith', '/t', 'REG_DWORD', '/d', '1', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Policies\Microsoft\Windows\Explorer', '/v', 'NoUseStoreOpenWith', '/t', 'REG_DWORD', '/d', '1', '/f')
 
-# 3. 补齐 OpenWith.exe 系统级执行关联
 $openWithRoots = @('HKLM\zSOFTWARE\Classes\Applications\OpenWith.exe', 'HKLM\zSOFTWARE\WOW6432Node\Classes\Applications\OpenWith.exe')
 foreach ($ow in $openWithRoots) {
     $null = Invoke-RegSilent @('add', $ow, '/v', 'NoOpenWith', '/t', 'REG_SZ', '/d', '', '/f')
@@ -1538,7 +1601,6 @@ foreach ($ow in $openWithRoots) {
     $null = Invoke-RegSilent @('add', "$ow\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\OpenWith.exe "%1"', '/f')
 }
 
-# 4. 清理已删 AppX 产生的死链，防止死链阻碍枚举
 if ($global:removedAppxExeNames -and $global:removedAppxExeNames.Count -gt 0) {
     $commonExtensions = @(
         '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.heic', '.heif',
@@ -1564,21 +1626,17 @@ $classesRoots = @('HKLM\zSOFTWARE\Classes', 'HKLM\zSOFTWARE\WOW6432Node\Classes'
 $notepadCmd   = '%SystemRoot%\System32\notepad.exe %1'
 
 foreach ($croot in $classesRoots) {
-    # 1. Applications\notepad.exe 完整注册
     $null = Invoke-RegSilent @('add', "$croot\Applications\notepad.exe", '/v', 'FriendlyAppName', '/t', 'REG_SZ', '/d', 'Notepad', '/f')
     $null = Invoke-RegSilent @('add', "$croot\Applications\notepad.exe\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', $notepadCmd, '/f')
     $null = Invoke-RegSilent @('add', "$croot\Applications\notepad.exe\DefaultIcon", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\notepad.exe,0', '/f')
 
-    # 2. .txt 扩展名主关联
     $null = Invoke-RegSilent @('add', "$croot\.txt", '/ve', '/t', 'REG_SZ', '/d', 'txtfile', '/f')
     $null = Invoke-RegSilent @('add', "$croot\.txt", '/v', 'Content Type', '/t', 'REG_SZ', '/d', 'text/plain', '/f')
     $null = Invoke-RegSilent @('add', "$croot\.txt", '/v', 'PerceivedType', '/t', 'REG_SZ', '/d', 'text', '/f')
 
-    # 3. .txt\ShellNew —— "新建 → 文本文档"菜单
     $null = Invoke-RegSilent @('add', "$croot\.txt\ShellNew", '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
     $null = Invoke-RegSilent @('add', "$croot\.txt\ShellNew", '/v', 'ItemName', '/t', 'REG_EXPAND_SZ', '/d', '@%SystemRoot%\System32\notepad.exe,-470', '/f')
 
-    # 4. txtfile ProgID 完整定义
     $null = Invoke-RegSilent @('add', "$croot\txtfile", '/ve', '/t', 'REG_SZ', '/d', '文本文档', '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfile", '/v', 'AlwaysShowExt', '/t', 'REG_SZ', '/d', '', '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfile", '/v', 'PerceivedType', '/t', 'REG_SZ', '/d', 'text', '/f')
@@ -1586,13 +1644,11 @@ foreach ($croot in $classesRoots) {
     $null = Invoke-RegSilent @('add', "$croot\txtfile\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', $notepadCmd, '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfile\ShellNew", '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
 
-    # 5. txtfilelegacy 兼容定义
     $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy", '/ve', '/t', 'REG_SZ', '/d', '文本文档', '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy\DefaultIcon", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\notepad.exe,0', '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', $notepadCmd, '/f')
     $null = Invoke-RegSilent @('add', "$croot\txtfilelegacy\ShellNew", '/v', 'NullFile', '/t', 'REG_SZ', '/d', '', '/f')
 
-    # 6. OpenWithList 兜底
     $null = Invoke-RegSilent @('add', "$croot\.txt\OpenWithList\notepad.exe", '/ve', '/t', 'REG_SZ', '/d', '', '/f')
 }
 Write-Host "[完成] Notepad 与 txtfile 关联链重建完毕。" -ForegroundColor Green
@@ -1698,7 +1754,7 @@ $null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Personalizati
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection', '/v', 'AllowTelemetry', '/t', 'REG_DWORD', '/d', '0', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
 
-Write-Host "Prevents installation or DevHome and Outlook:"
+Write-Host "Prevents installation of DevHome and Outlook:"
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate', '/v', 'workCompleted', '/t', 'REG_DWORD', '/d', '1', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate', '/v', 'workCompleted', '/t', 'REG_DWORD', '/d', '1', '/f')
 $null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate', '/f')
@@ -1713,7 +1769,7 @@ Write-Host "Prevent installation of New Outlook":
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail', '/v', 'PreventRun', '/t', 'REG_DWORD', '/d', '1', '/f')
 
 # ----------------- 2.5 Edge 策略拦截与 Defender 禁用 -----------------
-Write-Host "Disabling Edge at the kernel and policy level (Defender: disable-only)..." -ForegroundColor Yellow
+Write-Host "Disabling Edge at policy level (Defender: disable-only)..." -ForegroundColor Yellow
 
 $null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge', '/f')
 $null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge', '/f')
@@ -1746,26 +1802,46 @@ Remove-Item -Path "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorActio
 Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
 Write-Host "Task files have been deleted."
 
-# ----------------- 彻底停用 Windows Update（策略级切断，服务设为禁用4，绝不物理删除键） -----------------
-Write-Host "Disabling Windows Update..."
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE1', '/t', 'REG_SZ', '/d', 'net stop wuauserv', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE2', '/t', 'REG_SZ', '/d', 'sc stop wuauserv', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE3', '/t', 'REG_SZ', '/d', 'sc config wuauserv start= disabled', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'DisbaleWUPostOOBE1', '/t', 'REG_SZ', '/d', 'reg add HKLM\SYSTEM\CurrentControlSet\Services\wuauserv /v Start /t REG_DWORD /d 4 /f', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'DisbaleWUPostOOBE2', '/t', 'REG_SZ', '/d', 'reg add HKLM\SYSTEM\ControlSet001\Services\wuauserv /v Start /t REG_DWORD /d 4 /f', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'DoNotConnectToWindowsUpdateInternetLocations', '/t', 'REG_DWORD', '/d', '1', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'DisableWindowsUpdateAccess', '/t', 'REG_DWORD', '/d', '1', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'WUServer', '/t', 'REG_SZ', '/d', 'localhost', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'WUStatusServer', '/t', 'REG_SZ', '/d', 'localhost', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'UpdateServiceUrlAlternate', '/t', 'REG_SZ', '/d', 'localhost', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'UseWUServer', '/t', 'REG_DWORD', '/d', '1', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE', '/v', 'DisableOnline', '/t', 'REG_DWORD', '/d', '1', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'NoAutoUpdate', '/t', 'REG_DWORD', '/d', '1', '/f')
+# ----------------- Windows Update 策略差异化处理 -----------------
+if ($global:trimMode -eq "2") {
+    # --------------------------------------------------------------------------
+    # 极限模式：保留原有极限彻底断网阻断策略 (注意：会连带商店与自动驱动安装失效)
+    # --------------------------------------------------------------------------
+    Write-Host ">>> [极限压榨模式] 彻底物理截断 Windows Update (服务设为4 + 伪造本地服务器)..." -ForegroundColor Yellow
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE1', '/t', 'REG_SZ', '/d', 'net stop wuauserv', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE2', '/t', 'REG_SZ', '/d', 'sc stop wuauserv', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'StopWUPostOOBE3', '/t', 'REG_SZ', '/d', 'sc config wuauserv start= disabled', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'DisbaleWUPostOOBE1', '/t', 'REG_SZ', '/d', 'reg add HKLM\SYSTEM\CurrentControlSet\Services\wuauserv /v Start /t REG_DWORD /d 4 /f', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', '/v', 'DisbaleWUPostOOBE2', '/t', 'REG_SZ', '/d', 'reg add HKLM\SYSTEM\ControlSet001\Services\wuauserv /v Start /t REG_DWORD /d 4 /f', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'DoNotConnectToWindowsUpdateInternetLocations', '/t', 'REG_DWORD', '/d', '1', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'DisableWindowsUpdateAccess', '/t', 'REG_DWORD', '/d', '1', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'WUServer', '/t', 'REG_SZ', '/d', 'localhost', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'WUStatusServer', '/t', 'REG_SZ', '/d', 'localhost', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', '/v', 'UpdateServiceUrlAlternate', '/t', 'REG_SZ', '/d', 'localhost', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'UseWUServer', '/t', 'REG_DWORD', '/d', '1', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE', '/v', 'DisableOnline', '/t', 'REG_DWORD', '/d', '1', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'NoAutoUpdate', '/t', 'REG_DWORD', '/d', '1', '/f')
 
-# 关键：将更新服务设为禁用 (Start=4)，绝不可删除键以防底层 RPC 崩溃
-$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\UsoSvc', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\UsoSvc', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
+} else {
+    # --------------------------------------------------------------------------
+    # 普通健康模式：静默防打扰 + 按需触发 (Start=3 手动)
+    # 不篡改 WUServer，保证【微软商店正常下应用】、【插新硬件自动装驱动】、【.NET 3.5 按需安装】
+    # --------------------------------------------------------------------------
+    Write-Host "   [普通健康模式] 配置 Windows Update 为防打扰按需模式（保留应用商店与外设自动拉取驱动链路）..." -ForegroundColor Green
+    
+    # 策略级关闭自动强行重启与自动强推，AUOptions=2 (检查到更新但通知用户，绝不静默下载与重启)
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'NoAutoUpdate', '/t', 'REG_DWORD', '/d', '0', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'AUOptions', '/t', 'REG_DWORD', '/d', '2', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', '/v', 'NoAutoRebootWithLoggedOnUsers', '/t', 'REG_DWORD', '/d', '1', '/f')
+
+    # 更新核心服务设为 3 (Manual 手动按需启动)，平时后台 0 资源占用，商店下载或插入新设备时自动唤醒
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv', '/v', 'Start', '/t', 'REG_DWORD', '/d', '3', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\UsoSvc', '/v', 'Start', '/t', 'REG_DWORD', '/d', '3', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC', '/v', 'Start', '/t', 'REG_DWORD', '/d', '3', '/f')
+}
 
 # ==============================================================================
 # 3. 卸载并释放离线配置单元
@@ -1776,32 +1852,53 @@ foreach ($h in @("HKLM\zSOFTWARE", "HKLM\zNTUSER", "HKLM\zDEFAULT", "HKLM\zCOMPO
 }
 
 # ==============================================================================
-# 4. 重新装载 SYSTEM 单元以清除多余服务实体
-#    [修复]：绝不物理删除 wuauserv、UsoSvc、WaaSMedicSVC，保障系统关联完整
+# 4. 重新装载 SYSTEM 单元以精炼多余服务实体 (打印与核心蓝牙绝对豁免)
 # ==============================================================================
-Write-Host "Loading registry hives to remove non-essential services..."
+Write-Host "Loading registry hives to clean services..."
 & reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "[严重错误] 重新装载 SYSTEM 配置单元失败，退出码 $LASTEXITCODE，服务删除阶段中止。" -ForegroundColor Red
+    Write-Host "[严重错误] 重新装载 SYSTEM 配置单元失败，退出码 $LASTEXITCODE，服务精炼阶段中止。" -ForegroundColor Red
     if ($global:transcriptActive) { Stop-Transcript }
     pause
     exit 1
 }
 
-# 剔除了 wuauserv、UsoSvc、WaaSMedicSVC，仅删除真正冗余的非系统支撑服务
-$servicesToRemove = @( 
-    'Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 
-    'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
-    'BluetoothUserService', 'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService'
-)
-foreach ($service in $servicesToRemove) { 
-    Write-Host "Removing service: $service"
-    $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\ControlSet001\Services\$service", '/f')
-    $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\CurrentControlSet\Services\$service", '/f')
+# ----------------- 核心关键保障：确保 Spooler 服务配置百分之百健康 -----------------
+Write-Host ">>> [打印保障] 正在锁定 Print Spooler 服务为自动启动 (Start=2)..." -ForegroundColor Green
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\Spooler', '/v', 'Start', '/t', 'REG_DWORD', '/d', '2', '/f')
+$null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\PrintNotify', '/v', 'Start', '/t', 'REG_DWORD', '/d', '3', '/f')
+
+# ----------------- 服务移除/精简差异化处理 -----------------
+if ($global:trimMode -eq "2") {
+    # 极限模式：清理非关键服务，但【坚决排除 Spooler 和 PrintNotify】
+    $servicesToRemove = @( 
+        'Fax', 'RemoteRegistry', 'diagsvc', 
+        'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 
+        'BluetoothUserService', 'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService'
+    )
+    foreach ($service in $servicesToRemove) { 
+        Write-Host "   [极限瘦身] 移除多余服务实体: $service" -ForegroundColor DarkGray
+        $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\ControlSet001\Services\$service", '/f')
+        $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\CurrentControlSet\Services\$service", '/f')
+    }
+} else {
+    # 普通健康模式：仅清理纯 Edge 更新独立残余，绝对不删系统底层服务，保护蓝牙与打印
+    Write-Host "   [普通健康模式] 保留蓝牙核心服务 (BthAvctpSvc, BluetoothUserService) 与打印核心服务。" -ForegroundColor Green
+    
+    # 确保蓝牙核心服务为手动按需
+    $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\BthAvctpSvc', '/v', 'Start', '/t', 'REG_DWORD', '/d', '3', '/f')
+    
+    $safeToRemoveServices = @('RemoteRegistry', 'edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService')
+    foreach ($service in $safeToRemoveServices) { 
+        Write-Host "   [健康清理] 移除无用服务: $service" -ForegroundColor DarkGray
+        $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\ControlSet001\Services\$service", '/f')
+        $null = Invoke-RegSilent @('delete', "HKLM\zSYSTEM\CurrentControlSet\Services\$service", '/f')
+    }
 }
+
 Safely-UnloadHive -HiveName "HKLM\zSYSTEM" | Out-Null
 
-Write-Host "[完成] 离线注册表配置与多余服务清理全部完毕。" -ForegroundColor Green
+Write-Host "[完成] 离线注册表配置与服务配置精炼全部就绪。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/06-RegistryTweaks.ps1
 
@@ -2302,13 +2399,15 @@ if ($global:sourceMode -eq "3") {
 # ==============================================================================
 # ==============================================================================
 #  win11 Builder - [模块 9/11] 组件库瘦身与主映像优化 (src/08-WinSxSOptimize.ps1)
-#  重构要点：
-#   1. 普通精简模式：仅执行 /StartComponentCleanup，不使用 /ResetBase，
-#      不做 RestoreHealth 修复验证。组件变更全部经由 DISM 官方接口完成，
-#      保留完整更新回滚基线，避免破坏安装依赖。
-#   2. 极限压榨模式：保留原有 /ResetBase + 物理替换 WinSxS 的激进逻辑。
-#   3. 本模块会被合并进单文件主脚本，禁止使用 return（会退出整个脚本），
-#      所有提前退出分支统一改为 if/else 嵌套。
+#  [重构核心]：
+#   1. 普通模式 (健康精简)：
+#      - 仅执行官方 DISM /StartComponentCleanup，不执行 /ResetBase，
+#        保留完整更新回滚基线与硬链接链条，确保系统 100% 具备自愈与后期维护能力。
+#   2. 极限模式 (极限压榨)：
+#      - 补齐 WinSxS 物理置换白名单中的【全部打印服务核心程序集与 32位兼容层】！
+#        彻底解决原版极限模式因 WinSxS 缺失 winprint / spooler 组件导致的
+#        “打印处理器不存在”与“RPC 服务器不可用”绝症。
+#   3. 流控规范：严禁使用 return，保障单文件或分模块调度流水线顺畅贯通。
 # ==============================================================================
 
 Write-Host "`n[步骤 10/11] 正在根据精简模式执行组件存储 (WinSxS) 优化..." -ForegroundColor Cyan
@@ -2318,26 +2417,29 @@ $currentArch     = if ($global:architecture) { $global:architecture } else { "am
 
 # ----------------- 1. 通用阶段：按模式执行组件清理 -----------------
 if ($currentTrimMode -ne "2") {
-    # 普通精简：仅安全清理，绝不重置基线（避免破坏安装依赖）
-    Write-Host "正在执行 DISM 组件清理 (/StartComponentCleanup，不重置基线)..." -ForegroundColor Yellow
+    # --------------------------------------------------------------------------
+    # 普通健康精简模式：仅安全清理无用废弃组件，不重置基线，不物理破坏 WinSxS
+    # --------------------------------------------------------------------------
+    Write-Host "正在执行 DISM 安全组件清理 (/StartComponentCleanup，保留更新基线)..." -ForegroundColor Yellow
     & dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[提示] DISM 组件清理退出码: $LASTEXITCODE (部分精简组件无需清理或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
+        Write-Host "[提示] DISM 组件清理退出码: $LASTEXITCODE (部分精简组件无需清理或已处于最新状态，继续推进)。" -ForegroundColor DarkGray
     }
 
-    Write-Host "[完成] 当前为【普通精简模式】，已保留完整 WinSxS 核心组件库与更新回滚基线，确保安装兼容性与可维护性。" -ForegroundColor Green
+    Write-Host "[完成] 【普通健康模式】已完整保留 WinSxS 核心组件库与硬链接，确保系统自愈性与全功能生态稳定。" -ForegroundColor Green
 } else {
-    # 极限压榨：先重置基线，随后物理替换 WinSxS
+    # --------------------------------------------------------------------------
+    # 极限压榨模式：重置基线，随后物理替换 WinSxS (但已补全打印核心依赖)
+    # --------------------------------------------------------------------------
     Write-Host "正在执行 DISM 深度组件清理与基线重置 (/StartComponentCleanup /ResetBase)..." -ForegroundColor Yellow
     & dism.exe /English "/Image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[提示] DISM 组件重置退出码: $LASTEXITCODE (部分精简组件无需重置或已处于最新基线，继续推进)。" -ForegroundColor DarkGray
+        Write-Host "[提示] DISM 组件重置退出码: $LASTEXITCODE (部分精简组件无需重置，继续推进)。" -ForegroundColor DarkGray
     }
 
-    # ----------------- 2. 极限压榨模式专用：WinSxS 物理极限裁剪 -----------------
-    Write-Host "`n>>> [警告] 当前为【极限压榨模式】，正在物理瘦身 WinSxS (架构: $currentArch)..." -ForegroundColor Red
+    Write-Host "`n>>> [警告] 当前为【极限压榨模式】，正在物理瘦身 WinSxS (已锁定保护打印核心，架构: $currentArch)..." -ForegroundColor Red
 
     $winSxSDir     = Join-Path $scratchDir "Windows\WinSxS"
     $winSxSEditDir = Join-Path $scratchDir "Windows\WinSxS_edit"
@@ -2345,13 +2447,13 @@ if ($currentTrimMode -ne "2") {
     if (-not (Test-Path -LiteralPath $winSxSDir)) {
         Write-Host "[错误] 未检测到 WinSxS 目录: $winSxSDir，跳过物理替换。" -ForegroundColor Red
     } else {
-        # 极限模式前置断言：OpenWith.exe 缺失时物理替换 WinSxS 将导致“打开方式”功能永久损坏
+        # 极限模式前置断言：校验 OpenWith.exe 是否存活
         $openWithExe = Join-Path $scratchDir "Windows\System32\OpenWith.exe"
         if (-not (Test-Path -LiteralPath $openWithExe)) {
-            Write-Host "[严重错误] 极限模式前置断言失败：OpenWith.exe 不存在，物理替换 WinSxS 将导致“打开方式”功能永久损坏。已中止极限模式，回退为普通精简。" -ForegroundColor Red
+            Write-Host "[严重错误] 极限模式前置断言失败：OpenWith.exe 不存在，物理替换将导致关联损坏，已跳过物理粉碎。" -ForegroundColor Red
         } else {
             # 获取 WinSxS 物理掌控权
-            Write-Host "正在获取 WinSxS 目录物理所有权与完全控制权限..." -ForegroundColor Yellow
+            Write-Host "正在接管 WinSxS 目录所有权与完全控制权限..." -ForegroundColor Yellow
             & takeown.exe /F "$winSxSDir" /R /A /D Y 2>$null | Out-Null
             & icacls.exe "$winSxSDir" /grant "*S-1-5-32-544:F" /T /C /Q 2>$null | Out-Null
 
@@ -2361,7 +2463,7 @@ if ($currentTrimMode -ne "2") {
             }
             New-Item -Path $winSxSEditDir -ItemType Directory -Force | Out-Null
 
-            # 根据架构构建保活组件清单
+            # 根据架构构建保活清单（已彻底补齐打印相关底层组件与 32位兼容组件）
             $dirsToCopy = @()
 
             if ($currentArch -eq "arm64") {
@@ -2398,10 +2500,19 @@ if ($currentTrimMode -ne "2") {
                     "arm64_microsoft-windows-servicing-onecore-uapi_31bf3856ad364e35_*",
                     "arm64_microsoft-windows-servicingstack_31bf3856ad364e35_*",
                     "arm64_microsoft-windows-servicingstack-inetsrv_31bf3856ad364e35_*",
-                    "arm64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*"
+                    "arm64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*",
+                    # ---- ARM64 打印核心组件保护 ----
+                    "arm64_microsoft-windows-printing*",
+                    "arm64_microsoft-windows-p..ing*",
+                    "arm64_microsoft-windows-spooler*",
+                    "arm64_microsoft-windows-p..spooler*",
+                    "arm_microsoft-windows-printing*",
+                    "arm_microsoft-windows-spooler*",
+                    "x86_microsoft-windows-printing*",
+                    "x86_microsoft-windows-spooler*"
                 )
             } else {
-                # 默认 amd64 体系
+                # 默认 amd64 体系架构
                 $dirsToCopy = @(
                     "x86_microsoft.windows.common-controls_6595b64144ccf1df_*",
                     "x86_microsoft.windows.gdiplus_6595b64144ccf1df_*",
@@ -2439,24 +2550,34 @@ if ($currentTrimMode -ne "2") {
                     "Manifests",
                     "x86_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
                     "x86_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
-                    "x86_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*"
+                    "x86_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*",
+                    # ---- AMD64 打印核心组件与 32位兼容层保护 ----
+                    "amd64_microsoft-windows-printing*",
+                    "amd64_microsoft-windows-p..ing*",
+                    "amd64_microsoft-windows-spooler*",
+                    "amd64_microsoft-windows-p..spooler*",
+                    "x86_microsoft-windows-printing*",
+                    "x86_microsoft-windows-p..ing*",
+                    "x86_microsoft-windows-spooler*"
                 )
             }
 
             # 复制保活核心清单
-            Write-Host "正在提取基础运行库与核心服务依赖项..." -ForegroundColor Cyan
+            Write-Host "正在提取基础运行库、Shell 依赖与打印架构项..." -ForegroundColor Cyan
             foreach ($pattern in $dirsToCopy) {
                 $matchedDirs = Get-ChildItem -Path $winSxSDir -Filter $pattern -Directory -ErrorAction SilentlyContinue
                 if ($matchedDirs) {
                     foreach ($sDir in $matchedDirs) {
                         $destDir = Join-Path $winSxSEditDir $sDir.Name
-                        Copy-Item -LiteralPath $sDir.FullName -Destination $destDir -Recurse -Force -ErrorAction SilentlyContinue
+                        if (-not (Test-Path -LiteralPath $destDir)) {
+                            Copy-Item -LiteralPath $sDir.FullName -Destination $destDir -Recurse -Force -ErrorAction SilentlyContinue
+                        }
                     }
                 }
             }
 
             # 执行物理粉碎替换
-            Write-Host "正在物理销毁原始 WinSxS 并置换轻量结构..." -ForegroundColor Yellow
+            Write-Host "正在物理销毁原始 WinSxS 并置换保护型结构..." -ForegroundColor Yellow
             attrib.exe -R -S -H "$winSxSDir\*" /S /D 2>$null
             Remove-Item -LiteralPath $winSxSDir -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -2466,13 +2587,15 @@ if ($currentTrimMode -ne "2") {
 
             if (-not (Test-Path -LiteralPath $winSxSDir)) {
                 Rename-Item -LiteralPath $winSxSEditDir -NewName "WinSxS" -Force
-                Write-Host "[完成] WinSxS 极限置换完成，体积已大幅度压缩。" -ForegroundColor Green
+                Write-Host "[完成] WinSxS 极限置换完成，体积已大幅压缩（打印核心已成功保留）。" -ForegroundColor Green
             } else {
                 Write-Host "[警告] WinSxS 原始目录存在锁死残留，保留备份以防映像损坏。" -ForegroundColor Yellow
             }
         }
     }
 }
+
+Write-Host "[完成] 组件存储优化流程处理完毕。" -ForegroundColor Green
 
 # <<< [分块结束] 文件来源: src/08-WinSxSOptimize.ps1
 
