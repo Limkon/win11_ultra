@@ -49,7 +49,7 @@ jobs:
           
           $sb = New-Object System.Text.StringBuilder
           $null = $sb.AppendLine("# ==============================================================================")
-          $null = $sb.AppendLine("#  win11 Builder - 自动化全功能完整版 (工业级编译发布版)")
+          $null = $sb.AppendLine("#  Windows 10/11 Ultra Builder - 自动化全功能完整版")
           $null = $sb.AppendLine("#  生成时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')")
           $null = $sb.AppendLine("#  构建流水线: GitHub Actions (workflow_dispatch)")
           $null = $sb.AppendLine("# ==============================================================================`n")

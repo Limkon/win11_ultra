@@ -1,5 +1,5 @@
 # ==============================================================================
-#  win11 Builder - [模块 11/11] ISO 最终打包与临时缓存清理 (src/10-PackageAndClean.ps1)
+#  Windows 10/11 Builder - [模块 11/11] ISO 最终打包与临时缓存清理 (src/10-PackageAndClean.ps1)
 #  重构要点：
 #   1. 单文件模式下，当 $global:enableEsdConversion = $false 时，不论来源是
 #      .esd 还是 .wim，一律直接输出 .wim，不再强制转 ESD。
@@ -34,7 +34,7 @@ if ($global:sourceMode -eq "3") {
         Write-Host "        请手动核查该文件夹是否被外部进程修改或删除。" -ForegroundColor Yellow
     }
 
-    # 仅清理本脚本产生的临时工作区（$workDir 在文件夹模式下是 win11_folder_mode_tmp），
+    # 仅清理本脚本产生的临时工作区（$workDir 在文件夹模式下是 windows_folder_mode_tmp），
     # 绝不触碰 $scratchDir（用户目标文件夹）。
     if ($workDir -and (Test-Path -LiteralPath $workDir)) {
         Write-Host "正在清理临时工作区: $workDir" -ForegroundColor DarkGray
@@ -133,7 +133,9 @@ if (-not (Test-Path -LiteralPath $oscdimgExe)) {
         Copy-Item -LiteralPath $adkOscdimg -Destination $oscdimgExe -Force
     } else {
         Write-Host "正在拉取支持现代 UEFI/UDF 2.0 规范的 oscdimg.exe 打包内核..." -ForegroundColor Yellow
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+        # Windows PowerShell 5.1 on Windows 10 may not expose the Tls13 enum value.
+        # TLS 1.2 is sufficient for the HTTPS download and is available on supported hosts.
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $oscdimgUrl = "https://ghproxy.net/https://raw.githubusercontent.com/driver1998/oscdimg/master/oscdimg.exe"
         try {
             Invoke-WebRequest -Uri $oscdimgUrl -OutFile $oscdimgExe -UseBasicParsing -TimeoutSec 30
@@ -177,7 +179,7 @@ try {
 }
 
 # ----------------- 2. 严密校验 Legacy + UEFI 双模引导引导文件 -----------------
-$outputISO = Join-Path $scriptDir "win11_ultra_v7.iso"
+$outputISO = Join-Path $scriptDir "windows_ultra_v7.iso"
 $etfsboot  = Join-Path $workDir "boot\etfsboot.com"
 
 # 优先选用免按任意键直进安装向导的 efisys_noprompt.bin
@@ -197,7 +199,7 @@ if (-not (Test-Path -LiteralPath $etfsboot) -or -not (Test-Path -LiteralPath $ef
 # ----------------- 3. 构建合规双模启动参数并打包生成 ISO -----------------
 Write-Host "正在合成 Legacy BIOS + UEFI 双模自启动引导扇区..." -ForegroundColor Yellow
 
-# 路径加引号，支持工作目录含空格 (如 D:\My Build\win11)
+# 路径加引号，支持工作目录含空格 (如 D:\My Build\windows)
 $bootDataParam = "2#p0,e,b`"$etfsboot`"#pEF,e,b`"$efisys`""
 
 # 参数解析:
@@ -213,7 +215,7 @@ $oscdimgArgs = @(
     "-u2",
     "-udfver102",
     "-h",
-    "-lWIN11_ULTRA",
+    "-lWINDOWS_ULTRA",
     "-bootdata:$bootDataParam",
     "$workDir",
     "$outputISO"

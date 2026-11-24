@@ -1,5 +1,5 @@
 # ==============================================================================
-#  win11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
+#  Windows 10/11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
 #  [企业级重构]：全局交互五合一集中前置 + 倒计时防挂起 + 全流程静默流水线
 #  [新增] 源文件获取方式增加 [3] 映像文件夹（已释放好的文件夹 → 原地精简，
 #         不挂载、不导出 WIM、不打包 ISO，结果原地保留）
@@ -65,12 +65,12 @@ try {
 
 # 5. 开启全程双重日志 (失败时设状态标志并 fallback 到 TEMP)
 $global:transcriptActive = $false
-$logFile = Join-Path -Path $scriptDir -ChildPath "win11_ultra_build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+$logFile = Join-Path -Path $scriptDir -ChildPath "windows_ultra_build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 try {
     Start-Transcript -Path $logFile -Append -Force
     $global:transcriptActive = $true
 } catch {
-    $fallbackLog = Join-Path $env:TEMP "win11_ultra_build_fallback_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+    $fallbackLog = Join-Path $env:TEMP "windows_ultra_build_fallback_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
     Write-Host "日志初始化失败: $_" -ForegroundColor Red
     Write-Host "已回退到临时日志: $fallbackLog" -ForegroundColor Yellow
     $logFile = $fallbackLog
@@ -83,7 +83,7 @@ try {
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " win11 Builder (全功能模块化·工业级透明稳定版) " -ForegroundColor Cyan
+Write-Host " Windows 10/11 Builder (自动识别·模块化精简) " -ForegroundColor Cyan
 Write-Host " 日志文件: $logFile" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
@@ -271,7 +271,7 @@ if ($esdChoice -eq "1") {
 # ----------------- 10. 前置配置 4/5：工作目录盘符选择 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " [配置 4/5] 请选择工作目录所在磁盘 (工作目录 = <盘符>\win11):" -ForegroundColor Cyan
+Write-Host " [配置 4/5] 请选择工作目录所在磁盘 (工作目录 = <盘符>\windows):" -ForegroundColor Cyan
 
 # 自动枚举本机可用固定磁盘盘符 (排除系统保留/A/B/光驱/网络/可移动)
 $availableDrives = @()
@@ -337,7 +337,7 @@ if ($availableDrives.Count -eq 0) {
 
 $targetDisk = "$($global:targetDriveLetter):\"
 $scratchDir  = Join-Path $targetDisk "scratchdir"
-$workDir     = Join-Path $targetDisk "win11"
+$workDir     = Join-Path $targetDisk "windows"
 $sourcesDir  = Join-Path $workDir "sources"
 
 # 注意：sourceMode 在第 11 节才确定，此处 $global:sourceMode 可能为 $null；
@@ -348,7 +348,7 @@ Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 # ----------------- 11. 前置配置 5/5：源文件获取方式 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " [配置 5/5] 请选择 Windows 11 源文件获取方式:" -ForegroundColor Cyan
+Write-Host " [配置 5/5] 请选择 Windows 10/11 源文件获取方式:" -ForegroundColor Cyan
 Write-Host " [1] 光驱盘符     (已挂载 ISO → 完整打包生成新 ISO)" -ForegroundColor Green
 Write-Host " [2] 映像文件     (指定 .iso / .wim / .esd → 完整打包生成新 ISO)" -ForegroundColor Green
 Write-Host " [3] 映像文件夹   (已释放好的文件夹 → 原地精简, 不挂载、不打包) [新增]" -ForegroundColor Magenta
@@ -467,7 +467,7 @@ if ($global:sourceMode -eq "3") {
 
     # $workDir / $sourcesDir 在文件夹模式下不使用；给一个临时空目录兜底，
     # 避免下游 New-Item / Test-Path 因 $null 崩溃（07 模块会写 $workDir\autounattend.xml）
-    $workDir    = Join-Path $targetDisk "win11_folder_mode_tmp"
+    $workDir    = Join-Path $targetDisk "windows_folder_mode_tmp"
     $sourcesDir = Join-Path $workDir "sources"
 
     Write-Host ">>> [映像文件夹模式] 离线操作目标已重定向为: $scratchDir" -ForegroundColor Magenta

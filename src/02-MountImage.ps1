@@ -1,5 +1,5 @@
 # ==============================================================================
-#  win11 Builder - [模块 3/11] 镜像定位、导出与挂载 (src/02-MountImage.ps1)
+#  Windows 10/11 Builder - [模块 3/11] 镜像定位、导出与挂载 (src/02-MountImage.ps1)
 #  [新增] 映像文件夹模式（sourceMode == "3"）：跳过挂载/导出/复制引导，
 #         直接接管用户文件夹（$scratchDir 已在 00 模块重定向），仅做健康自检。
 # ==============================================================================
@@ -151,14 +151,31 @@ if ($global:sourceMode -eq "3") {
     }
 
     Write-Host "`n[步骤 2/11] 正在解析源映像分卷列表..." -ForegroundColor Cyan
-    & dism.exe /English /Get-WimInfo "/WimFile:$imageSourceToUse"
-    $index = Read-Host "请输入要精简的目标版本 Index 序号 (留空默认1)"
-    if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
+    $wimInfo = & dism.exe /English /Get-WimInfo "/WimFile:$imageSourceToUse"
+    if ($LASTEXITCODE -ne 0) {
+        throw "无法读取映像分卷信息，DISM 退出码: $LASTEXITCODE ($imageSourceToUse)"
+    }
+    $availableIndexes = @([regex]::Matches(($wimInfo -join "`n"), '(?m)^\s*Index\s*:\s*(\d+)\s*$') | ForEach-Object { [int]$_.Groups[1].Value })
+    if ($availableIndexes.Count -eq 0) {
+        throw "源映像中未解析到任何有效 Index: $imageSourceToUse"
+    }
+    $wimInfo | ForEach-Object { Write-Host $_ }
+
+    do {
+        $index = Read-Host "请输入要精简的目标版本 Index 序号 (留空默认 $($availableIndexes[0]))"
+        if ([string]::IsNullOrWhiteSpace($index)) { $index = [string]$availableIndexes[0] }
+        $parsedIndex = 0
+        $validIndex = [int]::TryParse($index, [ref]$parsedIndex) -and ($availableIndexes -contains $parsedIndex)
+        if (-not $validIndex) {
+            Write-Host "[输入错误] Index 必须是源映像中存在的序号：$($availableIndexes -join ', ')" -ForegroundColor Yellow
+        }
+    } while (-not $validIndex)
+    $index = [string]$parsedIndex
 
     Write-Host "正在导出目标分卷 $index 到工作区..." -ForegroundColor Green
     & dism.exe /English /Export-Image "/SourceImageFile:$imageSourceToUse" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
 
-    if (-not (Test-Path -LiteralPath $destWim)) {
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $destWim)) {
         Write-Host "[严重错误] install.wim 导出生成失败！流程终止。" -ForegroundColor Red
         if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
         if ($global:transcriptActive) { Stop-Transcript }

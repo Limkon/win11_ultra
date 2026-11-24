@@ -1,5 +1,5 @@
 # ==============================================================================
-#  win11 Builder - [模块 2/11] 核心辅助函数库 (src/01-Helpers.ps1)
+#  Windows 10/11 Builder - [模块 2/11] 核心辅助函数库 (src/01-Helpers.ps1)
 #  [本版核心修复] 彻底根治 reg.exe 在 /d '' 场景下的交互式死锁：
 #    - 根因：PowerShell 5.1 传递空字符串数组元素时将 `''` 展开为裸空格，
 #      导致 reg.exe 将紧随其后的 `/f` 识别为 `/d` 的数据，从而丢失强制标志；
@@ -137,27 +137,35 @@ function Invoke-RegSilent {
         return -1
     }
 
-    # 3. 核心机制：物理切断标准输入流，防任何 (Yes/No)? 交互提示挂死
-    $proc.StandardInput.Close()
+    # 3. 核心机制：物理切断标准输入流，防任何 (Yes/No)? 交互提示挂死。
+    # 标准输出/错误使用异步读取；先同步 ReadToEnd 再等待退出会让超时保护失效。
+    try { $proc.StandardInput.Close() } catch {}
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
 
-    # 4. 同步读取输出，防止管道缓冲区占满导致阻塞
-    $stdOut = $proc.StandardOutput.ReadToEnd()
-    $stdError = $proc.StandardError.ReadToEnd()
-
-    # 5. 10 秒硬性超时防护
+    # 4. 10 秒硬性超时防护（异步读取同时排空管道，避免缓冲区死锁）
     $finished = $proc.WaitForExit(10000)
     if (-not $finished) {
         try { $proc.Kill() } catch {}
+        try { $proc.WaitForExit() } catch {}
+        $proc.Dispose()
         Write-Host "   [严重警告] reg.exe 响应超时已被强制终止: reg.exe $argumentsString" -ForegroundColor Red
         return -1
     }
 
+    # WaitForExit() 确保异步读取回调也已完成。
+    $proc.WaitForExit()
+    $stdOut = $stdoutTask.Result
+    $stdError = $stderrTask.Result
     $exitCode = $proc.ExitCode
     $proc.Dispose()
 
-    # 6. 异常时输出诊断信息
-    if ($exitCode -ne 0 -and -not [string]::IsNullOrWhiteSpace($stdError)) {
-        Write-Host "   [reg 警告 ($exitCode)] $stdError".Trim() -ForegroundColor DarkYellow
+    # 5. reg.exe 的错误信息常写入 stdout；优先 stderr，缺省时回退 stdout。
+    if ($exitCode -ne 0) {
+        $diagnostic = if (-not [string]::IsNullOrWhiteSpace($stdError)) { $stdError } else { $stdOut }
+        if (-not [string]::IsNullOrWhiteSpace($diagnostic)) {
+            Write-Host ("   [reg 警告 ({0})] {1}" -f $exitCode, $diagnostic.Trim()) -ForegroundColor DarkYellow
+        }
     }
 
     return $exitCode
