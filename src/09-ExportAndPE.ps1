@@ -1,5 +1,5 @@
 # ==============================================================================
-#  win11 Builder - [模块 10/11] 映像提交、二次重构与 WinPE/BCD 深度修补 (src/09-ExportAndPE.ps1)
+#  Windows 10/11 Builder - [模块 10/11] 映像提交、二次重构与 WinPE/BCD 深度修补 (src/09-ExportAndPE.ps1)
 #  [本版核心修复] boot.wim 修补段管道死锁根治：
 #    - 与 06-RegistryTweaks.ps1 Notepad 段完全同构的"连续密集 & reg ... | Out-Null"
 #      模式（每卷 14 条 × 分卷数 = 28 条），跑过 06 后到此必再次触发 PowerShell

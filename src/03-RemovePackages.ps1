@@ -1,5 +1,5 @@
 # ==============================================================================
-#  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
+#  Windows 10/11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
 #  [重构核心]：
 #   1. 打印生态绝对保护：双模式下均不再移除 Printing-PMCPPC 打印管理包。
 #   2. 普通模式 (健康精简)：
@@ -13,7 +13,61 @@
 #      - 保留原有激进粉碎逻辑与极窄组件库，但绝对豁免打印相关组件。
 # ==============================================================================
 
-Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
+Write-Host "`n[步骤 4/11] 正在识别 Windows 版本、探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
+
+# ----------------- 0. Windows 版本探针（读取离线 SOFTWARE hive） -----------------
+function Get-OfflineWindowsRelease {
+    param([Parameter(Mandatory = $true)][string]$ImagePath)
+
+    $softwareHive = Join-Path $ImagePath "Windows\System32\config\SOFTWARE"
+    if (-not (Test-Path -LiteralPath $softwareHive -PathType Leaf)) {
+        throw "无法识别目标映像：缺少 SOFTWARE hive ($softwareHive)。"
+    }
+
+    $hiveName = "zOSDetect_$PID"
+    $regPath = "HKLM:\$hiveName\Microsoft\Windows NT\CurrentVersion"
+    $loaded = $false
+    try {
+        & reg.exe load "HKLM\$hiveName" "$softwareHive" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "加载离线 SOFTWARE hive 失败，reg.exe 退出码: $LASTEXITCODE"
+        }
+        $loaded = $true
+        $currentVersion = Get-ItemProperty -LiteralPath $regPath -ErrorAction Stop
+        $buildText = if ($currentVersion.CurrentBuildNumber) { [string]$currentVersion.CurrentBuildNumber } else { [string]$currentVersion.CurrentBuild }
+        $build = 0
+        if (-not [int]::TryParse($buildText, [ref]$build) -or $build -lt 10240) {
+            throw "目标映像的 Windows build 无效或不受支持: '$buildText'."
+        }
+        if ([string]$currentVersion.ProductName -match 'Windows Server' -or
+            [string]$currentVersion.InstallationType -match 'Server' -or
+            [string]$currentVersion.EditionID -match 'Server') {
+            throw "检测到 Windows Server 映像；本工具仅支持 Windows 10/11 客户端映像。"
+        }
+
+        $family = if ($build -ge 22000) { 'Windows 11' } else { 'Windows 10' }
+        return [pscustomobject]@{
+            Family = $family
+            Build = $build
+            DisplayVersion = [string]$currentVersion.DisplayVersion
+            ProductName = [string]$currentVersion.ProductName
+            EditionID = [string]$currentVersion.EditionID
+        }
+    } finally {
+        if ($loaded) {
+            & reg.exe unload "HKLM\$hiveName" 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "未能卸载版本探测用注册表 hive HKLM\$hiveName；请在继续操作前检查句柄状态。"
+            }
+        }
+    }
+}
+
+$global:targetWindows = Get-OfflineWindowsRelease -ImagePath $scratchDir
+$global:windowsFamily = $global:targetWindows.Family
+$global:windowsBuild = $global:targetWindows.Build
+$releaseLabel = if ($global:targetWindows.DisplayVersion) { "，版本 $($global:targetWindows.DisplayVersion)" } else { "" }
+Write-Host "   [自动适配] 检测到 $($global:windowsFamily) build $($global:windowsBuild)$releaseLabel，Edition: $($global:targetWindows.EditionID)" -ForegroundColor Green
 
 # ----------------- 1. 语言探针（DISM 离线操作，对文件夹模式有效） -----------------
 $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
@@ -191,11 +245,14 @@ $global:deprovisionedAppxFamilies = New-Object System.Collections.Generic.List[s
 
 foreach ($package in $appxToRemove) {
     Write-Host "   正在移除应用: $($package.DisplayName)" -ForegroundColor DarkGray
+    $removeSucceeded = $false
     try {
         $null = Remove-AppxProvisionedPackage -Path $scratchDir -PackageName $package.PackageName -ErrorAction Stop
+        $removeSucceeded = $true
     } catch {
-        Write-Host "   [警告] 该包受系统保护或已被占用，跳过: $($package.PackageName)" -ForegroundColor DarkYellow
+        Write-Host "   [警告] 应用移除失败，跳过其残留清理和防重装标记: $($package.PackageName) ($_ )" -ForegroundColor DarkYellow
     }
+    if (-not $removeSucceeded) { continue }
     $removedPackageNames.Add($package.PackageName)
 
     $familyName = $null
@@ -324,7 +381,11 @@ foreach ($pattern in $packagePatterns) {
         if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -notmatch "^-+$" -and $packageIdentity -ne "Package") {
             Write-Host "   正在移除 FOD: $packageIdentity" -ForegroundColor DarkGray
             & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>&1 | Out-Null
-            $fodRemovedCount++
+            if ($LASTEXITCODE -eq 0) {
+                $fodRemovedCount++
+            } else {
+                Write-Host "   [警告] FOD 移除失败 (DISM $LASTEXITCODE): $packageIdentity" -ForegroundColor DarkYellow
+            }
         }
     }
 }

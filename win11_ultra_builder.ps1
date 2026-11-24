@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
-#  win11 Builder - 自动化全功能完整版 (工业级编译发布版)
-#  生成时间: 2026-11-16 14:48:01 UTC
+#  Windows 10/11 Ultra Builder - 自动化全功能完整版
+#  生成时间: 2026-11-24 00:00:00 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -8,7 +8,7 @@
 # >>> [分块代码引入] 文件来源: src/00-Header-Init.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
+#  Windows 10/11 Builder - [模块 1/11] 环境初始化与模式配置 (src/00-Header-Init.ps1)
 #  [企业级重构]：全局交互五合一集中前置 + 倒计时防挂起 + 全流程静默流水线
 #  [新增] 源文件获取方式增加 [3] 映像文件夹（已释放好的文件夹 → 原地精简，
 #         不挂载、不导出 WIM、不打包 ISO，结果原地保留）
@@ -74,12 +74,12 @@ try {
 
 # 5. 开启全程双重日志 (失败时设状态标志并 fallback 到 TEMP)
 $global:transcriptActive = $false
-$logFile = Join-Path -Path $scriptDir -ChildPath "win11_ultra_build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+$logFile = Join-Path -Path $scriptDir -ChildPath "windows_ultra_build_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 try {
     Start-Transcript -Path $logFile -Append -Force
     $global:transcriptActive = $true
 } catch {
-    $fallbackLog = Join-Path $env:TEMP "win11_ultra_build_fallback_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+    $fallbackLog = Join-Path $env:TEMP "windows_ultra_build_fallback_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
     Write-Host "日志初始化失败: $_" -ForegroundColor Red
     Write-Host "已回退到临时日志: $fallbackLog" -ForegroundColor Yellow
     $logFile = $fallbackLog
@@ -92,7 +92,7 @@ try {
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " win11 Builder (全功能模块化·工业级透明稳定版) " -ForegroundColor Cyan
+Write-Host " Windows 10/11 Builder (自动识别·模块化精简) " -ForegroundColor Cyan
 Write-Host " 日志文件: $logFile" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
@@ -280,7 +280,7 @@ if ($esdChoice -eq "1") {
 # ----------------- 10. 前置配置 4/5：工作目录盘符选择 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " [配置 4/5] 请选择工作目录所在磁盘 (工作目录 = <盘符>\win11):" -ForegroundColor Cyan
+Write-Host " [配置 4/5] 请选择工作目录所在磁盘 (工作目录 = <盘符>\windows):" -ForegroundColor Cyan
 
 # 自动枚举本机可用固定磁盘盘符 (排除系统保留/A/B/光驱/网络/可移动)
 $availableDrives = @()
@@ -346,7 +346,7 @@ if ($availableDrives.Count -eq 0) {
 
 $targetDisk = "$($global:targetDriveLetter):\"
 $scratchDir  = Join-Path $targetDisk "scratchdir"
-$workDir     = Join-Path $targetDisk "win11"
+$workDir     = Join-Path $targetDisk "windows"
 $sourcesDir  = Join-Path $workDir "sources"
 
 # 注意：sourceMode 在第 11 节才确定，此处 $global:sourceMode 可能为 $null；
@@ -357,7 +357,7 @@ Write-Host "映像挂载点锁定在: $scratchDir" -ForegroundColor Green
 # ----------------- 11. 前置配置 5/5：源文件获取方式 -----------------
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " [配置 5/5] 请选择 Windows 11 源文件获取方式:" -ForegroundColor Cyan
+Write-Host " [配置 5/5] 请选择 Windows 10/11 源文件获取方式:" -ForegroundColor Cyan
 Write-Host " [1] 光驱盘符     (已挂载 ISO → 完整打包生成新 ISO)" -ForegroundColor Green
 Write-Host " [2] 映像文件     (指定 .iso / .wim / .esd → 完整打包生成新 ISO)" -ForegroundColor Green
 Write-Host " [3] 映像文件夹   (已释放好的文件夹 → 原地精简, 不挂载、不打包) [新增]" -ForegroundColor Magenta
@@ -476,7 +476,7 @@ if ($global:sourceMode -eq "3") {
 
     # $workDir / $sourcesDir 在文件夹模式下不使用；给一个临时空目录兜底，
     # 避免下游 New-Item / Test-Path 因 $null 崩溃（07 模块会写 $workDir\autounattend.xml）
-    $workDir    = Join-Path $targetDisk "win11_folder_mode_tmp"
+    $workDir    = Join-Path $targetDisk "windows_folder_mode_tmp"
     $sourcesDir = Join-Path $workDir "sources"
 
     Write-Host ">>> [映像文件夹模式] 离线操作目标已重定向为: $scratchDir" -ForegroundColor Magenta
@@ -555,7 +555,7 @@ Write-Host "[初始化] 环境清理完毕，准备开始构建。" -ForegroundC
 # >>> [分块代码引入] 文件来源: src/01-Helpers.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 2/11] 核心辅助函数库 (src/01-Helpers.ps1)
+#  Windows 10/11 Builder - [模块 2/11] 核心辅助函数库 (src/01-Helpers.ps1)
 #  [本版核心修复] 彻底根治 reg.exe 在 /d '' 场景下的交互式死锁：
 #    - 根因：PowerShell 5.1 传递空字符串数组元素时将 `''` 展开为裸空格，
 #      导致 reg.exe 将紧随其后的 `/f` 识别为 `/d` 的数据，从而丢失强制标志；
@@ -693,27 +693,35 @@ function Invoke-RegSilent {
         return -1
     }
 
-    # 3. 核心机制：物理切断标准输入流，防任何 (Yes/No)? 交互提示挂死
-    $proc.StandardInput.Close()
+    # 3. 核心机制：物理切断标准输入流，防任何 (Yes/No)? 交互提示挂死。
+    # 标准输出/错误使用异步读取；先同步 ReadToEnd 再等待退出会让超时保护失效。
+    try { $proc.StandardInput.Close() } catch {}
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
 
-    # 4. 同步读取输出，防止管道缓冲区占满导致阻塞
-    $stdOut = $proc.StandardOutput.ReadToEnd()
-    $stdError = $proc.StandardError.ReadToEnd()
-
-    # 5. 10 秒硬性超时防护
+    # 4. 10 秒硬性超时防护（异步读取同时排空管道，避免缓冲区死锁）
     $finished = $proc.WaitForExit(10000)
     if (-not $finished) {
         try { $proc.Kill() } catch {}
+        try { $proc.WaitForExit() } catch {}
+        $proc.Dispose()
         Write-Host "   [严重警告] reg.exe 响应超时已被强制终止: reg.exe $argumentsString" -ForegroundColor Red
         return -1
     }
 
+    # WaitForExit() 确保异步读取回调也已完成。
+    $proc.WaitForExit()
+    $stdOut = $stdoutTask.Result
+    $stdError = $stderrTask.Result
     $exitCode = $proc.ExitCode
     $proc.Dispose()
 
-    # 6. 异常时输出诊断信息
-    if ($exitCode -ne 0 -and -not [string]::IsNullOrWhiteSpace($stdError)) {
-        Write-Host "   [reg 警告 ($exitCode)] $stdError".Trim() -ForegroundColor DarkYellow
+    # 5. reg.exe 的错误信息常写入 stdout；优先 stderr，缺省时回退 stdout。
+    if ($exitCode -ne 0) {
+        $diagnostic = if (-not [string]::IsNullOrWhiteSpace($stdError)) { $stdError } else { $stdOut }
+        if (-not [string]::IsNullOrWhiteSpace($diagnostic)) {
+            Write-Host ("   [reg 警告 ({0})] {1}" -f $exitCode, $diagnostic.Trim()) -ForegroundColor DarkYellow
+        }
     }
 
     return $exitCode
@@ -725,7 +733,7 @@ function Invoke-RegSilent {
 # >>> [分块代码引入] 文件来源: src/02-MountImage.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 3/11] 镜像定位、导出与挂载 (src/02-MountImage.ps1)
+#  Windows 10/11 Builder - [模块 3/11] 镜像定位、导出与挂载 (src/02-MountImage.ps1)
 #  [新增] 映像文件夹模式（sourceMode == "3"）：跳过挂载/导出/复制引导，
 #         直接接管用户文件夹（$scratchDir 已在 00 模块重定向），仅做健康自检。
 # ==============================================================================
@@ -877,14 +885,31 @@ if ($global:sourceMode -eq "3") {
     }
 
     Write-Host "`n[步骤 2/11] 正在解析源映像分卷列表..." -ForegroundColor Cyan
-    & dism.exe /English /Get-WimInfo "/WimFile:$imageSourceToUse"
-    $index = Read-Host "请输入要精简的目标版本 Index 序号 (留空默认1)"
-    if ([string]::IsNullOrWhiteSpace($index)) { $index = "1" }
+    $wimInfo = & dism.exe /English /Get-WimInfo "/WimFile:$imageSourceToUse"
+    if ($LASTEXITCODE -ne 0) {
+        throw "无法读取映像分卷信息，DISM 退出码: $LASTEXITCODE ($imageSourceToUse)"
+    }
+    $availableIndexes = @([regex]::Matches(($wimInfo -join "`n"), '(?m)^\s*Index\s*:\s*(\d+)\s*$') | ForEach-Object { [int]$_.Groups[1].Value })
+    if ($availableIndexes.Count -eq 0) {
+        throw "源映像中未解析到任何有效 Index: $imageSourceToUse"
+    }
+    $wimInfo | ForEach-Object { Write-Host $_ }
+
+    do {
+        $index = Read-Host "请输入要精简的目标版本 Index 序号 (留空默认 $($availableIndexes[0]))"
+        if ([string]::IsNullOrWhiteSpace($index)) { $index = [string]$availableIndexes[0] }
+        $parsedIndex = 0
+        $validIndex = [int]::TryParse($index, [ref]$parsedIndex) -and ($availableIndexes -contains $parsedIndex)
+        if (-not $validIndex) {
+            Write-Host "[输入错误] Index 必须是源映像中存在的序号：$($availableIndexes -join ', ')" -ForegroundColor Yellow
+        }
+    } while (-not $validIndex)
+    $index = [string]$parsedIndex
 
     Write-Host "正在导出目标分卷 $index 到工作区..." -ForegroundColor Green
     & dism.exe /English /Export-Image "/SourceImageFile:$imageSourceToUse" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
 
-    if (-not (Test-Path -LiteralPath $destWim)) {
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $destWim)) {
         Write-Host "[严重错误] install.wim 导出生成失败！流程终止。" -ForegroundColor Red
         if ($isMountedISO) { Dismount-DiskImage -ImagePath $sourceFile -ErrorAction SilentlyContinue | Out-Null }
         if ($global:transcriptActive) { Stop-Transcript }
@@ -949,7 +974,7 @@ if ($global:sourceMode -eq "3") {
 # >>> [分块代码引入] 文件来源: src/03-RemovePackages.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
+#  Windows 10/11 Builder - [模块 4/11] 预装应用与系统包精简 (src/03-RemovePackages.ps1)
 #  [重构核心]：
 #   1. 打印生态绝对保护：双模式下均不再移除 Printing-PMCPPC 打印管理包。
 #   2. 普通模式 (健康精简)：
@@ -963,7 +988,61 @@ if ($global:sourceMode -eq "3") {
 #      - 保留原有激进粉碎逻辑与极窄组件库，但绝对豁免打印相关组件。
 # ==============================================================================
 
-Write-Host "`n[步骤 4/11] 正在探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
+Write-Host "`n[步骤 4/11] 正在识别 Windows 版本、探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
+
+# ----------------- 0. Windows 版本探针（读取离线 SOFTWARE hive） -----------------
+function Get-OfflineWindowsRelease {
+    param([Parameter(Mandatory = $true)][string]$ImagePath)
+
+    $softwareHive = Join-Path $ImagePath "Windows\System32\config\SOFTWARE"
+    if (-not (Test-Path -LiteralPath $softwareHive -PathType Leaf)) {
+        throw "无法识别目标映像：缺少 SOFTWARE hive ($softwareHive)。"
+    }
+
+    $hiveName = "zOSDetect_$PID"
+    $regPath = "HKLM:\$hiveName\Microsoft\Windows NT\CurrentVersion"
+    $loaded = $false
+    try {
+        & reg.exe load "HKLM\$hiveName" "$softwareHive" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "加载离线 SOFTWARE hive 失败，reg.exe 退出码: $LASTEXITCODE"
+        }
+        $loaded = $true
+        $currentVersion = Get-ItemProperty -LiteralPath $regPath -ErrorAction Stop
+        $buildText = if ($currentVersion.CurrentBuildNumber) { [string]$currentVersion.CurrentBuildNumber } else { [string]$currentVersion.CurrentBuild }
+        $build = 0
+        if (-not [int]::TryParse($buildText, [ref]$build) -or $build -lt 10240) {
+            throw "目标映像的 Windows build 无效或不受支持: '$buildText'."
+        }
+        if ([string]$currentVersion.ProductName -match 'Windows Server' -or
+            [string]$currentVersion.InstallationType -match 'Server' -or
+            [string]$currentVersion.EditionID -match 'Server') {
+            throw "检测到 Windows Server 映像；本工具仅支持 Windows 10/11 客户端映像。"
+        }
+
+        $family = if ($build -ge 22000) { 'Windows 11' } else { 'Windows 10' }
+        return [pscustomobject]@{
+            Family = $family
+            Build = $build
+            DisplayVersion = [string]$currentVersion.DisplayVersion
+            ProductName = [string]$currentVersion.ProductName
+            EditionID = [string]$currentVersion.EditionID
+        }
+    } finally {
+        if ($loaded) {
+            & reg.exe unload "HKLM\$hiveName" 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "未能卸载版本探测用注册表 hive HKLM\$hiveName；请在继续操作前检查句柄状态。"
+            }
+        }
+    }
+}
+
+$global:targetWindows = Get-OfflineWindowsRelease -ImagePath $scratchDir
+$global:windowsFamily = $global:targetWindows.Family
+$global:windowsBuild = $global:targetWindows.Build
+$releaseLabel = if ($global:targetWindows.DisplayVersion) { "，版本 $($global:targetWindows.DisplayVersion)" } else { "" }
+Write-Host "   [自动适配] 检测到 $($global:windowsFamily) build $($global:windowsBuild)$releaseLabel，Edition: $($global:targetWindows.EditionID)" -ForegroundColor Green
 
 # ----------------- 1. 语言探针（DISM 离线操作，对文件夹模式有效） -----------------
 $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
@@ -1141,11 +1220,14 @@ $global:deprovisionedAppxFamilies = New-Object System.Collections.Generic.List[s
 
 foreach ($package in $appxToRemove) {
     Write-Host "   正在移除应用: $($package.DisplayName)" -ForegroundColor DarkGray
+    $removeSucceeded = $false
     try {
         $null = Remove-AppxProvisionedPackage -Path $scratchDir -PackageName $package.PackageName -ErrorAction Stop
+        $removeSucceeded = $true
     } catch {
-        Write-Host "   [警告] 该包受系统保护或已被占用，跳过: $($package.PackageName)" -ForegroundColor DarkYellow
+        Write-Host "   [警告] 应用移除失败，跳过其残留清理和防重装标记: $($package.PackageName) ($_ )" -ForegroundColor DarkYellow
     }
+    if (-not $removeSucceeded) { continue }
     $removedPackageNames.Add($package.PackageName)
 
     $familyName = $null
@@ -1274,7 +1356,11 @@ foreach ($pattern in $packagePatterns) {
         if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -notmatch "^-+$" -and $packageIdentity -ne "Package") {
             Write-Host "   正在移除 FOD: $packageIdentity" -ForegroundColor DarkGray
             & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>&1 | Out-Null
-            $fodRemovedCount++
+            if ($LASTEXITCODE -eq 0) {
+                $fodRemovedCount++
+            } else {
+                Write-Host "   [警告] FOD 移除失败 (DISM $LASTEXITCODE): $packageIdentity" -ForegroundColor DarkYellow
+            }
         }
     }
 }
@@ -1287,7 +1373,7 @@ Write-Host "[完成] 应用与系统组件包移除完毕。" -ForegroundColor G
 # >>> [分块代码引入] 文件来源: src/04-DriversFeatures.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 5/11] 驱动仓库与 .NET 缓存清理 (src/04-DriversFeatures.ps1)
+#  Windows 10/11 Builder - [模块 5/11] 驱动仓库与 .NET 缓存清理 (src/04-DriversFeatures.ps1)
 #  [重构核心]：
 #   1. 普通模式 (健康精简)：
 #      - 完整保留 DriverStore (FileRepository)，杜绝因缺失系统级基础驱动导致
@@ -1367,7 +1453,7 @@ Write-Host "[完成] 驱动与底层运行库缓存阶段处理完毕。" -Foreg
 # >>> [分块代码引入] 文件来源: src/05-PhysicalNuke.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 6/11] 物理文件实体清理 (src/05-PhysicalNuke.ps1)
+#  Windows 10/11 Builder - [模块 6/11] 物理文件实体清理 (src/05-PhysicalNuke.ps1)
 #  [重构核心]：
 #   1. 普通模式 (健康精简)：
 #      - 严禁粉碎 CJK 多语言字体库与输入法，防止游戏、网页、跨国文档与打印乱码。
@@ -1489,7 +1575,7 @@ Write-Host "[完成] 冗余物理文件与底层资产清理完毕。" -Foregrou
 # >>> [分块代码引入] 文件来源: src/06-RegistryTweaks.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
+#  Windows 10/11 Builder - [模块 7/11] 离线注册表配置与服务精炼 (src/06-RegistryTweaks.ps1)
 #  [重构核心]：
 #   1. 打印体系绝对保护（双模式通用）：
 #      - 彻底剔除针对 Spooler 和 PrintNotify 的删除指令！
@@ -1653,24 +1739,31 @@ foreach ($croot in $classesRoots) {
 }
 Write-Host "[完成] Notepad 与 txtfile 关联链重建完毕。" -ForegroundColor Green
 
-# ----------------- 步骤 C: 强制恢复 Windows 照片查看器 -----------------
-$photoViewerCroot = 'HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities'
-$null = Invoke-RegSilent @('add', $photoViewerCroot, '/v', 'ApplicationName', '/t', 'REG_SZ', '/d', '@%SystemRoot%\System32\PhotoViewer.dll,-24513', '/f')
-$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.bmp', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
-$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.dib', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
-$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.gif', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
-$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jpe', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
-$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jpeg', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
-$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jpg', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
-$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jfif', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
-$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.png', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Png', '/f')
-$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.tif', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
-$null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.tiff', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
+# ----------------- 步骤 C: 注册 Windows 照片查看器（仅当映像确实包含 DLL） -----------------
+# PhotoViewer.dll 位于 Program Files\Windows Photo Viewer，而不是 System32。
+$photoViewerDll = Join-Path $scratchDir "Program Files\Windows Photo Viewer\PhotoViewer.dll"
+if (Test-Path -LiteralPath $photoViewerDll -PathType Leaf) {
+    $photoViewerCroot = 'HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities'
+    $photoViewerResource = '@%ProgramFiles%\Windows Photo Viewer\PhotoViewer.dll,-3053'
+    $null = Invoke-RegSilent @('add', $photoViewerCroot, '/v', 'ApplicationName', '/t', 'REG_EXPAND_SZ', '/d', $photoViewerResource, '/f')
+    $null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.bmp', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
+    $null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.dib', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
+    $null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.gif', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
+    $null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jpe', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
+    $null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jpeg', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
+    $null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jpg', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
+    $null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.jfif', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Jpeg', '/f')
+    $null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.png', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Png', '/f')
+    $null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.tif', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
+    $null = Invoke-RegSilent @('add', "$photoViewerCroot\FileAssociations", '/v', '.tiff', '/t', 'REG_SZ', '/d', 'PhotoViewer.FileAssoc.Tiff', '/f')
 
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll', '/v', 'FriendlyAppName', '/t', 'REG_SZ', '/d', '@%SystemRoot%\System32\PhotoViewer.dll,-24513', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll\shell\open\command', '/ve', '/t', 'REG_SZ', '/d', 'rundll32.exe "%SystemRoot%\System32\PhotoViewer.dll", ImageView_Fullscreen %1', '/f')
-
-Write-Host "[完成] OpenWith 关联修复及照片查看器注册完毕。" -ForegroundColor Green
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll', '/v', 'FriendlyAppName', '/t', 'REG_EXPAND_SZ', '/d', $photoViewerResource, '/f')
+    $photoViewerCommand = 'rundll32.exe "%ProgramFiles%\Windows Photo Viewer\PhotoViewer.dll", ImageView_Fullscreen "%1"'
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Classes\Applications\photoviewer.dll\shell\open\command', '/ve', '/t', 'REG_EXPAND_SZ', '/d', $photoViewerCommand, '/f')
+    Write-Host "[完成] 已注册映像内存在的 Windows 照片查看器；可在‘打开方式’中选择，不强制覆盖默认应用。" -ForegroundColor Green
+} else {
+    Write-Host "[跳过] 映像中不存在 Windows Photo Viewer DLL；不写入无效关联。" -ForegroundColor DarkGray
+}
 
 Write-Host "[方案C-第二轮] 关联链修复完毕，卸载 zSOFTWARE..." -ForegroundColor Yellow
 Safely-UnloadHive -HiveName "HKLM\zSOFTWARE" -AbortOnFailure $false | Out-Null
@@ -1727,17 +1820,22 @@ $null = Invoke-RegSilent @('delete', 'HKLM\zNTUSER\Software\Microsoft\Windows\Cu
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent', '/v', 'DisableConsumerAccountStateContent', '/t', 'REG_DWORD', '/d', '1', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent', '/v', 'DisableCloudOptimizedContent', '/t', 'REG_DWORD', '/d', '1', '/f')
 
-Write-Host "Enabling Local Accounts on OOBE:"
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE', '/v', 'BypassNRO', '/t', 'REG_DWORD', '/d', '1', '/f')
+if ($global:windowsFamily -eq 'Windows 11') {
+    # BypassNRO is a Windows 11 OOBE switch; avoid writing a Win11-only value to Win10 images.
+    Write-Host "Enabling local-account OOBE path (Windows 11):"
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE', '/v', 'BypassNRO', '/t', 'REG_DWORD', '/d', '1', '/f')
+}
 
 Write-Host "Disabling Reserved Storage:"
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager', '/v', 'ShippedWithReserves', '/t', 'REG_DWORD', '/d', '0', '/f')
 Write-Host "Disabling BitLocker Device Encryption"
 $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker', '/v', 'PreventDeviceEncryption', '/t', 'REG_DWORD', '/d', '1', '/f')
 
-Write-Host "Disabling Chat icon:"
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat', '/v', 'ChatIcon', '/t', 'REG_DWORD', '/d', '3', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced', '/v', 'TaskbarMn', '/t', 'REG_DWORD', '/d', '0', '/f')
+if ($global:windowsFamily -eq 'Windows 11') {
+    Write-Host "Disabling Windows 11 Chat/Widgets taskbar entry points:"
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat', '/v', 'ChatIcon', '/t', 'REG_DWORD', '/d', '3', '/f')
+    $null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced', '/v', 'TaskbarMn', '/t', 'REG_DWORD', '/d', '0', '/f')
+}
 
 Write-Host "Disabling OneDrive folder backup"
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive', '/v', 'DisableFileSyncNGSC', '/t', 'REG_DWORD', '/d', '1', '/f')
@@ -1754,13 +1852,15 @@ $null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Microsoft\Personalizati
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection', '/v', 'AllowTelemetry', '/t', 'REG_DWORD', '/d', '0', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice', '/v', 'Start', '/t', 'REG_DWORD', '/d', '4', '/f')
 
-Write-Host "Prevents installation of DevHome and Outlook:"
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate', '/v', 'workCompleted', '/t', 'REG_DWORD', '/d', '1', '/f')
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate', '/v', 'workCompleted', '/t', 'REG_DWORD', '/d', '1', '/f')
-$null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate', '/f')
-$null = Invoke-RegSilent @('delete', 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate', '/f')
-Write-Host "Disabling Copilot"
-$null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot', '/v', 'TurnOffWindowsCopilot', '/t', 'REG_DWORD', '/d', '1', '/f')
+if ($global:windowsFamily -eq 'Windows 11') {
+    Write-Host "Disabling Windows 11 Dev Home/Outlook provisioning and Copilot:"
+    # These Windows 11 scheduler stores use distinct CurrentVersion and OOBE paths.
+    foreach ($appName in @('OutlookUpdate', 'DevHomeUpdate')) {
+        $null = Invoke-RegSilent @('add', "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\$appName", '/v', 'workCompleted', '/t', 'REG_DWORD', '/d', '1', '/f')
+        $null = Invoke-RegSilent @('delete', "HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\$appName", '/f')
+    }
+    $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot', '/v', 'TurnOffWindowsCopilot', '/t', 'REG_DWORD', '/d', '1', '/f')
+}
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Edge', '/v', 'HubsSidebarEnabled', '/t', 'REG_DWORD', '/d', '0', '/f')
 $null = Invoke-RegSilent @('add', 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer', '/v', 'DisableSearchBoxSuggestions', '/t', 'REG_DWORD', '/d', '1', '/f')
 Write-Host "Prevents installation of Teams:"
@@ -1906,7 +2006,7 @@ Write-Host "[完成] 离线注册表配置与服务配置精炼全部就绪。" 
 # >>> [分块代码引入] 文件来源: src/07-UnattendInject.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
+#  Windows 10/11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
 #  [新增] 映像文件夹模式（sourceMode == "3"）：
 #         跳过 $workDir\autounattend.xml 写入（$workDir 为临时空目录，写入无意义）；
 #         $scratchDir\Windows\System32\Sysprep\ 与 $scratchDir\Windows\Panther\ 下的
@@ -2250,7 +2350,7 @@ $scripts = @(
 		# 自动化稳定性测试探针
 		$report = New-Object System.Collections.Generic.List[string];
 		$report.Add("==================================================================");
-		$report.Add(" Windows 11 精简母盘 - 首次登录系统健康与稳定性自检审计报告");
+		$report.Add(" Windows 10/11 精简母盘 - 首次登录系统健康与稳定性自检审计报告");
 		$report.Add(" 生成时间: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'));
 		$report.Add(" 部署模式: __DEPLOY_MODE_TEXT__");
 		$report.Add("==================================================================");
@@ -2382,7 +2482,7 @@ Write-XmlSafely -Path (Join-Path $sysprepDir "autounattend.xml") -Content $final
 Write-XmlSafely -Path (Join-Path $pantherDir "unattend.xml") -Content $finalXml
 
 # ---- ISO 根目录应答文件：仅在非文件夹模式写入 ----
-# 文件夹模式下 $workDir 是 win11_folder_mode_tmp（临时空目录），
+# 文件夹模式下 $workDir 是 windows_folder_mode_tmp（临时空目录），
 # 写入 autounattend.xml 无任何意义（会被 10 模块清理删除），故跳过。
 if ($global:sourceMode -eq "3") {
     Write-Host "   [映像文件夹模式] 已跳过写入 `$workDir\autounattend.xml（临时目录，写入无意义）。" -ForegroundColor DarkGray
@@ -2398,7 +2498,7 @@ if ($global:sourceMode -eq "3") {
 # >>> [分块代码引入] 文件来源: src/08-WinSxSOptimize.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 9/11] 组件库瘦身与主映像优化 (src/08-WinSxSOptimize.ps1)
+#  Windows 10/11 Builder - [模块 9/11] 组件库瘦身与主映像优化 (src/08-WinSxSOptimize.ps1)
 #  [重构核心]：
 #   1. 普通模式 (健康精简)：
 #      - 仅执行官方 DISM /StartComponentCleanup，不执行 /ResetBase，
@@ -2603,7 +2703,7 @@ Write-Host "[完成] 组件存储优化流程处理完毕。" -ForegroundColor G
 # >>> [分块代码引入] 文件来源: src/09-ExportAndPE.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 10/11] 映像提交、二次重构与 WinPE/BCD 深度修补 (src/09-ExportAndPE.ps1)
+#  Windows 10/11 Builder - [模块 10/11] 映像提交、二次重构与 WinPE/BCD 深度修补 (src/09-ExportAndPE.ps1)
 #  [本版核心修复] boot.wim 修补段管道死锁根治：
 #    - 与 06-RegistryTweaks.ps1 Notepad 段完全同构的"连续密集 & reg ... | Out-Null"
 #      模式（每卷 14 条 × 分卷数 = 28 条），跑过 06 后到此必再次触发 PowerShell
@@ -2853,7 +2953,7 @@ if ($global:sourceMode -eq "3") {
 # >>> [分块代码引入] 文件来源: src/10-PackageAndClean.ps1
 # ==============================================================================
 # ==============================================================================
-#  win11 Builder - [模块 11/11] ISO 最终打包与临时缓存清理 (src/10-PackageAndClean.ps1)
+#  Windows 10/11 Builder - [模块 11/11] ISO 最终打包与临时缓存清理 (src/10-PackageAndClean.ps1)
 #  重构要点：
 #   1. 单文件模式下，当 $global:enableEsdConversion = $false 时，不论来源是
 #      .esd 还是 .wim，一律直接输出 .wim，不再强制转 ESD。
@@ -2888,7 +2988,7 @@ if ($global:sourceMode -eq "3") {
         Write-Host "        请手动核查该文件夹是否被外部进程修改或删除。" -ForegroundColor Yellow
     }
 
-    # 仅清理本脚本产生的临时工作区（$workDir 在文件夹模式下是 win11_folder_mode_tmp），
+    # 仅清理本脚本产生的临时工作区（$workDir 在文件夹模式下是 windows_folder_mode_tmp），
     # 绝不触碰 $scratchDir（用户目标文件夹）。
     if ($workDir -and (Test-Path -LiteralPath $workDir)) {
         Write-Host "正在清理临时工作区: $workDir" -ForegroundColor DarkGray
@@ -2987,7 +3087,9 @@ if (-not (Test-Path -LiteralPath $oscdimgExe)) {
         Copy-Item -LiteralPath $adkOscdimg -Destination $oscdimgExe -Force
     } else {
         Write-Host "正在拉取支持现代 UEFI/UDF 2.0 规范的 oscdimg.exe 打包内核..." -ForegroundColor Yellow
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+        # Windows PowerShell 5.1 on Windows 10 may not expose the Tls13 enum value.
+        # TLS 1.2 is sufficient for the HTTPS download and is available on supported hosts.
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $oscdimgUrl = "https://ghproxy.net/https://raw.githubusercontent.com/driver1998/oscdimg/master/oscdimg.exe"
         try {
             Invoke-WebRequest -Uri $oscdimgUrl -OutFile $oscdimgExe -UseBasicParsing -TimeoutSec 30
@@ -3031,7 +3133,7 @@ try {
 }
 
 # ----------------- 2. 严密校验 Legacy + UEFI 双模引导引导文件 -----------------
-$outputISO = Join-Path $scriptDir "win11_ultra_v7.iso"
+$outputISO = Join-Path $scriptDir "windows_ultra_v7.iso"
 $etfsboot  = Join-Path $workDir "boot\etfsboot.com"
 
 # 优先选用免按任意键直进安装向导的 efisys_noprompt.bin
@@ -3051,7 +3153,7 @@ if (-not (Test-Path -LiteralPath $etfsboot) -or -not (Test-Path -LiteralPath $ef
 # ----------------- 3. 构建合规双模启动参数并打包生成 ISO -----------------
 Write-Host "正在合成 Legacy BIOS + UEFI 双模自启动引导扇区..." -ForegroundColor Yellow
 
-# 路径加引号，支持工作目录含空格 (如 D:\My Build\win11)
+# 路径加引号，支持工作目录含空格 (如 D:\My Build\windows)
 $bootDataParam = "2#p0,e,b`"$etfsboot`"#pEF,e,b`"$efisys`""
 
 # 参数解析:
@@ -3067,7 +3169,7 @@ $oscdimgArgs = @(
     "-u2",
     "-udfver102",
     "-h",
-    "-lWIN11_ULTRA",
+    "-lWINDOWS_ULTRA",
     "-bootdata:$bootDataParam",
     "$workDir",
     "$outputISO"
@@ -3112,4 +3214,3 @@ if ($global:transcriptActive) {
 }
 
 # <<< [分块结束] 文件来源: src/10-PackageAndClean.ps1
-

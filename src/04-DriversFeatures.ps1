@@ -1,5 +1,5 @@
 # ==============================================================================
-#  win11 Builder - [模块 5/11] 驱动仓库与 .NET 缓存清理 (src/04-DriversFeatures.ps1)
+#  Windows 10/11 Builder - [模块 5/11] 驱动仓库与 .NET 缓存清理 (src/04-DriversFeatures.ps1)
 #  [重构核心]：
 #   1. 普通模式 (健康精简)：
 #      - 完整保留 DriverStore (FileRepository)，杜绝因缺失系统级基础驱动导致

@@ -1,5 +1,5 @@
 # ==============================================================================
-#  win11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
+#  Windows 10/11 Builder - [模块 8/11] 完整无人值守应答模板与多通道注入 (src/07-UnattendInject.ps1)
 #  [新增] 映像文件夹模式（sourceMode == "3"）：
 #         跳过 $workDir\autounattend.xml 写入（$workDir 为临时空目录，写入无意义）；
 #         $scratchDir\Windows\System32\Sysprep\ 与 $scratchDir\Windows\Panther\ 下的
@@ -343,7 +343,7 @@ $scripts = @(
 		# 自动化稳定性测试探针
 		$report = New-Object System.Collections.Generic.List[string];
 		$report.Add("==================================================================");
-		$report.Add(" Windows 11 精简母盘 - 首次登录系统健康与稳定性自检审计报告");
+		$report.Add(" Windows 10/11 精简母盘 - 首次登录系统健康与稳定性自检审计报告");
 		$report.Add(" 生成时间: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'));
 		$report.Add(" 部署模式: __DEPLOY_MODE_TEXT__");
 		$report.Add("==================================================================");
@@ -475,7 +475,7 @@ Write-XmlSafely -Path (Join-Path $sysprepDir "autounattend.xml") -Content $final
 Write-XmlSafely -Path (Join-Path $pantherDir "unattend.xml") -Content $finalXml
 
 # ---- ISO 根目录应答文件：仅在非文件夹模式写入 ----
-# 文件夹模式下 $workDir 是 win11_folder_mode_tmp（临时空目录），
+# 文件夹模式下 $workDir 是 windows_folder_mode_tmp（临时空目录），
 # 写入 autounattend.xml 无任何意义（会被 10 模块清理删除），故跳过。
 if ($global:sourceMode -eq "3") {
     Write-Host "   [映像文件夹模式] 已跳过写入 `$workDir\autounattend.xml（临时目录，写入无意义）。" -ForegroundColor DarkGray

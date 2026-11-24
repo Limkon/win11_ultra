@@ -1,5 +1,5 @@
 # ==============================================================================
-#  win11 Builder - [模块 9/11] 组件库瘦身与主映像优化 (src/08-WinSxSOptimize.ps1)
+#  Windows 10/11 Builder - [模块 9/11] 组件库瘦身与主映像优化 (src/08-WinSxSOptimize.ps1)
 #  [重构核心]：
 #   1. 普通模式 (健康精简)：
 #      - 仅执行官方 DISM /StartComponentCleanup，不执行 /ResetBase，
