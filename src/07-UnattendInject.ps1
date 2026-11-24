@@ -16,6 +16,17 @@ $pass = if ($global:customPass)   { $global:customPass }   else { "" }
 $lang = if ($global:languageCode) { $global:languageCode } else { "zh-CN" }
 $arch = if ($global:architecture) { $global:architecture } else { "amd64" }
 
+# Windows 10 Setup requires an explicit empty ProductKey node for keyless installs;
+# keep the established Windows 11 unattended behavior unchanged.
+$productKeyXmlFragment = ""
+if ($global:windowsFamily -eq "Windows 10") {
+    $productKeyXmlFragment = @'
+				<ProductKey>
+					<Key></Key>
+				</ProductKey>
+'@
+}
+
 $modeText = if ($mode -eq "2") { "半无人值守 (手动设置账户向导)" } else { "全无人值守 (自动配置并登录)" }
 Write-Host "   [配置承接] 运行模式: $modeText | 目标语言: $lang | 处理器架构: $arch" -ForegroundColor Green
 
@@ -89,6 +100,7 @@ $unattendTemplate = @'
 		</component>
 		<component name="Microsoft-Windows-Setup" processorArchitecture="__ARCH__" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<UserData>
+__PRODUCT_KEY_XML__
 				<AcceptEula>true</AcceptEula>
 			</UserData>
 			<UseConfigurationSet>false</UseConfigurationSet>
@@ -431,6 +443,7 @@ $finalXml = $finalXml.Replace('__ARCH__', $arch)
 $finalXml = $finalXml.Replace('__LANG__', $lang)
 $finalXml = $finalXml.Replace('__USER_ACCOUNTS__', $userAccountsXmlFragment)
 $finalXml = $finalXml.Replace('__AUTO_LOGON__', $autoLogonXmlFragment)
+$finalXml = $finalXml.Replace('__PRODUCT_KEY_XML__', $productKeyXmlFragment)
 $finalXml = $finalXml.Replace('__HIDE_LOCAL_ACCOUNT_SCREEN__', $hideLocalAccountScreenValue)
 $finalXml = $finalXml.Replace('__HIDE_ONLINE_ACCOUNT_SCREENS__', $hideOnlineAccountScreensValue)
 $finalXml = $finalXml.Replace('__DEPLOY_MODE_TEXT__', $modeText)
