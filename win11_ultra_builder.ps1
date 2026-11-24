@@ -990,51 +990,51 @@ if ($global:sourceMode -eq "3") {
 
 Write-Host "`n[步骤 4/11] 正在识别 Windows 版本、探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
 
-# ----------------- 0. Windows 版本探针（读取离线 SOFTWARE hive） -----------------
+# ----------------- 0. Windows 版本探针（不挂载离线注册表 hive） -----------------
 function Get-OfflineWindowsRelease {
     param([Parameter(Mandatory = $true)][string]$ImagePath)
 
-    $softwareHive = Join-Path $ImagePath "Windows\System32\config\SOFTWARE"
-    if (-not (Test-Path -LiteralPath $softwareHive -PathType Leaf)) {
-        throw "无法识别目标映像：缺少 SOFTWARE hive ($softwareHive)。"
+    # 从内核文件版本读取 build，避免为版本探测临时加载 SOFTWARE hive。
+    # 某些释放映像/文件系统权限下 reg.exe load 会失败，即使映像本身可正常 DISM 服务。
+    $kernelPath = Join-Path $ImagePath "Windows\System32\ntoskrnl.exe"
+    if (-not (Test-Path -LiteralPath $kernelPath -PathType Leaf)) {
+        throw "无法识别目标映像：缺少内核文件 ($kernelPath)。"
     }
 
-    $hiveName = "zOSDetect_$PID"
-    $regPath = "HKLM:\$hiveName\Microsoft\Windows NT\CurrentVersion"
-    $loaded = $false
-    try {
-        & reg.exe load "HKLM\$hiveName" "$softwareHive" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            throw "加载离线 SOFTWARE hive 失败，reg.exe 退出码: $LASTEXITCODE"
-        }
-        $loaded = $true
-        $currentVersion = Get-ItemProperty -LiteralPath $regPath -ErrorAction Stop
-        $buildText = if ($currentVersion.CurrentBuildNumber) { [string]$currentVersion.CurrentBuildNumber } else { [string]$currentVersion.CurrentBuild }
-        $build = 0
-        if (-not [int]::TryParse($buildText, [ref]$build) -or $build -lt 10240) {
-            throw "目标映像的 Windows build 无效或不受支持: '$buildText'."
-        }
-        if ([string]$currentVersion.ProductName -match 'Windows Server' -or
-            [string]$currentVersion.InstallationType -match 'Server' -or
-            [string]$currentVersion.EditionID -match 'Server') {
-            throw "检测到 Windows Server 映像；本工具仅支持 Windows 10/11 客户端映像。"
-        }
+    $kernelVersion = (Get-Item -LiteralPath $kernelPath -ErrorAction Stop).VersionInfo
+    $build = [int]$kernelVersion.FileBuildPart
+    if ($build -lt 10240) {
+        $versionMatch = [regex]::Match([string]$kernelVersion.FileVersion, '^\d+\.\d+\.(\d+)')
+        if ($versionMatch.Success) { $build = [int]$versionMatch.Groups[1].Value }
+    }
+    if ($build -lt 10240) {
+        throw "无法从 ntoskrnl.exe 读取有效的 Windows build: $($kernelVersion.FileVersion)"
+    }
 
-        $family = if ($build -ge 22000) { 'Windows 11' } else { 'Windows 10' }
-        return [pscustomobject]@{
-            Family = $family
-            Build = $build
-            DisplayVersion = [string]$currentVersion.DisplayVersion
-            ProductName = [string]$currentVersion.ProductName
-            EditionID = [string]$currentVersion.EditionID
-        }
-    } finally {
-        if ($loaded) {
-            & reg.exe unload "HKLM\$hiveName" 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "未能卸载版本探测用注册表 hive HKLM\$hiveName；请在继续操作前检查句柄状态。"
-            }
-        }
+    # DISM 的 Edition ID 可用于排除 Server，且无需直接加载目标注册表。
+    $editionOutput = & dism.exe /English "/Image:$ImagePath" /Get-CurrentEdition 2>&1
+    $editionExitCode = $LASTEXITCODE
+    if ($editionExitCode -ne 0) {
+        $detail = ($editionOutput | Out-String).Trim()
+        throw "DISM 无法读取目标映像 Edition (退出码 $editionExitCode): $detail"
+    }
+    $editionText = ($editionOutput -join "`n")
+    $editionMatch = [regex]::Match($editionText, '(?m)^\s*Current Edition\s*:\s*(.+?)\s*$')
+    if (-not $editionMatch.Success) {
+        throw "无法从 DISM 输出解析目标映像 Edition：$editionText"
+    }
+    $edition = $editionMatch.Groups[1].Value.Trim()
+    if ($edition -match 'Server') {
+        throw "检测到 Windows Server 映像 ($edition)；本工具仅支持 Windows 10/11 客户端映像。"
+    }
+
+    $family = if ($build -ge 22000) { 'Windows 11' } else { 'Windows 10' }
+    return [pscustomobject]@{
+        Family = $family
+        Build = $build
+        DisplayVersion = [string]$kernelVersion.ProductVersion
+        ProductName = [string]$kernelVersion.ProductName
+        EditionID = $edition
     }
 }
 
