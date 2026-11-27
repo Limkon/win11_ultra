@@ -11,16 +11,19 @@
 #      - 仅通过官方 API 移除纯粹的无用推广及预装垃圾，不粉碎底层物理目录。
 #   3. 极限模式 (极限压榨)：
 #      - 保留原有激进粉碎逻辑与极窄组件库，但绝对豁免打印相关组件。
+#   4. NTLite 预精简母盘深度兼容：
+#      - 针对已被 NTLite 预先移除的推广 AppX，自动补齐 Deprovisioned 防重装标记
+#        及残留关联清理清单，防止 OOBE 联网或累积更新死灰复燃。
+#      - FOD 功能包采用“主包优先 + 动态重扫过滤附属子包”两阶段卸载，彻底消除
+#        语言包/WOW64 附属包报 DISM 0x800F0805 (-2146498555) 无效警告与冗余耗时。
 # ==============================================================================
 
 Write-Host "`n[步骤 4/11] 正在识别 Windows 版本、探查映像主语言并执行预装应用与功能包精简..." -ForegroundColor Cyan
 
-# ----------------- 0. Windows 版本探针（不挂载离线注册表 hive） -----------------
+# ----------------- 0. Windows 版本探针（优先 DISM，回退离线注册表以兼容极限 NTLite 映像） -----------------
 function Get-OfflineWindowsRelease {
     param([Parameter(Mandatory = $true)][string]$ImagePath)
 
-    # 从内核文件版本读取 build，避免为版本探测临时加载 SOFTWARE hive。
-    # 某些释放映像/文件系统权限下 reg.exe load 会失败，即使映像本身可正常 DISM 服务。
     $kernelPath = Join-Path $ImagePath "Windows\System32\ntoskrnl.exe"
     if (-not (Test-Path -LiteralPath $kernelPath -PathType Leaf)) {
         throw "无法识别目标映像：缺少内核文件 ($kernelPath)。"
@@ -36,30 +39,60 @@ function Get-OfflineWindowsRelease {
         throw "无法从 ntoskrnl.exe 读取有效的 Windows build: $($kernelVersion.FileVersion)"
     }
 
-    # DISM 的 Edition ID 可用于排除 Server，且无需直接加载目标注册表。
+    $edition = $null
     $editionOutput = & dism.exe /English "/Image:$ImagePath" /Get-CurrentEdition 2>&1
     $editionExitCode = $LASTEXITCODE
-    if ($editionExitCode -ne 0) {
+    if ($editionExitCode -eq 0) {
+        $editionText = ($editionOutput -join "`n")
+        $editionMatch = [regex]::Match($editionText, '(?m)^\s*Current Edition\s*:\s*(.+?)\s*$')
+        if ($editionMatch.Success) {
+            $edition = $editionMatch.Groups[1].Value.Trim()
+        }
+    }
+
+    # 回退：若 NTLite 裁剪了 CBS Edition 元数据导致 DISM 读取失败，从离线 SOFTWARE 读取 EditionID
+    if ([string]::IsNullOrWhiteSpace($edition)) {
+        $softHivePath = Join-Path $ImagePath "Windows\System32\config\SOFTWARE"
+        if (Test-Path -LiteralPath $softHivePath -PathType Leaf) {
+            & reg.exe load HKLM\zSOFTPROBE "$softHivePath" 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                try {
+                    $cvOut = & reg.exe query "HKLM\zSOFTPROBE\Microsoft\Windows NT\CurrentVersion" /v EditionID 2>&1
+                    foreach ($line in ($cvOut -split '\r?\n')) {
+                        if ($line -match 'EditionID\s+REG_SZ\s+(.+)$') {
+                            $edition = $Matches[1].Trim()
+                            break
+                        }
+                    }
+                    $instOut = & reg.exe query "HKLM\zSOFTPROBE\Microsoft\Windows NT\CurrentVersion" /v InstallationType 2>&1
+                    foreach ($line in ($instOut -split '\r?\n')) {
+                        if ($line -match 'InstallationType\s+REG_SZ\s+(.+)$' -and $Matches[1].Trim() -match 'Server') {
+                            $edition = "$edition (Server)"
+                            break
+                        }
+                    }
+                } finally {
+                    Safely-UnloadHive -HiveName "HKLM\zSOFTPROBE" | Out-Null
+                }
+            }
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($edition)) {
         $detail = ($editionOutput | Out-String).Trim()
-        throw "DISM 无法读取目标映像 Edition (退出码 $editionExitCode): $detail"
+        throw "无法识别目标映像 Edition (DISM 退出码 $editionExitCode): $detail"
     }
-    $editionText = ($editionOutput -join "`n")
-    $editionMatch = [regex]::Match($editionText, '(?m)^\s*Current Edition\s*:\s*(.+?)\s*$')
-    if (-not $editionMatch.Success) {
-        throw "无法从 DISM 输出解析目标映像 Edition：$editionText"
-    }
-    $edition = $editionMatch.Groups[1].Value.Trim()
     if ($edition -match 'Server') {
         throw "检测到 Windows Server 映像 ($edition)；本工具仅支持 Windows 10/11 客户端映像。"
     }
 
     $family = if ($build -ge 22000) { 'Windows 11' } else { 'Windows 10' }
     return [pscustomobject]@{
-        Family = $family
-        Build = $build
+        Family         = $family
+        Build          = $build
         DisplayVersion = [string]$kernelVersion.ProductVersion
-        ProductName = [string]$kernelVersion.ProductName
-        EditionID = $edition
+        ProductName    = [string]$kernelVersion.ProductName
+        EditionID      = $edition
     }
 }
 
@@ -70,15 +103,19 @@ $releaseLabel = if ($global:targetWindows.DisplayVersion) { "，版本 $($global
 Write-Host "   [自动适配] 检测到 $($global:windowsFamily) build $($global:windowsBuild)$releaseLabel，Edition: $($global:targetWindows.EditionID)" -ForegroundColor Green
 
 # ----------------- 1. 语言探针（DISM 离线操作，对文件夹模式有效） -----------------
-$imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
 $matchedLang = $false
-foreach ($line in ($imageIntl -split '\r?\n')) {
-    if ($line -match 'Default system UI language\s*:\s*([a-zA-Z]{2}-[a-zA-Z]{2})') {
-        $global:languageCode = $Matches[1].Trim()
-        $matchedLang = $true
-        break
+try {
+    $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        foreach ($line in ($imageIntl -split '\r?\n')) {
+            if ($line -match 'Default system UI language\s*:\s*([a-zA-Z]{2}-[a-zA-Z]{2})') {
+                $global:languageCode = $Matches[1].Trim()
+                $matchedLang = $true
+                break
+            }
+        }
     }
-}
+} catch {}
 if (-not $matchedLang) { $global:languageCode = "zh-CN" }
 
 # ----------------- 1.1 架构探针（文件夹模式与通用自适应） -----------------
@@ -194,7 +231,14 @@ $installDependencyPatterns = @(
     '*Windows.CloudExperienceHost*', '*UEV*', '*WindowsFeedbackHub*'
 )
 
-$provisionedPackages = Get-AppxProvisionedPackage -Path $scratchDir -ErrorAction SilentlyContinue
+$provisionedPackages = @()
+try {
+    $provisionedPackages = @(Get-AppxProvisionedPackage -Path $scratchDir -ErrorAction Stop)
+} catch {
+    Write-Host "   [提示] AppX 预配接口未返回列表（目标映像可能已被 NTLite 深度裁剪 AppX 组件）。" -ForegroundColor DarkYellow
+    $provisionedPackages = @()
+}
+
 $appxToRemove = @()
 $appxToKeep = @()
 
@@ -213,30 +257,41 @@ foreach ($pkg in $provisionedPackages) {
         if ($isInstallDep) { $appxToKeep += $pkg; continue }
     }
 
+    $matchedTarget = $false
     foreach ($pattern in $targetAppxPatterns) {
-        if ($pkg.PackageName -like $pattern) { $appxToRemove += $pkg; break }
+        if ($pkg.PackageName -like $pattern) {
+            $appxToRemove += $pkg
+            $matchedTarget = $true
+            break
+        }
+    }
+    if (-not $matchedTarget) {
+        $appxToKeep += $pkg
     }
 }
 
-Write-Host "   [框架保护] 已自动拦截保留 $($appxToKeep.Count) 个核心依赖框架/关键组件。" -ForegroundColor DarkGray
+Write-Host "   [框架保护] 映像内保留 $($appxToKeep.Count) 个核心依赖框架/基础应用组件。" -ForegroundColor DarkGray
 Write-Host "   [准备移除] 检测到 $($appxToRemove.Count) 个预装应用符合当前精简规则。" -ForegroundColor Yellow
+if ($appxToRemove.Count -eq 0) {
+    Write-Host "   [提示] 未发现待卸载推广应用（目标映像可能已经过 NTLite 等前置工具精简）。" -ForegroundColor DarkGray
+}
 
 $appxExeMap = @{
-    'Microsoft.Windows.Photos'            = @('Photos.exe', 'Microsoft.Photos.exe')
-    'Microsoft.ScreenSketch'              = @('SnippingTool.exe', 'ScreenSketch.exe')
-    'Microsoft.People'                    = @('People.exe')
-    'Microsoft.WindowsMaps'               = @('Maps.exe')
-    'Microsoft.MicrosoftStickyNotes'      = @('Microsoft.MicrosoftStickyNotes.exe')
-    'Microsoft.WindowsAlarms'             = @('WindowsAlarms.exe')
-    'Microsoft.WindowsSoundRecorder'      = @('WindowsSoundRecorder.exe')
-    'Microsoft.ZuneMusic'                 = @('Microsoft.ZuneMusic.exe')
-    'Microsoft.ZuneVideo'                 = @('Microsoft.ZuneVideo.exe')
-    'Microsoft.BingNews'                  = @('Microsoft.BingNews.exe')
-    'Microsoft.BingWeather'               = @('Microsoft.BingWeather.exe')
-    'Microsoft.WindowsCamera'             = @('WindowsCamera.exe')
-    'Microsoft.MicrosoftEdge.Stable'      = @('msedge.exe', 'MicrosoftEdge.exe')
-    'Microsoft.MicrosoftEdge'             = @('MicrosoftEdge.exe')
-    'Microsoft.549981C3F5F10'             = @('Cortana.exe')
+    'Microsoft.Windows.Photos'       = @('Photos.exe', 'Microsoft.Photos.exe')
+    'Microsoft.ScreenSketch'         = @('SnippingTool.exe', 'ScreenSketch.exe')
+    'Microsoft.People'               = @('People.exe')
+    'Microsoft.WindowsMaps'          = @('Maps.exe')
+    'Microsoft.MicrosoftStickyNotes' = @('Microsoft.MicrosoftStickyNotes.exe')
+    'Microsoft.WindowsAlarms'        = @('WindowsAlarms.exe')
+    'Microsoft.WindowsSoundRecorder' = @('WindowsSoundRecorder.exe')
+    'Microsoft.ZuneMusic'            = @('Microsoft.ZuneMusic.exe')
+    'Microsoft.ZuneVideo'            = @('Microsoft.ZuneVideo.exe')
+    'Microsoft.BingNews'             = @('Microsoft.BingNews.exe')
+    'Microsoft.BingWeather'          = @('Microsoft.BingWeather.exe')
+    'Microsoft.WindowsCamera'        = @('WindowsCamera.exe')
+    'Microsoft.MicrosoftEdge.Stable' = @('msedge.exe', 'MicrosoftEdge.exe')
+    'Microsoft.MicrosoftEdge'        = @('MicrosoftEdge.exe')
+    'Microsoft.549981C3F5F10'        = @('Cortana.exe')
 }
 
 $removedPackageNames = New-Object System.Collections.Generic.List[string]
@@ -281,7 +336,95 @@ foreach ($package in $appxToRemove) {
     }
 }
 
-Write-Host "   [Deprovision] 已收集 $($global:deprovisionedAppxFamilies.Count) 个包家族名，将在注册表阶段写入防重装标记。" -ForegroundColor DarkGray
+# ----------------- 2.05 针对 NTLite 预精简母盘补齐防重装标记与孤立关联清理 -----------------
+# 说明：若映像此前已由 NTLite 移除推广应用，Get-AppxProvisionedPackage 不会再返回它们；
+# 此处核对当前存活应用列表，仅为“确实已不存在于映像中”的目标推广应用补写 Deprovisioned 标记，
+# 严防系统装机联网或安装累积更新时自动重下已精简组件。
+$survivingPkgNames = @(
+    $provisionedPackages |
+        Where-Object { -not $removedPackageNames.Contains($_.PackageName) } |
+        ForEach-Object { $_.PackageName }
+)
+
+$baselineBloatFamilies = @(
+    'Clipchamp.Clipchamp_yxz26nhyzhsrt',
+    'Microsoft.549981C3F5F10_8wekyb3d8bbwe',
+    'Microsoft.BingNews_8wekyb3d8bbwe',
+    'Microsoft.BingSearch_8wekyb3d8bbwe',
+    'Microsoft.BingWeather_8wekyb3d8bbwe',
+    'Microsoft.Copilot_8wekyb3d8bbwe',
+    'Microsoft.GetHelp_8wekyb3d8bbwe',
+    'Microsoft.Getstarted_8wekyb3d8bbwe',
+    'Microsoft.MicrosoftOfficeHub_8wekyb3d8bbwe',
+    'Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe',
+    'Microsoft.OutlookForWindows_8wekyb3d8bbwe',
+    'Microsoft.People_8wekyb3d8bbwe',
+    'Microsoft.PowerAutomateDesktop_8wekyb3d8bbwe',
+    'Microsoft.Todos_8wekyb3d8bbwe',
+    'Microsoft.Windows.DevHome_8wekyb3d8bbwe',
+    'Microsoft.WindowsCommunicationsApps_8wekyb3d8bbwe',
+    'Microsoft.WindowsMaps_8wekyb3d8bbwe',
+    'Microsoft.YourPhone_8wekyb3d8bbwe',
+    'Microsoft.ZuneMusic_8wekyb3d8bbwe',
+    'Microsoft.ZuneVideo_8wekyb3d8bbwe',
+    'MicrosoftCorporationII.MicrosoftFamily_8wekyb3d8bbwe',
+    'MSTeams_8wekyb3d8bbwe',
+    'MicrosoftTeams_8wekyb3d8bbwe'
+)
+if ($global:trimMode -eq "2") {
+    $baselineBloatFamilies += @(
+        'Microsoft.WindowsFeedbackHub_8wekyb3d8bbwe',
+        'Microsoft.WindowsAlarms_8wekyb3d8bbwe',
+        'Microsoft.WindowsCamera_8wekyb3d8bbwe',
+        'Microsoft.WindowsSoundRecorder_8wekyb3d8bbwe',
+        'MicrosoftCorporationII.QuickAssist_8wekyb3d8bbwe'
+    )
+}
+
+$preTrimmedFamilyCount = 0
+foreach ($bf in $baselineBloatFamilies) {
+    $prefix = ($bf -split '_')[0]
+    $stillExists = $false
+    foreach ($sp in $survivingPkgNames) {
+        if ($sp -like "$prefix_*") { $stillExists = $true; break }
+    }
+    if (-not $stillExists -and -not $global:deprovisionedAppxFamilies.Contains($bf)) {
+        $global:deprovisionedAppxFamilies.Add($bf)
+        $preTrimmedFamilyCount++
+    }
+}
+
+# 补充检测已被前置工具移除应用的孤立可执行关联项（仅限本次精简规则覆盖的目标，不触碰保留应用）
+$edgeExeOnDisk = Join-Path $scratchDir "Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+foreach ($mapKey in $appxExeMap.Keys) {
+    $isTargetedByRule = $false
+    foreach ($pattern in $targetAppxPatterns) {
+        if ($mapKey -like $pattern) { $isTargetedByRule = $true; break }
+    }
+    if (-not $isTargetedByRule) { continue }
+
+    $pkgStillExists = $false
+    foreach ($sp in $survivingPkgNames) {
+        if ($sp -like "*$mapKey*") { $pkgStillExists = $true; break }
+    }
+    if ($pkgStillExists) { continue }
+
+    if ($mapKey -like '*MicrosoftEdge*' -and (Test-Path -LiteralPath $edgeExeOnDisk)) {
+        continue
+    }
+
+    foreach ($exeName in $appxExeMap[$mapKey]) {
+        if (-not $global:removedAppxExeNames.Contains($exeName)) {
+            $global:removedAppxExeNames.Add($exeName)
+        }
+    }
+}
+
+if ($preTrimmedFamilyCount -gt 0) {
+    Write-Host "   [Deprovision] 已收集 $($global:deprovisionedAppxFamilies.Count) 个包家族名（含前置精简已移除的 $preTrimmedFamilyCount 项），将在注册表阶段写入防重装标记。" -ForegroundColor DarkGray
+} else {
+    Write-Host "   [Deprovision] 已收集 $($global:deprovisionedAppxFamilies.Count) 个包家族名，将在注册表阶段写入防重装标记。" -ForegroundColor DarkGray
+}
 
 # ----------------- 2.1 WindowsApps 物理残留清理（仅极限压榨模式） -----------------
 if ($global:trimMode -eq "2") {
@@ -326,7 +469,7 @@ $shell32Dll  = Join-Path $scratchDir "Windows\System32\shell32.dll"
 $shCoreDll   = Join-Path $scratchDir "Windows\System32\shcore.dll"
 foreach ($critical in @($openWithExe, $shell32Dll, $shCoreDll)) {
     if (-not (Test-Path -LiteralPath $critical)) {
-        Write-Host "[严重警告] 关键 Shell/OpenWith 组件缺失: $critical —— 精简过度！" -ForegroundColor Red
+        Write-Host "[严重警告] 关键 Shell/OpenWith 组件缺失: $critical —— 目标映像可能已被前置工具过度精简！" -ForegroundColor Red
     }
 }
 
@@ -346,7 +489,7 @@ $baseFodPatterns = @(
 )
 
 if ($global:trimMode -eq "2") {
-    # 极限压榨模式：额外清除 Defender 客户端、生化识别、辅助工具、远程调试
+    # 极限压榨模式：额外清除 Defender 客户端、生物识别、辅助工具、远程调试
     $packagePatterns = $baseFodPatterns + @(
         "OpenSSH-Client-Package~",
         "*IME-ja-jp*", "*IME-ko-kr*", "*IME-zh-tw*",
@@ -370,24 +513,102 @@ if ($global:trimMode -eq "2") {
     $packagePatterns = $baseFodPatterns
 }
 
-$rawPackageOutput = & dism.exe /English "/Image:$scratchDir" /Get-Packages /Format:Table
-$packageLines = ($rawPackageOutput -split '\r?\n') | Select-Object -Skip 1
+function Get-ActiveOfflinePackageIdentities {
+    param([string]$ImageDir)
+    $result = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $rawOut = & dism.exe /English "/Image:$ImageDir" /Get-Packages /Format:Table 2>&1
+    if ($LASTEXITCODE -ne 0) { return $result }
+
+    foreach ($line in ($rawOut -split '\r?\n')) {
+        if ($line -notmatch '\|') { continue }
+        $cols = $line -split '\|'
+        if ($cols.Count -lt 2) { continue }
+        $pkgId = $cols[0].Trim()
+        $state = $cols[1].Trim()
+        if ([string]::IsNullOrWhiteSpace($pkgId) -or $pkgId -eq 'Package Identity' -or $pkgId -match '^-+$') {
+            continue
+        }
+        # 仅采集确实处于已安装/暂存态的包，跳过 NTLite 已移除或 Superseded 历史残影
+        if ($state -in @('Installed', 'Staged', 'Install Pending')) {
+            $null = $result.Add($pkgId)
+        }
+    }
+    return $result
+}
+
+$installedPkgSet = Get-ActiveOfflinePackageIdentities -ImageDir $scratchDir
+$matchedFodSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
+foreach ($pkgId in $installedPkgSet) {
+    foreach ($pattern in $packagePatterns) {
+        if ($pkgId -like "$pattern*") {
+            $null = $matchedFodSet.Add($pkgId)
+            break
+        }
+    }
+}
+
+# 区分主功能包（无语言标签且非 wow64/arm 附属层）与附属资源子包（~zh-CN~ / ~wow64~ 等）
+# 先卸载主功能包，CBS 会自动联动清理其语言包和 WOW64 子包，根治 DISM 0x800F0805 报错
+$primaryFods   = New-Object System.Collections.Generic.List[string]
+$satelliteFods = New-Object System.Collections.Generic.List[string]
+
+foreach ($pkgId in ($matchedFodSet | Sort-Object)) {
+    $parts = $pkgId -split '~'
+    if ($parts.Count -ge 5) {
+        $pArch = $parts[2].ToLower()
+        $pLang = $parts[3]
+        $isSubArch = ($pArch -in @('wow64', 'arm')) -and ($global:architecture -ne $pArch)
+        if ([string]::IsNullOrEmpty($pLang) -and -not $isSubArch) {
+            $primaryFods.Add($pkgId)
+        } else {
+            $satelliteFods.Add($pkgId)
+        }
+    } else {
+        $primaryFods.Add($pkgId)
+    }
+}
+
 $fodRemovedCount = 0
 
-foreach ($pattern in $packagePatterns) {
-    $matchedLines = $packageLines | Where-Object { $_ -like "$pattern*" }
-    foreach ($mLine in $matchedLines) {
-        $packageIdentity = ($mLine -split '\s+')[0]
-        if (-not [string]::IsNullOrWhiteSpace($packageIdentity) -and $packageIdentity -notmatch "^-+$" -and $packageIdentity -ne "Package") {
-            Write-Host "   正在移除 FOD: $packageIdentity" -ForegroundColor DarkGray
-            & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                $fodRemovedCount++
+foreach ($packageIdentity in $primaryFods) {
+    Write-Host "   正在移除 FOD 主包: $packageIdentity" -ForegroundColor DarkGray
+    & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>&1 | Out-Null
+    $dismRc = $LASTEXITCODE
+    if ($dismRc -eq 0 -or $dismRc -eq 3010) {
+        $fodRemovedCount++
+    } else {
+        $hexRc = ('0x{0:X8}' -f ($dismRc -band 0xFFFFFFFFL))
+        if ($hexRc -eq '0x800F0805') {
+            Write-Host "   [跳过] 包受前置精简或父组件约束无需独立移除 ($hexRc): $packageIdentity" -ForegroundColor DarkGray
+        } else {
+            Write-Host "   [警告] FOD 移除失败 (DISM $hexRc): $packageIdentity" -ForegroundColor DarkYellow
+        }
+    }
+}
+
+if ($satelliteFods.Count -gt 0) {
+    # 主包移除后重新快照存活包列表，过滤掉已被主包自动连带卸载的语言包/WOW64 子包
+    $remainingPkgSet = if ($primaryFods.Count -gt 0) { Get-ActiveOfflinePackageIdentities -ImageDir $scratchDir } else { $installedPkgSet }
+    foreach ($packageIdentity in $satelliteFods) {
+        if (-not $remainingPkgSet.Contains($packageIdentity)) {
+            continue
+        }
+        Write-Host "   正在移除 FOD 附属包: $packageIdentity" -ForegroundColor DarkGray
+        & dism.exe /English "/Image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" /NoRestart 2>&1 | Out-Null
+        $dismRc = $LASTEXITCODE
+        if ($dismRc -eq 0 -or $dismRc -eq 3010) {
+            $fodRemovedCount++
+        } else {
+            $hexRc = ('0x{0:X8}' -f ($dismRc -band 0xFFFFFFFFL))
+            if ($hexRc -in @('0x800F0805', '0x800F0806')) {
+                Write-Host "   [跳过] 附属资源子包随主包联动处理或无需独立移除 ($hexRc): $packageIdentity" -ForegroundColor DarkGray
             } else {
-                Write-Host "   [警告] FOD 移除失败 (DISM $LASTEXITCODE): $packageIdentity" -ForegroundColor DarkYellow
+                Write-Host "   [警告] FOD 附属包移除未完成 (DISM $hexRc): $packageIdentity" -ForegroundColor DarkYellow
             }
         }
     }
 }
+
 Write-Host "   [执行完毕] 共清理 $fodRemovedCount 个底层功能包。" -ForegroundColor Yellow
 Write-Host "[完成] 应用与系统组件包移除完毕。" -ForegroundColor Green

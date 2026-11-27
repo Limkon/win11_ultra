@@ -7,7 +7,7 @@
 #         应答仍生效）。
 # ==============================================================================
 
-Write-Host "`n[步骤 9/11] 正在加载全局配置并注入 Windows 安装引导应答文件..." -ForegroundColor Cyan
+Write-Host "`n[步骤 8/11] 正在加载全局配置并注入 Windows 安装引导应答文件..." -ForegroundColor Cyan
 
 # ----------------- 0. 承接前置配置与安全兜底 -----------------
 $mode = if ($global:unattendMode) { $global:unattendMode } else { "1" }
@@ -252,7 +252,7 @@ $scripts = @(
 		<File path="C:\Windows\Setup\Scripts\UserOnce.ps1">
 $scripts = @(
 	{
-		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'SearchboxTaskbarMode' -Type 'DWord' -Value 0;
+		reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTaskbarMode /t REG_DWORD /d 0 /f;
 	};
 	{
 		Remove-Item -Path 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Discardable\PostSetup\ShellNew' -Recurse -Force -ErrorAction 'SilentlyContinue';
@@ -346,7 +346,7 @@ $scripts = @(
 		Set-ItemProperty -LiteralPath 'Registry::HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'AutoLogonCount' -Type 'DWord' -Force -Value 0;
 	};
 	{
-		Disable-ComputerRestore -Drive 'C:\';
+		try { Disable-ComputerRestore -Drive 'C:\' -ErrorAction SilentlyContinue; } catch {}
 	};
 	{
 		cmd.exe /c "rd /s /q C:\Windows.old 2>nul";
@@ -360,11 +360,15 @@ $scripts = @(
 		$report.Add(" 部署模式: __DEPLOY_MODE_TEXT__");
 		$report.Add("==================================================================");
 
-		$wtPkg = Get-AppxPackage -Name "*WindowsTerminal*" -ErrorAction SilentlyContinue;
+		$wtPkg = $null;
+		$wingetPkg = $null;
+		try {
+			$wtPkg = Get-AppxPackage -Name "*WindowsTerminal*" -ErrorAction SilentlyContinue;
+			$wingetPkg = Get-AppxPackage -Name "*DesktopAppInstaller*" -ErrorAction SilentlyContinue;
+		} catch {}
 		$wtStatus = if ($wtPkg) { "正常部署 (版本: $($wtPkg.Version))" } else { "未安装或已被剔除" };
 		$report.Add("[组件测试] Windows 终端 (Terminal): $wtStatus");
 
-		$wingetPkg = Get-AppxPackage -Name "*DesktopAppInstaller*" -ErrorAction SilentlyContinue;
 		$wingetStatus = if ($wingetPkg) { "正常可用 (支持 Winget/离线安装)" } else { "未安装" };
 		$report.Add("[组件测试] 应用安装程序 (Winget): $wingetStatus");
 
@@ -406,8 +410,8 @@ $scripts = @(
 			if (Test-Path $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; }
 		}
 
-		# 2. 异步销毁临时脚本目录 (改为纯 PowerShell 安全写法，避免 cmd 死锁)
-		Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList "-NoProfile -Command `"Start-Sleep -Seconds 3; Remove-Item -LiteralPath 'C:\Windows\Setup\Scripts' -Recurse -Force -ErrorAction SilentlyContinue`""
+		# 2. 异步销毁本工具生成的临时脚本（若目录中仍有 NTLite 等自定义脚本则予以保留）
+		Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList "-NoProfile -Command `"Start-Sleep -Seconds 3; foreach (`$n in @('Specialize.ps1','UserOnce.ps1','DefaultUser.ps1','FirstLogon.ps1')) { Remove-Item -LiteralPath (Join-Path 'C:\Windows\Setup\Scripts' `$n) -Force -ErrorAction SilentlyContinue }; if (-not (Get-ChildItem -LiteralPath 'C:\Windows\Setup\Scripts' -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath 'C:\Windows\Setup\Scripts' -Force -ErrorAction SilentlyContinue }`""
 	};
 );
 
@@ -479,6 +483,20 @@ function Write-XmlSafely {
     } catch {
         Write-Host "[警告] 写入 $Path 失败，尝试备用写入法..." -ForegroundColor Yellow
         $Content | Out-File -FilePath $Path -Encoding UTF8 -Force
+    }
+}
+
+# ---- 清理可能冲突的 NTLite 前置遗留应答文件（防止优先抢占本工具生成的应答配置）----
+$legacyUnattendCandidates = @(
+    (Join-Path $pantherDir "autounattend.xml"),
+    (Join-Path $pantherDir "Unattend\unattend.xml"),
+    (Join-Path $pantherDir "Unattend\autounattend.xml")
+)
+foreach ($legacyXml in $legacyUnattendCandidates) {
+    if (Test-Path -LiteralPath $legacyXml) {
+        attrib.exe -R -S -H "$legacyXml" 2>&1 | Out-Null
+        Remove-Item -LiteralPath $legacyXml -Force -ErrorAction SilentlyContinue
+        Write-Host "   [清理冲突] 已移除前置精简遗留应答文件: $legacyXml" -ForegroundColor DarkGray
     }
 }
 

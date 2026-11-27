@@ -46,20 +46,24 @@ if (-not $myWindowsPrincipal.IsInRole($adminRole)) {
 
 # 4. 内核级关闭控制台快速编辑模式 (防误触黑框导致线程挂起)
 try {
-    $consoleHelper = Add-Type -MemberDefinition @"
-    [DllImport("kernel32.dll", SetLastError = true)]
-    public static extern IntPtr GetStdHandle(int nStdHandle);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+    if (-not ('Win32Utils.Win32ConsoleHelper' -as [type])) {
+        $null = Add-Type -MemberDefinition @"
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr GetStdHandle(int nStdHandle);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 "@ -Name "Win32ConsoleHelper" -Namespace "Win32Utils" -PassThru -ErrorAction SilentlyContinue
-
-    $stdInHandle = $consoleHelper::GetStdHandle(-10) # STD_INPUT_HANDLE
-    $consoleMode = 0
-    if ($consoleHelper::GetConsoleMode($stdInHandle, [ref]$consoleMode)) {
-        $newMode = ($consoleMode -band -bnot 0x0040) -bor 0x0080
-        $null = $consoleHelper::SetConsoleMode($stdInHandle, $newMode)
+    }
+    $consoleHelper = 'Win32Utils.Win32ConsoleHelper' -as [type]
+    if ($consoleHelper) {
+        $stdInHandle = $consoleHelper::GetStdHandle(-10) # STD_INPUT_HANDLE
+        $consoleMode = 0
+        if ($consoleHelper::GetConsoleMode($stdInHandle, [ref]$consoleMode)) {
+            $newMode = ($consoleMode -band -bnot 0x0040) -bor 0x0080
+            $null = $consoleHelper::SetConsoleMode($stdInHandle, $newMode)
+        }
     }
 } catch {}
 
@@ -385,13 +389,12 @@ if ($sourceChoice -eq "3") {
         exit 1
     }
 
-    # ---- 结构完整性前置校验（关键：DISM /Image: 与注册表 hive 加载的前提）----
+    # ---- 结构完整性前置校验（兼容 NTLite 深度精简映像：COMPONENTS 非必需）----
     $requiredPaths = @(
         "Windows\System32",
         "Windows\System32\config\SOFTWARE",
         "Windows\System32\config\SYSTEM",
         "Windows\System32\config\DEFAULT",
-        "Windows\System32\config\COMPONENTS",
         "Users\Default\ntuser.dat"
     )
     $missingItems = @()

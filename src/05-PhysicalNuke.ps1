@@ -10,7 +10,7 @@
 #      - 保留原有地毯式物理粉碎 (WinRE 零字节占位、字体库极限剔除、Edge/OneDrive 底层粉碎)。
 # ==============================================================================
 
-Write-Host "`n[步骤 7/11] 正在执行系统冗余物理文件清理..." -ForegroundColor Cyan
+Write-Host "`n[步骤 6/11] 正在执行系统冗余物理文件清理..." -ForegroundColor Cyan
 $winDir = "$scratchDir\Windows"
 
 # ----------------- 1. 字体库处理 (按模式差异化) -----------------
@@ -38,12 +38,20 @@ if ($global:trimMode -eq "2") {
     Write-Host "   [普通健康模式] 保留 TTS 语音引擎与日韩繁输入法架构。" -ForegroundColor Green
 }
 
-# ----------------- 3. 通用安全清理项 (双模式均执行) -----------------
+# ----------------- 3. 通用安全清理项 (双模式均执行，兼容 NTLite 已移除目录) -----------------
 # 离线病毒定义更新包（开机联网后会自动下载最新基线）
-Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
+$defenderDefPath = "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates"
+if (Test-Path -LiteralPath $defenderDefPath) {
+    Remove-Item -LiteralPath $defenderDefPath -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # Windows 临时工作区
-Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+$winTempPath = "$scratchDir\Windows\Temp"
+if (Test-Path -LiteralPath $winTempPath) {
+    Get-ChildItem -LiteralPath $winTempPath -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 
 # 用户配置文件下的 OneDrive 初始安装包缓存
 $userProfileOneDrive = "$scratchDir\Users\Default\AppData\Local\Microsoft\OneDrive"
@@ -52,10 +60,13 @@ if (Test-Path -LiteralPath $userProfileOneDrive) {
 }
 
 # 帮助文档与示例壁纸清理
-Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
+$winHelpPath = Join-Path -Path $winDir -ChildPath "Help"
+if (Test-Path -LiteralPath $winHelpPath) {
+    Remove-Item -LiteralPath $winHelpPath -Recurse -Force -ErrorAction SilentlyContinue
+}
 $webWallpaper = Join-Path $winDir "Web\Wallpaper"
 if (Test-Path -LiteralPath $webWallpaper) {
-    Remove-Item -Path $webWallpaper -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $webWallpaper -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ----------------- 4. 光标库 (Cursors) 处理 -----------------
@@ -101,16 +112,25 @@ if ($global:trimMode -eq "2") {
     Write-Host "   [普通健康模式] 跳过 Program Files / System32 / SysWOW64 等系统关键目录的底层实体物理粉碎，改由官方 AppX 卸载与注册表策略禁用安全处理。" -ForegroundColor Green
 }
 
-# ----------------- 6. WinRE 恢复环境处理 (极其关键) -----------------
-$winrePath = "$scratchDir\Windows\System32\Recovery\winre.wim"
+# ----------------- 6. WinRE 恢复环境处理 (极其关键，兼容 NTLite 预移除场景) -----------------
+$recoveryDir = "$scratchDir\Windows\System32\Recovery"
+$winrePath   = Join-Path $recoveryDir "winre.wim"
 if ($global:trimMode -eq "2") {
     # 极限模式：清空 WinRE 以换取 ~500MB 极限体积
     Write-Host ">>> [极限压榨模式] 正在将 WinRE 执行零字节占位 (释放 500MB)..." -ForegroundColor Yellow
-    Remove-Item -Path $winrePath -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $winrePath) {
+        Force-NukeFolderOrFile -Target $winrePath
+    }
+    if (-not (Test-Path -LiteralPath $recoveryDir)) {
+        New-Item -Path $recoveryDir -ItemType Directory -Force | Out-Null
+    }
     New-Item -Path $winrePath -ItemType File -Force | Out-Null
 } else {
-    # 普通健康模式：完整保留官方 winre.wim，确保重置此电脑与高级故障排查 100% 正常
-    Write-Host "   [普通健康模式] 完整保留官方 WinRE 恢复环境，确保系统故障自愈、安全模式与“重置此电脑”功能绝对可用。" -ForegroundColor Green
+    if (Test-Path -LiteralPath $winrePath) {
+        Write-Host "   [普通健康模式] 完整保留官方 WinRE 恢复环境，确保系统故障自愈、安全模式与“重置此电脑”功能绝对可用。" -ForegroundColor Green
+    } else {
+        Write-Host "   [普通健康模式] 目标映像中未包含 winre.wim（可能已由 NTLite 等前置工具移除），跳过处理。" -ForegroundColor DarkGray
+    }
 }
 
 Write-Host "[完成] 冗余物理文件与底层资产清理完毕。" -ForegroundColor Green
