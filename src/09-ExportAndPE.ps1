@@ -9,34 +9,33 @@
 #  [保留] 映像文件夹模式旁路、单文件模式旁路、ISO 模式主流程全部字节级不变。
 # ==============================================================================
 
-Write-Host "`n[步骤 11/11] 正在安全提交主映像并优化引导资产..." -ForegroundColor Cyan
+Write-Host "`n[步骤 10/11] 正在安全提交主映像并优化引导资产..." -ForegroundColor Cyan
 
 $destWimPath   = Join-Path $sourcesDir "install.wim"
 $destWim2Path  = Join-Path $sourcesDir "install2.wim"
 $bootWimPath   = Join-Path $sourcesDir "boot.wim"
 $legacyBcdPath = Join-Path $workDir "boot\bcd"
 
+# 通用收尾：在主映像卸载前清理可能残留的 Edge 和 Cortana 快捷方式（全模式生效）
+Write-Host "正在清理可能残留的 Edge 和 Cortana 快捷方式..." -ForegroundColor Cyan
+$shortcutPaths = @(
+    "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk",
+    "$scratchDir\Users\Default\Desktop\Microsoft Edge.lnk",
+    "$scratchDir\Users\Public\Desktop\Microsoft Edge.lnk",
+    "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Cortana.lnk"
+)
+foreach ($sc in $shortcutPaths) {
+    if (Test-Path -LiteralPath $sc) {
+        Write-Host "   清理快捷方式: $sc" -ForegroundColor DarkGray
+        Remove-Item -LiteralPath $sc -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ==============================================================================
 # 映像文件夹模式：整体旁路提交/重构/boot.wim/BCD/根目录清洗
 # ==============================================================================
 if ($global:sourceMode -eq "3") {
-    Write-Host "[步骤 11/11] 映像文件夹模式：跳过 install.wim 提交、二次重构、boot.wim 修补、BCD 修补、ISO 根目录清洗。" -ForegroundColor Magenta
-
-    # 仅保留精简语义内的快捷方式清理（路径对文件夹模式天然正确）
-    Write-Host "正在清理可能残留的 Edge 和 Cortana 快捷方式..." -ForegroundColor Cyan
-    $shortcutPaths = @(
-        "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk",
-        "$scratchDir\Users\Default\Desktop\Microsoft Edge.lnk",
-        "$scratchDir\Users\Public\Desktop\Microsoft Edge.lnk",
-        "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Cortana.lnk"
-    )
-    foreach ($sc in $shortcutPaths) {
-        if (Test-Path -LiteralPath $sc) {
-            Write-Host "   清理快捷方式: $sc" -ForegroundColor DarkGray
-            Remove-Item -LiteralPath $sc -Force -ErrorAction SilentlyContinue
-        }
-    }
-
+    Write-Host "[步骤 10/11] 映像文件夹模式：跳过 install.wim 提交、二次重构、boot.wim 修补、BCD 修补、ISO 根目录清洗。" -ForegroundColor Magenta
     Write-Host "[完成] 映像文件夹模式精简收尾完毕。" -ForegroundColor Green
 } else {
     # ==========================================================================
@@ -167,12 +166,14 @@ if ($global:sourceMode -eq "3") {
                 $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\LabConfig', '/v', 'BypassDiskCheck', '/t', 'REG_DWORD', '/d', '1', '/f')
                 $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\Setup\MoSetup', '/v', 'AllowUpgradesWithUnsupportedTPMOrCPU', '/t', 'REG_DWORD', '/d', '1', '/f')
 
-                # 2. 禁用 WinPE 阶段的 BitLocker 设备自动加密
-                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker', '/v', 'PreventDeviceEncryption', '/t', 'REG_DWORD', '/d', '1', '/f')
+                # 2. 禁用 WinPE 阶段的 BitLocker 设备自动加密 & 早期驱动策略
+                foreach ($peCs in (Get-OfflineControlSets -SystemHiveMount 'zSYSTEM')) {
+                    $null = Invoke-RegSilent @('add', "HKLM\zSYSTEM\$peCs\Control\BitLocker", '/v', 'PreventDeviceEncryption', '/t', 'REG_DWORD', '/d', '1', '/f')
+                    $null = Invoke-RegSilent @('add', "HKLM\zSYSTEM\$peCs\Control\EarlyLaunch", '/v', 'DriverLoadPolicy', '/t', 'REG_DWORD', '/d', '8', '/f')
+                }
 
-                # 3. 【关键：解决 Legacy 卡死】注入内核级早期驱动启动与基本显示豁免策略
-                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Control\EarlyLaunch', '/v', 'DriverLoadPolicy', '/t', 'REG_DWORD', '/d', '8', '/f')
-                $null = Invoke-RegSilent @('add', 'HKLM\zSYSTEM\ControlSet001\Services\BasicDisplay', '/v', 'Start', '/t', 'REG_DWORD', '/d', '0', '/f')
+                # 3. 【关键：解决 Legacy 卡死】仅在 BasicDisplay 服务存在时注入策略，兼容 NTLite 精简 PE
+                $null = Set-OfflineServiceStart -ServiceName 'BasicDisplay' -StartType 0 -SystemHiveMount 'zSYSTEM'
             }
 
             # 卸载本卷已加载的注册表配置单元 (带重试，先非 SYSTEM 后 SYSTEM)
@@ -212,6 +213,7 @@ if ($global:sourceMode -eq "3") {
             "efi",
             "sources",
             "support",
+            "`$OEM`$",
             "bootmgr",
             "bootmgr.efi",
             "setup.exe",
@@ -222,21 +224,6 @@ if ($global:sourceMode -eq "3") {
         Get-ChildItem -Path $workDir | Where-Object { $_.Name -notin $keepList } | ForEach-Object {
             Write-Host "   清除根目录多余文件/目录: $($_.Name)" -ForegroundColor DarkGray
             Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-        }
-
-        # ----------------- 6. 清理残留的 Edge 和 Cortana 快捷方式 -----------------
-        Write-Host "`n正在清理可能残留的 Edge 和 Cortana 快捷方式..." -ForegroundColor Cyan
-        $shortcutPaths = @(
-            "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk",
-            "$scratchDir\Users\Default\Desktop\Microsoft Edge.lnk",
-            "$scratchDir\Users\Public\Desktop\Microsoft Edge.lnk",
-            "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs\Cortana.lnk"
-        )
-        foreach ($sc in $shortcutPaths) {
-            if (Test-Path -LiteralPath $sc) {
-                Write-Host "   清理快捷方式: $sc" -ForegroundColor DarkGray
-                Remove-Item -LiteralPath $sc -Force -ErrorAction SilentlyContinue
-            }
         }
 
         Write-Host "[完成] WinPE 引导与 BCD 修补全部圆满就绪。" -ForegroundColor Green

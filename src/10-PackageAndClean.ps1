@@ -11,7 +11,7 @@
 #      + 关闭 Transcript，然后退出主脚本。
 # ==============================================================================
 
-Write-Host "`n[步骤 12/12] 正在校验资产并执行最终打包流程..." -ForegroundColor Cyan
+Write-Host "`n[步骤 11/11] 正在校验资产并执行最终打包流程..." -ForegroundColor Cyan
 
 # ----------------- 0. 响应该阶段 ESD 极限高压转换开关 -----------------
 $esdEnabled = if ($null -ne $global:enableEsdConversion) { [bool]$global:enableEsdConversion } else { $false }
@@ -23,7 +23,7 @@ $destEsdPath = Join-Path $sourcesDir "install.esd"
 # 映像文件夹模式：不打包、不转换 ESD、不拉取 oscdimg，直接收尾退出
 # ==============================================================================
 if ($global:sourceMode -eq "3") {
-    Write-Host "`n[步骤 12/12] 映像文件夹模式：跳过 ISO 打包、ESD 转换、oscdimg 拉取与校验。" -ForegroundColor Magenta
+    Write-Host "`n[步骤 11/11] 映像文件夹模式：跳过 ISO 打包、ESD 转换、oscdimg 拉取与校验。" -ForegroundColor Magenta
 
     # 最终健康检查（非致命提示）
     $sys32Final = Join-Path $scratchDir "Windows\System32"

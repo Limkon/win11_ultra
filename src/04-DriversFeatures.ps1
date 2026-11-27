@@ -10,7 +10,7 @@
 #        确保虚拟打印 (Print to PDF)、通用打印类驱动及打印向导在极限模式下绝对可用。
 # ==============================================================================
 
-Write-Host "`n[步骤 6/11] 正在执行 DriverStore 精简与 .NET 原生映像清理..." -ForegroundColor Cyan
+Write-Host "`n[步骤 5/11] 正在执行 DriverStore 精简与 .NET 原生映像清理..." -ForegroundColor Cyan
 
 # ----------------- 1. 通用阶段：移除 pre-compiled .NET assemblies (Native Images) -----------------
 Write-Host "Cleaning pre-compiled .NET assemblies (Native Images)..." -ForegroundColor DarkGray
