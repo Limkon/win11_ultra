@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  Windows 10/11 Ultra Builder - 自动化全功能完整版
-#  生成时间: 2026-11-27 14:45:29 UTC
+#  生成时间: 2026-11-28 11:59:31 UTC
 #  构建流水线: GitHub Actions (workflow_dispatch)
 # ==============================================================================
 
@@ -567,7 +567,7 @@ Write-Host "[初始化] 环境清理完毕，准备开始构建。" -ForegroundC
 #      - 新版严格遵循 Win32 CommandLineToArgvW 逆向规范：仅对内嵌 `"` 转义为 `\"`，
 #        仅在外层加引号时将末尾连续 `\` 翻倍。
 #   2. 新增 Win32 原生离线注册表特权辅助器 (REG_OPTION_BACKUP_RESTORE)：
-#      - 解决 TrustedInstaller 独占项（如 Shell Extensions\Blocked）报“拒绝访问”问题；
+#      - 解决 TrustedInstaller 独占项（如 Shell Extensions\Blocked）特权读写/清理问题；
 #      - 零句柄泄漏（每次调用均在 finally 中同步 RegCloseKey），绝不阻塞 reg unload；
 #      - 支持快速存在性探测与 NTLite 预精简映像安全服务配置（绝不误建残缺幽灵服务项）。
 # ==============================================================================
@@ -592,6 +592,7 @@ namespace Win32Utils {
         private const int KEY_WOW64_64KEY = 0x0100;
         private const int REG_OPTION_BACKUP_RESTORE = 0x00000004;
         private const uint REG_SZ = 1;
+        private const uint REG_EXPAND_SZ = 2;
         private const uint TOKEN_ADJUST_PRIVILEGES = 0x0020;
         private const uint TOKEN_QUERY = 0x0008;
         private const uint SE_PRIVILEGE_ENABLED = 0x00000002;
@@ -642,6 +643,9 @@ namespace Win32Utils {
 
         [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
         private static extern int RegDeleteTreeW(IntPtr hKey, string lpSubKey);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+        private static extern int RegDeleteValueW(IntPtr hKey, string lpValueName);
 
         [DllImport("advapi32.dll")]
         private static extern int RegCloseKey(IntPtr hKey);
@@ -695,7 +699,7 @@ namespace Win32Utils {
             }
         }
 
-        public static int SetStringValuePrivileged(string subKey, string valueName, string valueData) {
+        public static int SetStringValuePrivileged(string subKey, string valueName, string valueData, bool expandSz) {
             EnsurePrivileges();
             IntPtr hKey = IntPtr.Zero;
             int disp = 0;
@@ -714,7 +718,37 @@ namespace Win32Utils {
                 if (rc != 0) return rc;
                 string text = (valueData == null) ? "" : valueData;
                 byte[] bytes = Encoding.Unicode.GetBytes(text + "\0");
-                return RegSetValueExW(hKey, valueName, 0, REG_SZ, bytes, bytes.Length);
+                uint vType = expandSz ? REG_EXPAND_SZ : REG_SZ;
+                return RegSetValueExW(hKey, valueName, 0, vType, bytes, bytes.Length);
+            } finally {
+                if (hKey != IntPtr.Zero) RegCloseKey(hKey);
+            }
+        }
+
+        public static int SetStringValuePrivileged(string subKey, string valueName, string valueData) {
+            return SetStringValuePrivileged(subKey, valueName, valueData, false);
+        }
+
+        public static int DeleteValuePrivileged(string subKey, string valueName) {
+            if (!KeyExists(subKey)) return 0;
+            EnsurePrivileges();
+            IntPtr hKey = IntPtr.Zero;
+            int disp = 0;
+            try {
+                int rc = RegCreateKeyExW(
+                    HKEY_LOCAL_MACHINE,
+                    subKey,
+                    0,
+                    null,
+                    REG_OPTION_BACKUP_RESTORE,
+                    KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_WOW64_64KEY,
+                    IntPtr.Zero,
+                    out hKey,
+                    out disp
+                );
+                if (rc != 0) return rc;
+                int drc = RegDeleteValueW(hKey, valueName);
+                return (drc == 2) ? 0 : drc;
             } finally {
                 if (hKey != IntPtr.Zero) RegCloseKey(hKey);
             }
@@ -1031,7 +1065,7 @@ function Remove-OfflineRegKey {
 function Remove-OfflineRegValue {
     <#
     .SYNOPSIS
-        幂等删除离线注册表键值：仅在值存在时删除
+        幂等删除离线注册表键值：仅在值存在时删除，遇到 TrustedInstaller 保护项自动提权删除
     #>
     param(
         [Parameter(Mandatory = $true)][string]$SubKey,
@@ -1040,6 +1074,32 @@ function Remove-OfflineRegValue {
     $clean = ConvertTo-HklmSubKey -KeyPath $SubKey
     if (-not (Test-OfflineRegValue -SubKey $clean -ValueName $ValueName)) {
         return $false
+    }
+    $rc = Invoke-RegSilent -RegArgs @('delete', "HKLM\$clean", '/v', $ValueName, '/f') -Quiet
+    if ($rc -eq 0) { return $true }
+
+    $helper = 'Win32Utils.OfflineRegHelper' -as [type]
+    if ($helper) {
+        return ($helper::DeleteValuePrivileged($clean, $ValueName) -eq 0)
+    }
+    return $false
+}
+
+function Remove-OfflineRegValuePrivileged {
+    <#
+    .SYNOPSIS
+        使用 SeRestorePrivilege (REG_OPTION_BACKUP_RESTORE) 强制删除受 TrustedInstaller 保护的注册表键值
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$SubKey,
+        [Parameter(Mandatory = $true)][string]$ValueName
+    )
+    $clean = ConvertTo-HklmSubKey -KeyPath $SubKey
+    if ([string]::IsNullOrEmpty($clean)) { return $false }
+
+    $helper = 'Win32Utils.OfflineRegHelper' -as [type]
+    if ($helper) {
+        return ($helper::DeleteValuePrivileged($clean, $ValueName) -eq 0)
     }
     return ((Invoke-RegSilent -RegArgs @('delete', "HKLM\$clean", '/v', $ValueName, '/f') -Quiet) -eq 0)
 }
@@ -1051,18 +1111,23 @@ function Set-OfflineRegSzPrivileged {
     #>
     param(
         [Parameter(Mandatory = $true)][string]$SubKey,
-        [Parameter(Mandatory = $true)][string]$ValueName,
-        [AllowEmptyString()][string]$ValueData = ""
+        [AllowEmptyString()][Parameter(Mandatory = $true)][string]$ValueName,
+        [AllowEmptyString()][string]$ValueData = "",
+        [switch]$ExpandString
     )
     $clean = ConvertTo-HklmSubKey -KeyPath $SubKey
     $helper = 'Win32Utils.OfflineRegHelper' -as [type]
     if ($helper) {
-        $rc = $helper::SetStringValuePrivileged($clean, $ValueName, $ValueData)
+        $rc = $helper::SetStringValuePrivileged($clean, $ValueName, $ValueData, [bool]$ExpandString)
         if ($rc -eq 0) { return 0 }
         Write-Host "   [reg 特权写入警告 ($rc)] HKLM\$clean -> $ValueName" -ForegroundColor DarkYellow
         return $rc
     }
-    return (Invoke-RegSilent -RegArgs @('add', "HKLM\$clean", '/v', $ValueName, '/t', 'REG_SZ', '/d', $ValueData, '/f'))
+    $regType = if ($ExpandString) { 'REG_EXPAND_SZ' } else { 'REG_SZ' }
+    if ([string]::IsNullOrEmpty($ValueName)) {
+        return (Invoke-RegSilent -RegArgs @('add', "HKLM\$clean", '/ve', '/t', $regType, '/d', $ValueData, '/f'))
+    }
+    return (Invoke-RegSilent -RegArgs @('add', "HKLM\$clean", '/v', $ValueName, '/t', $regType, '/d', $ValueData, '/f'))
 }
 
 function Get-OfflineControlSets {
@@ -2203,7 +2268,8 @@ Write-Host "[完成] 冗余物理文件与底层资产清理完毕。" -Foregrou
 #        确保微软商店正常下载、新插外设自动拉取官方驱动、功能包按需启用。
 #   3. NTLite 预精简母盘深度兼容与修复：
 #      - 移除无实际用途的 zCOMPONENTS 挂载，避免脏化 CBS 组件库或因缺失 COMPONENTS 中断。
-#      - 通过 SeRestorePrivilege 特权写入 Shell Extensions\Blocked，根治“拒绝访问”。
+#      - 解除并自愈清理 Shell Extensions\Blocked 中被误封禁的 {e44e9428-bdbc-4987-a099-40dc8fd255e7}
+#        (CLSID_ExecuteUnknown)，根治打开未知类型文件时弹出“Windows 无法访问指定设备、路径或文件”。
 #      - 所有服务 Start 修改均通过 Set-OfflineServiceStart 前置校验存在性，绝不为已被
 #        NTLite 移除的服务（如 Defender、遥测、更新、打印等）误创建残缺幽灵服务项。
 #      - 所有删除项改为幂等探测删除，消除离线 CurrentControlSet 误调用及刷屏警告。
@@ -2354,19 +2420,27 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# ----------------- 步骤 A: 彻底根治“打开方式 -> 更多应用”无反应 -----------------
-Write-Host "Applying ultimate fix for 'Open With -> More Apps' deadlock..." -ForegroundColor Green
+# ----------------- 步骤 A: 保护未知文件类型“打开方式”链路并阻断商店死锁 -----------------
+Write-Host "Ensuring healthy 'Open With' (ExecuteUnknown) chain and bypassing Store lookup..." -ForegroundColor Green
 
-$blockedGuid = '{e44e9428-bdbc-4987-a099-40dc8fd255e7}'
+# 关键修正：{e44e9428-bdbc-4987-a099-40dc8fd255e7} 是 HKCR\Unknown\shell\openas\command 的
+# DelegateExecute 处理器 (CLSID_ExecuteUnknown -> OpenWith.exe -Embedding)。
+# 在 Windows 10 及 Windows 11 (尤其 22H2.1344+ / 23H2 / 24H2) 中将其写入 Shell Extensions\Blocked
+# 会导致 SHExtCoCreateInstance 直接返回 0x80070005 (ERROR_ACCESS_DENIED)，双击任何未知扩展名文件均弹出：
+# “Windows 无法访问指定设备、路径或文件。你可能没有适当的权限访问该项目。”
+# 此处不仅不再封禁，还主动执行特权清理以自愈此前已写入该项的映像目录。
+$executeUnknownClsid = '{e44e9428-bdbc-4987-a099-40dc8fd255e7}'
 $blockedRoots = @(
     'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked',
-    'HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked'
+    'HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked',
+    'HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked',
+    'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked'
 )
 foreach ($br in $blockedRoots) {
-    # Shell Extensions 由 TrustedInstaller 保护，使用 SeRestorePrivilege 特权直写，避免“拒绝访问”
-    $null = Set-OfflineRegSzPrivileged -SubKey $br -ValueName $blockedGuid -ValueData 'OpenWith Modern Dialog Bypass'
+    $null = Remove-OfflineRegValuePrivileged -SubKey $br -ValueName $executeUnknownClsid
 }
 
+# 策略级阻断 OpenWith 联网查询应用商店（避免移除商店后跳转超时或空白报错）
 $explorerPolicies = @(
     'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer',
     'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
@@ -2379,11 +2453,19 @@ $null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Policies\Microsoft\Wind
 
 $openWithBin = Join-Path $scratchDir "Windows\System32\OpenWith.exe"
 if (Test-Path -LiteralPath $openWithBin -PathType Leaf) {
+    # 仅标记 NoOpenWith 防止 OpenWith.exe 出现在自身的候选应用列表中，并清理旧版遗留的自指派 shell 子项
     $openWithRoots = @('HKLM\zSOFTWARE\Classes\Applications\OpenWith.exe', 'HKLM\zSOFTWARE\WOW6432Node\Classes\Applications\OpenWith.exe')
     foreach ($ow in $openWithRoots) {
         $null = Invoke-RegSilent @('add', $ow, '/v', 'NoOpenWith', '/t', 'REG_SZ', '/d', '', '/f')
-        $null = Invoke-RegSilent @('add', "$ow\shell\open", '/v', 'MultiSelectModel', '/t', 'REG_SZ', '/d', 'Single', '/f')
-        $null = Invoke-RegSilent @('add', "$ow\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\OpenWith.exe "%1"', '/f')
+        $null = Remove-OfflineRegKey -SubKey "$ow\shell"
+    }
+
+    # 若未知类型关联被外部工具意外破坏，则按官方标准兜底恢复 Unknown\shell\openas
+    if (-not (Test-OfflineRegKey -SubKey 'zSOFTWARE\Classes\Unknown\shell\openas\command')) {
+        $null = Set-OfflineRegSzPrivileged -SubKey 'HKLM\zSOFTWARE\Classes\Unknown\shell' -ValueName '' -ValueData 'openas'
+        $null = Set-OfflineRegSzPrivileged -SubKey 'HKLM\zSOFTWARE\Classes\Unknown\shell\openas' -ValueName 'MultiSelectModel' -ValueData 'Single'
+        $null = Set-OfflineRegSzPrivileged -SubKey 'HKLM\zSOFTWARE\Classes\Unknown\shell\openas\command' -ValueName '' -ValueData '%SystemRoot%\system32\OpenWith.exe "%1"' -ExpandString
+        $null = Set-OfflineRegSzPrivileged -SubKey 'HKLM\zSOFTWARE\Classes\Unknown\shell\openas\command' -ValueName 'DelegateExecute' -ValueData $executeUnknownClsid
     }
 }
 

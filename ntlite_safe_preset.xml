@@ -580,7 +580,7 @@
 	<Packages>
 		<Options>
 			<CleanHotfixedLeftovers>1</CleanHotfixedLeftovers>
-			<OptimizeAppX>true</OptimizeAppX>
+			<OptimizeAppX>false</OptimizeAppX>
 			<UpdateBootManager>false</UpdateBootManager>
 		</Options>
 	</Packages>
