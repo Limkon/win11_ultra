@@ -10,7 +10,8 @@
 #        确保微软商店正常下载、新插外设自动拉取官方驱动、功能包按需启用。
 #   3. NTLite 预精简母盘深度兼容与修复：
 #      - 移除无实际用途的 zCOMPONENTS 挂载，避免脏化 CBS 组件库或因缺失 COMPONENTS 中断。
-#      - 通过 SeRestorePrivilege 特权写入 Shell Extensions\Blocked，根治“拒绝访问”。
+#      - 解除并自愈清理 Shell Extensions\Blocked 中被误封禁的 {e44e9428-bdbc-4987-a099-40dc8fd255e7}
+#        (CLSID_ExecuteUnknown)，根治打开未知类型文件时弹出“Windows 无法访问指定设备、路径或文件”。
 #      - 所有服务 Start 修改均通过 Set-OfflineServiceStart 前置校验存在性，绝不为已被
 #        NTLite 移除的服务（如 Defender、遥测、更新、打印等）误创建残缺幽灵服务项。
 #      - 所有删除项改为幂等探测删除，消除离线 CurrentControlSet 误调用及刷屏警告。
@@ -161,19 +162,27 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# ----------------- 步骤 A: 彻底根治“打开方式 -> 更多应用”无反应 -----------------
-Write-Host "Applying ultimate fix for 'Open With -> More Apps' deadlock..." -ForegroundColor Green
+# ----------------- 步骤 A: 保护未知文件类型“打开方式”链路并阻断商店死锁 -----------------
+Write-Host "Ensuring healthy 'Open With' (ExecuteUnknown) chain and bypassing Store lookup..." -ForegroundColor Green
 
-$blockedGuid = '{e44e9428-bdbc-4987-a099-40dc8fd255e7}'
+# 关键修正：{e44e9428-bdbc-4987-a099-40dc8fd255e7} 是 HKCR\Unknown\shell\openas\command 的
+# DelegateExecute 处理器 (CLSID_ExecuteUnknown -> OpenWith.exe -Embedding)。
+# 在 Windows 10 及 Windows 11 (尤其 22H2.1344+ / 23H2 / 24H2) 中将其写入 Shell Extensions\Blocked
+# 会导致 SHExtCoCreateInstance 直接返回 0x80070005 (ERROR_ACCESS_DENIED)，双击任何未知扩展名文件均弹出：
+# “Windows 无法访问指定设备、路径或文件。你可能没有适当的权限访问该项目。”
+# 此处不仅不再封禁，还主动执行特权清理以自愈此前已写入该项的映像目录。
+$executeUnknownClsid = '{e44e9428-bdbc-4987-a099-40dc8fd255e7}'
 $blockedRoots = @(
     'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked',
-    'HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked'
+    'HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked',
+    'HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked',
+    'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked'
 )
 foreach ($br in $blockedRoots) {
-    # Shell Extensions 由 TrustedInstaller 保护，使用 SeRestorePrivilege 特权直写，避免“拒绝访问”
-    $null = Set-OfflineRegSzPrivileged -SubKey $br -ValueName $blockedGuid -ValueData 'OpenWith Modern Dialog Bypass'
+    $null = Remove-OfflineRegValuePrivileged -SubKey $br -ValueName $executeUnknownClsid
 }
 
+# 策略级阻断 OpenWith 联网查询应用商店（避免移除商店后跳转超时或空白报错）
 $explorerPolicies = @(
     'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer',
     'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
@@ -186,11 +195,19 @@ $null = Invoke-RegSilent @('add', 'HKLM\zNTUSER\Software\Policies\Microsoft\Wind
 
 $openWithBin = Join-Path $scratchDir "Windows\System32\OpenWith.exe"
 if (Test-Path -LiteralPath $openWithBin -PathType Leaf) {
+    # 仅标记 NoOpenWith 防止 OpenWith.exe 出现在自身的候选应用列表中，并清理旧版遗留的自指派 shell 子项
     $openWithRoots = @('HKLM\zSOFTWARE\Classes\Applications\OpenWith.exe', 'HKLM\zSOFTWARE\WOW6432Node\Classes\Applications\OpenWith.exe')
     foreach ($ow in $openWithRoots) {
         $null = Invoke-RegSilent @('add', $ow, '/v', 'NoOpenWith', '/t', 'REG_SZ', '/d', '', '/f')
-        $null = Invoke-RegSilent @('add', "$ow\shell\open", '/v', 'MultiSelectModel', '/t', 'REG_SZ', '/d', 'Single', '/f')
-        $null = Invoke-RegSilent @('add', "$ow\shell\open\command", '/ve', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\System32\OpenWith.exe "%1"', '/f')
+        $null = Remove-OfflineRegKey -SubKey "$ow\shell"
+    }
+
+    # 若未知类型关联被外部工具意外破坏，则按官方标准兜底恢复 Unknown\shell\openas
+    if (-not (Test-OfflineRegKey -SubKey 'zSOFTWARE\Classes\Unknown\shell\openas\command')) {
+        $null = Set-OfflineRegSzPrivileged -SubKey 'HKLM\zSOFTWARE\Classes\Unknown\shell' -ValueName '' -ValueData 'openas'
+        $null = Set-OfflineRegSzPrivileged -SubKey 'HKLM\zSOFTWARE\Classes\Unknown\shell\openas' -ValueName 'MultiSelectModel' -ValueData 'Single'
+        $null = Set-OfflineRegSzPrivileged -SubKey 'HKLM\zSOFTWARE\Classes\Unknown\shell\openas\command' -ValueName '' -ValueData '%SystemRoot%\system32\OpenWith.exe "%1"' -ExpandString
+        $null = Set-OfflineRegSzPrivileged -SubKey 'HKLM\zSOFTWARE\Classes\Unknown\shell\openas\command' -ValueName 'DelegateExecute' -ValueData $executeUnknownClsid
     }
 }
 
